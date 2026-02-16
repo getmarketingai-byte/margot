@@ -1,23 +1,32 @@
+/**
+ * Google Apps Script: Calendar automations (timemaps, work, sleep, pay period).
+ * Enable Calendar Advanced Service: Resources > Advanced Google services > Calendar API.
+ * For getFlightData(): set script property AVIATION_STACK_API_KEY in Project properties.
+ */
 const TIMEMAP_CALENDAR_ID = "1a1a44068207e09221d980c6c0ee587bc86587f680f862e56ba0bf6a8e47e020@group.calendar.google.com";
 const WORK_CALENDAR_ID = "070pmqum2gcm69ekmog6fvkmtk@group.calendar.google.com";
 const SLEEP_CALENDAR_ID = "496baca0d033db4062ef3acd672aa7ba22cc505bad94b3920b2bd2358c25d610@group.calendar.google.com";
-const SCHEDULING_WINDOW = 60 //days
+const SCHEDULING_WINDOW = 60; // days
 const ASSUME_NICEWEATHER_BEYOND_FORCAST = false;
-const NICEWEATHER_ENABLE = true;
-const INSIDE_OUTSIDE_ENABLE = true;
-const WORK_OFFICE_IS_INSIDE = false; //add inside map to office time
-const BEYOND_FORCAST_IS_INSIDE = true; //add inside event for days beyond forcast ie bot inside and outside tasks
+const WORK_OFFICE_IS_INSIDE = false; // add inside map to office time
+const BEYOND_FORCAST_IS_INSIDE = true; // add inside event for days beyond forecast (both inside and outside tasks)
 const SPLIT_TIMEMAPS_BY_DAYS = true;
 
-//Pay Period varibles
-const REFERANCE_PAY_PERIOD_START = new Date('2023-11-16T00:00:00');
+// Rate limiting and buffer constants
+const RATE_LIMIT_SLEEP_MS = 3000;
+const RATE_LIMIT_EVERY_N_EVENTS = 3;
+const SUMMARY_EVENT_DURATION_MINUTES = 5;
+const WORK_NONWORK_BUFFER_MINUTES = 60;
+
+// Pay Period variables
+const REFERENCE_PAY_PERIOD_START = new Date('2023-11-16T00:00:00');
 const MIN_WORK_HOURS_ENABLE = false;
 const MIN_WORKING_MINUTES_PER_FORTNIGHT = 1 * 60;
-const WORK_REMAINING_HOUR_EVENT_STATUS_FREE = 'true'; // ture =  free  false = busy
+const WORK_REMAINING_HOUR_EVENT_STATUS_FREE = true; // true = free, false = busy
 const HOURLY_RATE = 50;
-const PAY_PERIOD = 14; //days
+const PAY_PERIOD = 14; // days
 
-//Sleep Veribles
+// Sleep variables
 const SLEEP_DURATION = 7.5; //hours  
 const SLEEP_BEGIN = 20;
 const SLEEP_END = 12;
@@ -119,10 +128,6 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
       tempObj["source"] = "SUN";
       tempEventList.push(Object.assign({}, tempObj));
       i++;
-      if (i == 9) {
-        var x = 0;
-      }
-      //temp_date.setDate(newStart.getDate()+parseInt(i,10));
       temp_date = new Date(temp_date.getTime() + 24 * 60 * 60 * 1000);
       temp_date.setHours(6, 0, 0);
       //j++;
@@ -172,36 +177,30 @@ function updateWorkEventTask() {
   return;
 }
 
-async function wipeAllCalenders() {
-  wipeWorkCalender();
-  wipeTimeMapCalender();
-
+async function wipeAllCalendars() {
+  wipeWorkCalendar();
+  wipeTimeMapCalendar();
 }
 
-async function wipeWorkCalender() {
-  wipeCalender(WORK_CALENDAR_ID);
-
+async function wipeWorkCalendar() {
+  wipeCalendar(WORK_CALENDAR_ID);
 }
 
-async function wipeTimeMapCalender() {
-  wipeCalender(TIMEMAP_CALENDAR_ID);
+async function wipeTimeMapCalendar() {
+  wipeCalendar(TIMEMAP_CALENDAR_ID);
 }
 
-
-async function wipeCalender(CALENDER_ID) {
-
-  const cal = await CalendarApp.getCalendarById(CALENDER_ID);
+async function wipeCalendar(CALENDAR_ID) {
+  const cal = CalendarApp.getCalendarById(CALENDAR_ID);
   const now = new Date();
   const endDate = new Date();
   endDate.setHours(23, 59, 0);
   endDate.setDate(now.getDate() + 365);
 
   var events = cal.getEvents(now, endDate);
-  for (j in events) {
-    await events[j].deleteEvent();
-
+  for (var j in events) {
+    events[j].deleteEvent();
   }
-
 }
 
 
@@ -271,22 +270,24 @@ async function updateWorkEvents() {
 }
 
 //------------------------------------------------------WORK IN PROGRESS-----------------------------------
-async function addEvents_Sleep(calsToIgnore) {
-
+/**
+ * Adds [SLEEP] blocks to the sleep calendar for the scheduling window.
+ * Optionally pass calsToInclude to override default calendar names (not yet used).
+ */
+async function addEvents_Sleep() {
   var calsToInclude = ["mlewis89@gmail.com", "Lewis, Mark Calendar (Canvas)", "Work", "skittles@waverleyvalleyscouts.org.au", "Mark Lewis's Facebook events", "skittles - onlinemeetings"];
 
-  var sleep_cal = await CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
+  var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
   var now = new Date();
   var endDate = new Date();
   endDate.setHours(23, 59, 0);
   endDate.setDate(now.getDate() + SCHEDULING_WINDOW);
   await clean_timeMapCal(sleep_cal, '[SLEEP]', now, endDate);
 
-
   var calendars = [];
   for (var i in calsToInclude) {
-    var byName = await CalendarApp.getCalendarsByName(calsToInclude[i]);
-    for (j in byName) {
+    var byName = CalendarApp.getCalendarsByName(calsToInclude[i]);
+    for (var j in byName) {
       calendars.push(byName[j]);
     }
   }
@@ -297,10 +298,9 @@ async function addEvents_Sleep(calsToIgnore) {
   endTime.setDate(startTime.getDate() + SCHEDULING_WINDOW);
   var events = [];
 
-  //get and combine events into single array
   for (var i in calendars) {
-    var temp = await calendars[i].getEvents(startTime, endTime);
-    events = events.concat(calendars[i].getEvents(startTime, endTime));
+    var calEvents = calendars[i].getEvents(startTime, endTime);
+    events = events.concat(calEvents);
   }
 
   //sort events array  by start time
@@ -332,13 +332,13 @@ async function addEvents_Sleep(calsToIgnore) {
 
     }
     sleep_cal.createEvent("[SLEEP]", sEvent.start, sEvent.end);
-    if (i % 3 == 0) { 
-      Utilities.sleep(3000); }
+    if (i % RATE_LIMIT_EVERY_N_EVENTS === 0) {
+      Utilities.sleep(RATE_LIMIT_SLEEP_MS);
+    }
     sleepEvents.push(sEvent);
   }
 
-  var x = 0;
-
+  // TODO: use events to avoid placing sleep over existing commitments (late night / early morning logic)
   //get events
   //var SLEEP_DURATION = 8; //hours  
   //var SLEEP_BEGIN = 20;
@@ -361,9 +361,9 @@ function getCurrentPayPeriodDates(d) {
   }
 
 
-  //calculate start of pay period
-  var start_of_current_PayPeriod = new Date(REFERANCE_PAY_PERIOD_START);
-  var payStart = Math.floor(((d - REFERANCE_PAY_PERIOD_START) / 1000 / 60 / 60 / 24) / PAY_PERIOD) //how many payperiods between refferance and now
+  // calculate start of pay period
+  var start_of_current_PayPeriod = new Date(REFERENCE_PAY_PERIOD_START);
+  var payStart = Math.floor(((d - REFERENCE_PAY_PERIOD_START) / 1000 / 60 / 60 / 24) / PAY_PERIOD); // how many pay periods between reference and now
   start_of_current_PayPeriod = addDays(start_of_current_PayPeriod, PAY_PERIOD * payStart);
   start_of_current_PayPeriod.setHours(0, 0, 0);
 
@@ -385,7 +385,7 @@ async function addEvents_WorkingHoursTotals() {
 
     //get array of work events within fortnight
     var work_cal = await CalendarApp.getCalendarById(WORK_CALENDAR_ID);
-    await clean_timeMapCal(work_cal, ['[MIN HOURS ACHEIVED]', '[MIN HOURS NOT MET]', '[MIN HOURS]', "[TOTAL HOURS]", "[END OF PAY CYCLE]"], start_of_current_FN, end_of_current_FN);
+    await clean_timeMapCal(work_cal, ['[MIN HOURS ACHIEVED]', '[MIN HOURS NOT MET]', '[MIN HOURS]', "[TOTAL HOURS]", "[END OF PAY CYCLE]"], start_of_current_FN, end_of_current_FN);
     var workevents = work_cal.getEvents(start_of_current_FN, end_of_current_FN);
 
     //get total hours in current fortnight
@@ -396,23 +396,22 @@ async function addEvents_WorkingHoursTotals() {
       durationArr.push(duration)
       totalDuration += duration;
     }
-    await createEventAndSetAvailabityToFREE({ calender: work_cal, title: "[END OF PAY CYCLE] hrs:" + Math.ceil(totalDuration / 60) + " ~$" + (totalDuration / 60 * HOURLY_RATE), startTime: new Date(end_of_current_FN.getTime() - 1000 * 60 * 5), endTime: end_of_current_FN });
+    await createEventAndSetAvailabilityToFREE({ calendar: work_cal, title: "[END OF PAY CYCLE] hrs:" + Math.ceil(totalDuration / 60) + " ~$" + (totalDuration / 60 * HOURLY_RATE), startTime: new Date(end_of_current_FN.getTime() - 1000 * 60 * SUMMARY_EVENT_DURATION_MINUTES), endTime: end_of_current_FN });
 
 
     if (MIN_WORK_HOURS_ENABLE) {
-      //if total is greater than threashold - add event hrs acheived
+      // if total is greater than threshold - add event hrs achieved
       if (totalDuration >= MIN_WORKING_MINUTES_PER_FORTNIGHT) {
         var overflow = totalDuration - MIN_WORKING_MINUTES_PER_FORTNIGHT;
         var j = durationArr.length - 1;
-        //find event where hours go over threashold
+        // find event where hours go over threshold
         do {
-          var overflow = overflow - durationArr[j];
+          overflow = overflow - durationArr[j];
           j--;
-        } while (overflow > 0)
+        } while (overflow > 0);
         var startTime = new Date(workevents[j + 1].getStartTime().getTime() + Math.abs(overflow) * 60 * 1000);
-        var endTime = new Date(startTime.getTime() + 1000 * 60 * 5); //duration 5 minutes
-        //clean_timeMapCal(work_cal,"[MIN HOURS]",start_of_current_FN, end_of_current_FN);
-        await work_cal.createEvent("[MIN HOURS ACHEIVED] " + Math.ceil(MIN_WORKING_MINUTES_PER_FORTNIGHT / 60) + "Hours worked!", startTime, endTime);
+        var endTime = new Date(startTime.getTime() + 1000 * 60 * SUMMARY_EVENT_DURATION_MINUTES);
+        await work_cal.createEvent("[MIN HOURS ACHIEVED] " + Math.ceil(MIN_WORKING_MINUTES_PER_FORTNIGHT / 60) + "Hours worked!", startTime, endTime);
 
       }
       //else add events for hours remaining
@@ -426,8 +425,7 @@ async function addEvents_WorkingHoursTotals() {
 
 
         for (var i = 0; i < RemainingDays; i++) {
-          //set end time (ie need to add event on this day)
-          if (i > 3) { var x = 'stop'; }
+          // set end time (i.e. need to add event on this day)
           if (i == 0) {
             var endTime = new Date(end_of_current_FN.getTime());
           }
@@ -462,7 +460,7 @@ async function addEvents_WorkingHoursTotals() {
           await Calendar.Events.patch({transparency: "transparent"},WORK_CALENDAR_ID,eventId); */
 
           if (WORK_REMAINING_HOUR_EVENT_STATUS_FREE) {
-            await createEventAndSetAvailabityToFREE({ calender: work_cal, title: "[MIN HOURS NOT MET] " + Remaining_minutes / 60 + "hr Remaining", startTime: startTime, endTime: endTime });
+            await createEventAndSetAvailabilityToFREE({ calendar: work_cal, title: "[MIN HOURS NOT MET] " + Remaining_minutes / 60 + "hr Remaining", startTime: startTime, endTime: endTime });
           }
 
           Remaining_minutes = next_Remaining_minutes;
@@ -482,22 +480,21 @@ async function addEvents_WorkingHoursTotals() {
         var startTime = new Date(end_of_current_FN.getTime());
 
       }
-      var endTime = new Date(startTime.getTime() + 1000 * 60 * 5); //duration 5 minutes
-      //clean_timeMapCal(work_cal,"[TOTAL HOURS]",start_of_current_FN, end_of_current_FN);
-      //await work_cal.createEvent("[TOTAL HOURS] " + Math.ceil(totalDuration / 60) + "Hours expected!", startTime, endTime);
+      var endTime = new Date(startTime.getTime() + 1000 * 60 * SUMMARY_EVENT_DURATION_MINUTES);
     }
     d = Date_add_days(d, 15);
-  } while (Date_differance(d, Date_add_days(new Date(), SCHEDULING_WINDOW), 'days') > 0)
+  } while (dateDifference(d, Date_add_days(new Date(), SCHEDULING_WINDOW), 'days') > 0)
 }
 
-async function createEventAndSetAvailabityToFREE({ calender, title, startTime, endTime }) {
-  let newEvent = await calender.createEvent(title, startTime, endTime);
-  let calenderID = calender.getId();
-
-  //use Avanced callenderAPI to set event to 'free'
+/**
+ * Creates a calendar event and sets its availability to "free" (transparent).
+ * Requires the Calendar Advanced Service to be enabled (Resources > Advanced Google services).
+ */
+async function createEventAndSetAvailabilityToFREE({ calendar, title, startTime, endTime }) {
+  var newEvent = calendar.createEvent(title, startTime, endTime);
+  var calendarID = calendar.getId();
   var eventId = newEvent.getId().slice(0, newEvent.getId().length - 11);
-
-  return await Calendar.Events.patch({ transparency: "transparent" }, calenderID, eventId);
+  return Calendar.Events.patch({ transparency: "transparent" }, calendarID, eventId);
 }
 
 function Date_add_days(date, numDays) {
@@ -506,33 +503,41 @@ function Date_add_days(date, numDays) {
   return newDate;
 }
 
-function Date_differance(firstDate, secondDate, unit) {
+/**
+ * Returns the difference between two dates in the specified unit.
+ * Positive if secondDate is later than firstDate.
+ * @param {Date} firstDate
+ * @param {Date} secondDate
+ * @param {string} unit - 'milliseconds'|'seconds'|'minutes'|'hours'|'days'|'weeks'|'years'
+ * @return {number}
+ */
+function dateDifference(firstDate, secondDate, unit) {
   var val1 = firstDate.valueOf();
   var val2 = secondDate.valueOf();
+  var differenceMilliSec = val2 - val1;
 
-  var differance_milSec = val2 - val1;
-  //positive if secondDate is later than first date
-
-  if (unit == 'milliseconds' || unit === undefined) {
-    return differance_milSec;
-  } else if (unit == 'seconds') {
-    return differance_milSec * 1000;
+  if (unit === 'milliseconds' || unit === undefined) {
+    return differenceMilliSec;
   }
-  else if (unit == 'minutes') {
-    return differance_milSec * 1000 * 60;
+  if (unit === 'seconds') {
+    return differenceMilliSec / 1000;
   }
-  else if (unit == 'hours') {
-    return differance_milSec * 1000 * 60 * 60;
+  if (unit === 'minutes') {
+    return differenceMilliSec / (1000 * 60);
   }
-  else if (unit == 'days') {
-    return differance_milSec * 1000 * 60 * 60 * 24;
+  if (unit === 'hours') {
+    return differenceMilliSec / (1000 * 60 * 60);
   }
-  else if (unit == 'weeks') {
-    return differance_milSec * 1000 * 60 * 60 * 24 * 7;
+  if (unit === 'days') {
+    return differenceMilliSec / (1000 * 60 * 60 * 24);
   }
-  else if (unit == 'years') {
-    return differance_milSec * 1000 * 60 * 60 * 24 * 365;
+  if (unit === 'weeks') {
+    return differenceMilliSec / (1000 * 60 * 60 * 24 * 7);
   }
+  if (unit === 'years') {
+    return differenceMilliSec / (1000 * 60 * 60 * 24 * 365);
+  }
+  return differenceMilliSec;
 }
 
 function clean_used_timeMapCal() {
@@ -547,18 +552,15 @@ function clean_used_timeMapCal() {
 
 function clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
   if (!Array.isArray(arrEventNames)) {
-    var arrEventNames = [arrEventNames];
+    arrEventNames = [arrEventNames];
   }
 
-  for (i in arrEventNames) {
+  for (var i in arrEventNames) {
     var events = timemap_cal.getEvents(startDate, endDate, { search: arrEventNames[i] });
-    for (j in events) {
+    for (var j in events) {
       events[j].deleteEvent();
-
     }
   }
-
-
 }
 
 function Add_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
@@ -571,11 +573,10 @@ function Add_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
 
 function BlindAdd_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
   for (var i in EventsArr) {
-    var start = EventsArr[i].getStartTime();
-    var end = EventsArr[i].getEndTime();
     BlindAddTimeMapEvent(timemapCal, EventsArr[i].getStartTime(), EventsArr[i].getEndTime(), timeMapTitle);
-    if (i % 3 == 0) { 
-      Utilities.sleep(3000); }
+    if (i % RATE_LIMIT_EVERY_N_EVENTS === 0) {
+      Utilities.sleep(RATE_LIMIT_SLEEP_MS);
+    }
   }
 }
 
@@ -584,59 +585,85 @@ function BlindAdd_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitl
 
 
 
+/**
+ * Fetches flight data from Aviation Stack API.
+ * Set script property AVIATION_STACK_API_KEY in File > Project properties > Script properties.
+ */
 function getFlightData() {
-  var flightAPIkey = 'b01483a314379d1ea7402d0138aff2fa';
-  var url = 'http://api.aviationstack.com/v1/flights?access_key=' + flightAPIkey;
-
-  //var url = 'http://api.aviationstack.com/v1/flights?access_key=401308e98c0676bc5feb0cea81599270';
-
-  var response = UrlFetchApp.fetch(url);
-  var json = response.getContentText();
-  var data = JSON.parse(json);
-  //convert to date types
-  console.log(data);
+  var props = PropertiesService.getScriptProperties();
+  var flightAPIkey = props.getProperty('AVIATION_STACK_API_KEY');
+  if (!flightAPIkey) {
+    console.warn('AVIATION_STACK_API_KEY not set in Script properties. Skipping getFlightData.');
+    return null;
+  }
+  var url = 'https://api.aviationstack.com/v1/flights?access_key=' + flightAPIkey;
+  try {
+    var response = UrlFetchApp.fetch(url);
+    var json = response.getContentText();
+    var data = JSON.parse(json);
+    console.log(data);
+    return data;
+  } catch (e) {
+    console.error('getFlightData failed: ' + e.message);
+    return null;
+  }
 }
 
 
+var URL_FETCH_MAX_RETRIES = 3;
+var URL_FETCH_RETRY_DELAY_MS = 2000;
+
+/**
+ * Fetches URL with simple retries on failure.
+ */
+function fetchWithRetry(url) {
+  var lastError;
+  for (var attempt = 0; attempt < URL_FETCH_MAX_RETRIES; attempt++) {
+    try {
+      return UrlFetchApp.fetch(url);
+    } catch (e) {
+      lastError = e;
+      if (attempt < URL_FETCH_MAX_RETRIES - 1) {
+        Utilities.sleep(URL_FETCH_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Fetches hourly weather from Open-Meteo and returns array of { time, ...hourly, NiceWeather }.
+ * Source: https://open-meteo.com/en/docs
+ */
 async function get_WeatherData() {
-
-
-  //source https://open-meteo.com/en/docs#latitude=-37.814&longitude=144.9633&&hourly=temperature_2m,relativehumidity_2m,precipitation_probability,windspeed_10m,uv_index,is_day&timezone=Australia%2FSydney&forecast_days=16&models=bom_access_global
-
-  //date.setHours(00, 00, 00);
   var apiUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + LOCATION_LAT + "&longitude=" + LOCATION_LONG + "&hourly=temperature_2m,relativehumidity_2m,precipitation_probability,windspeed_10m,uv_index,is_day&timezone=Australia%2FSydney&forecast_days=10";
-  /*&models=bom_access_global - removed 27/nov/25 due to bad data at open-meteo.com*/
-  var response = await UrlFetchApp.fetch(apiUrl);
-  console.log(apiUrl);
+  try {
+    var response = fetchWithRetry(apiUrl);
+    var json = response.getContentText();
+    var data = JSON.parse(json);
+  } catch (e) {
+    console.error('get_WeatherData failed: ' + e.message);
+    throw e;
+  }
 
-
-  var json = response.getContentText();
-  var data = JSON.parse(json);
-  //convert to date types
   var newData = [];
   for (var i in data.hourly.time) {
     var timeData = {};
     for (var j in data.hourly) {
-      if (j == "time") {
+      if (j === "time") {
         timeData[j] = new Date(getDateFromIso(data.hourly[j][i]));
-
       } else {
         timeData[j] = data.hourly[j][i];
       }
-      //timeData[data.hourly[j]]= temp; 
     }
     timeData['NiceWeather'] = isNiceWeather(timeData);
-
     newData.push(timeData);
-
   }
   return newData;
-
 }
 
 function Update_NonWorkTimemap(timemap_cal, startDate, endDate) {
-  var buffer = 60 //minutes of buffer between work and non work timemaps;
-  return Update_InvertedTimemap(timemap_cal, startDate, endDate, '[Work_Office]', '[Not@work]', buffer);
+  return Update_InvertedTimemap(timemap_cal, startDate, endDate, '[Work_Office]', '[Not@work]', WORK_NONWORK_BUFFER_MINUTES);
 }
 
 
@@ -750,9 +777,6 @@ function AddUpdateTimeMapEvent(timemap_cal, start, end, eventName) {
       timemap_cal.createEvent(eventName, start, end);
     }
   }
-  else {
-    var x = 0;
-  }
   return;
 }
 
@@ -775,21 +799,25 @@ function add_daylightEvent(cal, date) {
 }
 
 
-function get_SunRiseSet(lat, long, date) {
-  //date.setHours(00, 00, 00);
-  var response = UrlFetchApp.fetch("https://api.sunrise-sunset.org/json?lat=" + lat + "&lng=" + long + "&date=" + Utilities.formatDate(date, 'Australia/Melbourne', 'YYYY-MM-dd') + "&formatted=0");
-  var json = response.getContentText();
-  var data = JSON.parse(json);
-  //convert to date types
-  for (i in data.results) {
-    if (i != "day_length") {
-      var newDateObj = new Date(data.results[i]);
-      data.results[i] = newDateObj;
-
+/**
+ * Returns sunrise/sunset for a date at the given lat/lng.
+ */
+function get_SunRiseSet(lat, lng, date) {
+  var url = "https://api.sunrise-sunset.org/json?lat=" + lat + "&lng=" + lng + "&date=" + Utilities.formatDate(date, 'Australia/Melbourne', 'YYYY-MM-dd') + "&formatted=0";
+  try {
+    var response = fetchWithRetry(url);
+    var json = response.getContentText();
+    var data = JSON.parse(json);
+  } catch (e) {
+    console.error('get_SunRiseSet failed: ' + e.message);
+    throw e;
+  }
+  for (var i in data.results) {
+    if (i !== "day_length") {
+      data.results[i] = new Date(data.results[i]);
     }
   }
   return data;
-
 }
 
 //var dt = new Date(getDateFromIso("2012-08-03T23:00:26-05:00"));
