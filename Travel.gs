@@ -21,8 +21,15 @@ const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
 const TRAVEL_MAPS_SLEEP_MS = 500;
 const TRAVEL_MAPS_SLEEP_EVERY_N = 1;
 
+/** Returns true if the error is the Maps "too many times for one day" quota. */
+function _travelIsMapsQuotaError(e) {
+  var msg = (e && e.message) ? String(e.message) : "";
+  return msg.indexOf("too many times") !== -1 || (msg.indexOf("Service invoked") !== -1 && msg.indexOf("route") !== -1);
+}
+
 /**
  * Returns drive duration in minutes (rounded up), or null if directions fail.
+ * Throws on Maps daily quota exceeded so callers can abort travel calcs and continue with Sleep etc.
  * origin and destination can be address strings or "lat,lng".
  * Uses DirectionFinder with DRIVING mode and avoid tolls.
  */
@@ -41,6 +48,7 @@ function getDriveDurationMinutes(origin, destination) {
     var seconds = leg.duration.value;
     return Math.ceil(seconds / 60);
   } catch (e) {
+    if (_travelIsMapsQuotaError(e)) throw e;
     console.warn("getDriveDurationMinutes failed: " + e.message + " (" + origin + " -> " + destination + ")");
     return null;
   }
@@ -177,7 +185,17 @@ function updateTravelDriveEvents() {
   }
 
   var homeStr = _travelHomeOrigin();
-  var cache = _travelBuildDurationCache(events, homeStr);
+  var cache;
+  try {
+    cache = _travelBuildDurationCache(events, homeStr);
+  } catch (e) {
+    if (_travelIsMapsQuotaError(e)) {
+      console.warn("Maps daily limit exceeded; skipping travel drive updates. Sleep and other steps will continue.");
+      return;
+    }
+    throw e;
+  }
+
   var cacheGet = function (origin, dest) {
     return cache[origin + "\n" + dest];
   };
