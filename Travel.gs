@@ -10,9 +10,10 @@
  */
 
 // Replace with your travel calendar ID (create calendar in Google Calendar, then copy ID from calendar settings).
-const TRAVEL_CALENDAR_ID = "REPLACE_WITH_YOUR_TRAVEL_CALENDAR_ID@group.calendar.google.com";
-// Calendars to scan for events with locations (same pattern as sleep in Code.gs).
-const TRAVEL_CALS_TO_SCAN = ["mlewis89@gmail.com", "Lewis, Mark Calendar (Canvas)", "Work", "skittles@waverleyvalleyscouts.org.au", "Mark Lewis's Facebook events", "skittles - onlinemeetings"];
+const TRAVEL_CALENDAR_ID = "c6511974498db2a541c354a55443df76cbee6a1ba88e943c898e013768e05a12@group.calendar.google.com";
+// Calendars to exclude from scanning. All other calendars are scanned for events with locations.
+// You can use calendar names (e.g. "Travel", "Sleep") or full calendar IDs. The travel calendar (TRAVEL_CALENDAR_ID) is always excluded.
+const TRAVEL_CALS_TO_EXCLUDE = ["Sleep", "Timemap"];
 const TRAVEL_ARRIVE_MINUTES_BEFORE = 15;
 const TRAVEL_MIN_HOME_MINUTES = 30;
 const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
@@ -33,7 +34,7 @@ function getDriveDurationMinutes(origin, destination) {
       .setOrigin(origin)
       .setDestination(destination)
       .setMode(Maps.DirectionFinder.Mode.DRIVING)
-      .setAvoid(Maps.Avoid.TOLLS)
+      .setAvoid(Maps.DirectionFinder.Avoid.TOLLS)
       .getDirections();
     if (!directions || !directions.routes || directions.routes.length === 0) return null;
     var leg = directions.routes[0].legs[0];
@@ -54,20 +55,30 @@ function _travelHomeOrigin() {
 }
 
 /**
- * Collects events that have a location set, from TRAVEL_CALS_TO_SCAN, in [now, now + SCHEDULING_WINDOW].
+ * Returns true if the calendar should be excluded from travel scanning (name or ID in TRAVEL_CALS_TO_EXCLUDE, or is the travel calendar).
+ */
+function _travelIsCalendarExcluded(cal) {
+  var id = cal.getId();
+  if (id === TRAVEL_CALENDAR_ID) return true;
+  var name = cal.getName();
+  for (var i = 0; i < TRAVEL_CALS_TO_EXCLUDE.length; i++) {
+    var ex = TRAVEL_CALS_TO_EXCLUDE[i];
+    if (ex === name || ex === id) return true;
+  }
+  return false;
+}
+
+/**
+ * Collects events that have a location set from all calendars except those in TRAVEL_CALS_TO_EXCLUDE (and the travel calendar).
  * Excludes all-day events. Returns array of CalendarEvent, sorted by start time.
  */
 function _travelCollectEventsWithLocations(startDate, endDate) {
-  var calendars = [];
-  for (var i = 0; i < TRAVEL_CALS_TO_SCAN.length; i++) {
-    var byName = CalendarApp.getCalendarsByName(TRAVEL_CALS_TO_SCAN[i]);
-    for (var j = 0; j < byName.length; j++) {
-      calendars.push(byName[j]);
-    }
-  }
+  var allCalendars = CalendarApp.getAllCalendars();
   var events = [];
-  for (var i = 0; i < calendars.length; i++) {
-    var calEvents = calendars[i].getEvents(startDate, endDate);
+  for (var i = 0; i < allCalendars.length; i++) {
+    var cal = allCalendars[i];
+    if (_travelIsCalendarExcluded(cal)) continue;
+    var calEvents = cal.getEvents(startDate, endDate);
     for (var k = 0; k < calEvents.length; k++) {
       var ev = calEvents[k];
       if (ev.isAllDayEvent()) continue;
