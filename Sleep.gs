@@ -5,14 +5,11 @@
  * avoiding or splitting around events during normal sleep hours (fallback: two 4-hour blocks).
  *
  * Requires: Travel calendar to be updated first (run updateTravelDriveEvents before addEvents_Sleep).
- * Set SLEEP_CALENDAR_ID to your sleep calendar ID. Uses SLEEP_CALS_TO_EXCLUDE to skip
- * calendars when scanning for commitments (same exclude-by-list pattern as Travel.gs).
+ * Set SLEEP_CALENDAR_ID to your sleep calendar ID. Uses CALENDARS_TO_EXCLUDE from Code.gs when scanning for commitments.
  */
 
 // Replace with your sleep calendar ID (create calendar in Google Calendar, then copy ID from settings).
 const SLEEP_CALENDAR_ID = "496baca0d033db4062ef3acd672aa7ba22cc505bad94b3920b2bd2358c25d610@group.calendar.google.com";
-// Calendars to exclude when scanning for commitments. Use calendar names (e.g. "Travel", "Timemap") or full IDs. Sleep calendar is always excluded.
-const SLEEP_CALS_TO_EXCLUDE = ["Travel", "Timemap"];
 
 const SLEEP_DURATION_HOURS = 8;
 const SLEEP_BEGIN = 20;   // hour (0-23) start of "normal sleep" window
@@ -28,14 +25,14 @@ const SLEEP_DRIVE_OUTBOUND_PREFIX = "[Drive] To:";
 
 /**
  * Returns true if the calendar should be excluded when collecting commitment events
- * (sleep calendar or name/ID in SLEEP_CALS_TO_EXCLUDE).
+ * (sleep calendar or name/ID in CALENDARS_TO_EXCLUDE from Code.gs).
  */
 function _sleepIsCalendarExcluded(cal) {
   var id = cal.getId();
   if (id === SLEEP_CALENDAR_ID) return true;
   var name = cal.getName();
-  for (var i = 0; i < SLEEP_CALS_TO_EXCLUDE.length; i++) {
-    var ex = SLEEP_CALS_TO_EXCLUDE[i];
+  for (var i = 0; i < CALENDARS_TO_EXCLUDE.length; i++) {
+    var ex = CALENDARS_TO_EXCLUDE[i];
     if (ex === name || ex === id) return true;
   }
   return false;

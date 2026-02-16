@@ -12,9 +12,7 @@
 
 // Replace with your travel calendar ID (create calendar in Google Calendar, then copy ID from calendar settings).
 const TRAVEL_CALENDAR_ID = "c6511974498db2a541c354a55443df76cbee6a1ba88e943c898e013768e05a12@group.calendar.google.com";
-// Calendars to exclude from scanning. All other calendars are scanned for events with locations.
-// You can use calendar names (e.g. "Travel", "Sleep") or full calendar IDs. The travel calendar (TRAVEL_CALENDAR_ID) is always excluded.
-const TRAVEL_CALS_TO_EXCLUDE = ["Sleep", "Timemap"];
+// Uses CALENDARS_TO_EXCLUDE from Code.gs when scanning for events with locations. Travel calendar (TRAVEL_CALENDAR_ID) is always excluded.
 const TRAVEL_ARRIVE_MINUTES_BEFORE = 15;
 const TRAVEL_MIN_HOME_MINUTES = 30;
 const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
@@ -82,14 +80,14 @@ function _travelSetEventFree(calendar, event) {
 }
 
 /**
- * Returns true if the calendar should be excluded from travel scanning (name or ID in TRAVEL_CALS_TO_EXCLUDE, or is the travel calendar).
+ * Returns true if the calendar should be excluded from travel scanning (name or ID in CALENDARS_TO_EXCLUDE from Code.gs, or is the travel calendar).
  */
 function _travelIsCalendarExcluded(cal) {
   var id = cal.getId();
   if (id === TRAVEL_CALENDAR_ID) return true;
   var name = cal.getName();
-  for (var i = 0; i < TRAVEL_CALS_TO_EXCLUDE.length; i++) {
-    var ex = TRAVEL_CALS_TO_EXCLUDE[i];
+  for (var i = 0; i < CALENDARS_TO_EXCLUDE.length; i++) {
+    var ex = CALENDARS_TO_EXCLUDE[i];
     if (ex === name || ex === id) return true;
   }
   return false;

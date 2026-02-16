@@ -39,9 +39,12 @@ const PAY_PERIOD = 14; // days
 //const LOCATION_LAT = -37.840935
 //const LOCATION_LONG = 144.946457
 
-//Ashwood - home
-const LOCATION_LAT = -37.910156
-const LOCATION_LONG = 145.107420
+// Ashwood - home
+const LOCATION_LAT = -37.910156;
+const LOCATION_LONG = 145.107420;
+
+// Calendars to exclude when scanning (Sleep commitments, Travel locations, etc.). Use names (e.g. "Travel", "Timemap") or full IDs. Each module also excludes its own calendar by ID.
+const CALENDARS_TO_EXCLUDE = ["Travel", "Sleep", "Timemap", "lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
 
 async function Update_InsideTimemap() //rolls daylight and nice weather into one timemap.
 {
