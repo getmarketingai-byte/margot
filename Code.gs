@@ -6,7 +6,6 @@
  */
 const TIMEMAP_CALENDAR_ID = "1a1a44068207e09221d980c6c0ee587bc86587f680f862e56ba0bf6a8e47e020@group.calendar.google.com";
 const WORK_CALENDAR_ID = "070pmqum2gcm69ekmog6fvkmtk@group.calendar.google.com";
-const SLEEP_CALENDAR_ID = "496baca0d033db4062ef3acd672aa7ba22cc505bad94b3920b2bd2358c25d610@group.calendar.google.com";
 const SCHEDULING_WINDOW = 60; // days
 const ASSUME_NICEWEATHER_BEYOND_FORCAST = false;
 const WORK_OFFICE_IS_INSIDE = false; // add inside map to office time
@@ -32,13 +31,6 @@ const MIN_WORKING_MINUTES_PER_FORTNIGHT = 1 * 60;
 const WORK_REMAINING_HOUR_EVENT_STATUS_FREE = true; // true = free, false = busy
 const HOURLY_RATE = 50;
 const PAY_PERIOD = 14; // days
-
-// Sleep variables
-const SLEEP_DURATION = 7.5; //hours  
-const SLEEP_BEGIN = 20;
-const SLEEP_END = 12;
-const SLEEP_IDEAL_WAKE_UP_HRS = 6;
-const SLEEP_IDEAL_WAKE_UP_MIN = 00
 
 //melbounre
 //const LOCATION_LAT = -37.840935
@@ -169,10 +161,9 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
   return 0;
 }
 
-function update_Master_TimeMap()
-{
-  addEvents_Sleep();
+function update_Master_TimeMap() {
   updateTravelDriveEvents();
+  addEvents_Sleep();
 }
 
 
@@ -274,92 +265,6 @@ async function updateWorkEvents() {
   }
   //Update_NonWorkTimemap(timemap_cal, now, endDate);
 
-}
-
-//------------------------------------------------------WORK IN PROGRESS-----------------------------------
-/**
- * Adds [SLEEP] blocks to the sleep calendar for the scheduling window.
- * Optionally pass calsToInclude to override default calendar names (not yet used).
- */
-async function addEvents_Sleep() {
-  var calsToInclude = ["mlewis89@gmail.com", "Lewis, Mark Calendar (Canvas)", "Work", "skittles@waverleyvalleyscouts.org.au", "Mark Lewis's Facebook events", "skittles - onlinemeetings"];
-
-  var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
-  var now = new Date();
-  var endDate = new Date();
-  endDate.setHours(23, 59, 0);
-  endDate.setDate(now.getDate() + SCHEDULING_WINDOW);
-  await clean_timeMapCal(sleep_cal, '[SLEEP]', now, endDate);
-
-  var calendars = [];
-  for (var i in calsToInclude) {
-    var byName = CalendarApp.getCalendarsByName(calsToInclude[i]);
-    for (var j in byName) {
-      calendars.push(byName[j]);
-    }
-  }
-
-  var startTime = new Date();
-  var endTime = new Date();
-  endTime.setHours(23, 59, 0);
-  endTime.setDate(startTime.getDate() + SCHEDULING_WINDOW);
-  var events = [];
-
-  for (var i in calendars) {
-    var calEvents = calendars[i].getEvents(startTime, endTime);
-    events = events.concat(calEvents);
-  }
-
-  //sort events array  by start time
-  events.sort((a, b) => {
-    return a.getStartTime() - b.getStartTime();
-  });
-  var sleepEvents = [];
-
-  for (var i = 0; i <= SCHEDULING_WINDOW; i++) {
-    var sEvent = {};
-    if (0) // late night
-    {
-      sEvent.start = eventEndTime;
-      sEvent.end = sEvent.start + SLEEP_DURATION;
-    } else if (0) //early morning start
-    {
-      //sEvent.end =  eventStartTime;
-      //sEvent.start = sEvent.end - SLEEP_DURATION;  
-    }
-    else {
-      var end = new Date();
-      end.setDate(end.getDate() + parseInt(i));
-      end.setHours(SLEEP_IDEAL_WAKE_UP_HRS, SLEEP_IDEAL_WAKE_UP_MIN, 0);
-      sEvent.end = end;
-
-      var start = new Date(end.getTime() - (SLEEP_DURATION * 60 * 60 * 1000));
-      sEvent.start = start;
-
-
-    }
-    sleep_cal.createEvent("[SLEEP]", sEvent.start, sEvent.end);
-    if (i % RATE_LIMIT_EVERY_N_EVENTS === 0) {
-      Utilities.sleep(RATE_LIMIT_SLEEP_MS);
-    }
-    sleepEvents.push(sEvent);
-  }
-
-  // TODO: use events to avoid placing sleep over existing commitments (late night / early morning logic)
-  //get events
-  //var SLEEP_DURATION = 8; //hours  
-  //var SLEEP_BEGIN = 20;
-  //var SLEEP_END = 9;
-  //var PREFERED_WAKE_UP = 7;
-
-  //loop while in scheduling window
-
-  //if sleep period is free of events
-  //add event ending at preferred wake up
-  //else
-  //get start and end of sleep block
-  //determine best time block
-  //create sleep event
 }
 
 function getCurrentPayPeriodDates(d) {
