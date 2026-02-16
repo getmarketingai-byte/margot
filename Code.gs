@@ -161,9 +161,9 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
   return 0;
 }
 
-function update_Master_TimeMap() {
+async function update_Master_TimeMap() {
   updateTravelDriveEvents();
-  addEvents_Sleep();
+  await addEvents_Sleep();
 }
 
 
