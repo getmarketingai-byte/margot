@@ -116,7 +116,8 @@ function _sleepFreeGaps(nightStart, nightEnd, events) {
 /**
  * Adds [SLEEP] blocks to the sleep calendar for the scheduling window.
  * Run updateTravelDriveEvents() before this so leave times are available.
- * Uses SCHEDULING_WINDOW and syncCalendarEvents from Code.gs.
+ * Creates/updates/deletes events via syncCalendarEvents() in Code.gs (that function
+ * calls calendar.createEvent() for new events and setTime/setTitle for updates).
  */
 async function addEvents_Sleep() {
   var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
@@ -205,6 +206,10 @@ async function addEvents_Sleep() {
     }
   }
 
+  if (desiredSleep.length === 0) {
+    console.warn("addEvents_Sleep: no [SLEEP] blocks computed for the window; no events will be written.");
+  }
+  // Create/update/delete [SLEEP] events on the calendar (see Code.gs syncCalendarEvents → calendar.createEvent / setTime).
   syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, now, endDate, desiredSleep, {
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });

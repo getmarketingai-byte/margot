@@ -13,6 +13,9 @@
 // Replace with your travel calendar ID (create calendar in Google Calendar, then copy ID from calendar settings).
 const TRAVEL_CALENDAR_ID = "c6511974498db2a541c354a55443df76cbee6a1ba88e943c898e013768e05a12@group.calendar.google.com";
 // Uses CALENDARS_TO_EXCLUDE from Code.gs when scanning for events with locations. Travel calendar (TRAVEL_CALENDAR_ID) is always excluded.
+// Location substrings treated as "no physical location" (video/phone meetings). Case-insensitive.
+const TRAVEL_VIRTUAL_LOCATION_SUBSTRINGS = ["microsoft teams meeting", "teams meeting", "zoom", "google meet", "meet - ", "webex", "video call", "ringcentral", "gotomeeting", "skype", "facetime", "meet.google", "teams.microsoft", "zoom.us"];
+
 const TRAVEL_ARRIVE_MINUTES_BEFORE = 15;
 const TRAVEL_MIN_HOME_MINUTES = 30;
 const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
@@ -102,8 +105,23 @@ function _travelIsCalendarExcluded(cal) {
 }
 
 /**
- * Collects events that have a location set from all calendars except those in TRAVEL_CALS_TO_EXCLUDE (and the travel calendar).
- * Excludes all-day events. Returns array of CalendarEvent, sorted by start time.
+ * Returns true if the location string should be treated as empty (video/phone meeting, no physical place).
+ */
+function _travelIsVirtualMeetingLocation(loc) {
+  if (!loc || typeof loc !== "string") return true;
+  var s = loc.trim();
+  if (s === "") return true;
+  var lower = s.toLowerCase();
+  for (var i = 0; i < TRAVEL_VIRTUAL_LOCATION_SUBSTRINGS.length; i++) {
+    if (lower.indexOf(TRAVEL_VIRTUAL_LOCATION_SUBSTRINGS[i]) !== -1) return true;
+  }
+  return false;
+}
+
+/**
+ * Collects events that have a physical location from all calendars except those in CALENDARS_TO_EXCLUDE (and the travel calendar).
+ * Excludes all-day events and events whose location is a video-call placeholder (e.g. "Microsoft Teams Meeting").
+ * Returns array of CalendarEvent, sorted by start time.
  */
 function _travelCollectEventsWithLocations(startDate, endDate) {
   var allCalendars = CalendarApp.getAllCalendars();
@@ -116,7 +134,7 @@ function _travelCollectEventsWithLocations(startDate, endDate) {
       var ev = calEvents[k];
       if (ev.isAllDayEvent()) continue;
       var loc = ev.getLocation ? ev.getLocation() : (ev.getEventLocation ? ev.getEventLocation() : "");
-      if (loc && loc.toString().trim() !== "") {
+      if (loc && loc.toString().trim() !== "" && !_travelIsVirtualMeetingLocation(loc)) {
         events.push(ev);
       }
     }

@@ -485,8 +485,11 @@ function clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
 /**
  * Syncs calendar events to a desired list: deletes orphans, creates missing, updates in place when only time/title changed.
  * Reduces API churn and avoids "too many events" rate limit.
+ * - Create: when a desired event has no matching existing event, calendar.createEvent() is called below.
+ * - Update: when an existing event matches but times/title differ, setTime()/setTitle() are used.
+ * - Delete: existing events whose key is not in the desired list are deleted.
  * @param {Calendar} calendar - Calendar to sync.
- * @param {string} eventTag - Search tag for existing events (e.g. "[Outside]", "[Drive]").
+ * @param {string} eventTag - Search tag for existing events (e.g. "[Outside]", "[Drive]", "[SLEEP]").
  * @param {Date} startDate - Range start.
  * @param {Date} endDate - Range end.
  * @param {Array<{title: string, start: Date, end: Date, key: string, free?: boolean}>} desiredEvents - Desired events; each must have key for matching.
@@ -535,6 +538,7 @@ function syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvent
       if (setFree && desired.free) setFree(calendar, existing);
       throttle();
     } else {
+      // Create new event (used by Sleep, Travel, Timemap, pay-period, etc.)
       var newEv = calendar.createEvent(desired.title || eventTag, desired.start, desired.end);
       if (setFree && desired.free) setFree(calendar, newEv);
       throttle();
