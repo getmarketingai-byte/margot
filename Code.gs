@@ -1,6 +1,7 @@
 /**
- * Google Apps Script: Calendar automations (timemaps, work, sleep, pay period).
+ * Google Apps Script: Calendar automations (timemaps, work, sleep, pay period, travel drive events).
  * Enable Calendar Advanced Service: Resources > Advanced Google services > Calendar API.
+ * For travel drive events (Travel.gs): enable Maps service; set TRAVEL_CALENDAR_ID in Travel.gs.
  * For getFlightData(): set script property AVIATION_STACK_API_KEY in Project properties.
  */
 const TIMEMAP_CALENDAR_ID = "1a1a44068207e09221d980c6c0ee587bc86587f680f862e56ba0bf6a8e47e020@group.calendar.google.com";
@@ -170,8 +171,8 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
 
 function update_Master_TimeMap()
 {
-  //calculate_travel_time();
   addEvents_Sleep();
+  updateTravelDriveEvents();
 }
 
 
