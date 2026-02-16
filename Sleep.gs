@@ -119,7 +119,7 @@ function _sleepFreeGaps(nightStart, nightEnd, events) {
 /**
  * Adds [SLEEP] blocks to the sleep calendar for the scheduling window.
  * Run updateTravelDriveEvents() before this so leave times are available.
- * Uses SCHEDULING_WINDOW, clean_timeMapCal, RATE_LIMIT_SLEEP_MS, RATE_LIMIT_EVERY_N_EVENTS from Code.gs.
+ * Uses SCHEDULING_WINDOW and syncCalendarEvents from Code.gs.
  */
 async function addEvents_Sleep() {
   var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
@@ -133,14 +133,12 @@ async function addEvents_Sleep() {
   endDate.setHours(23, 59, 59, 999);
   endDate.setDate(endDate.getDate() + SCHEDULING_WINDOW);
 
-  clean_timeMapCal(sleep_cal, SLEEP_EVENT_TAG, now, endDate);
-
   var leaveByDay = _sleepGetLeaveTimesByDay(now, endDate);
   var msPerHour = 60 * 60 * 1000;
   var ms8 = SLEEP_DURATION_HOURS * msPerHour;
   var ms4 = SLEEP_MIN_BLOCK_HOURS * msPerHour;
   var bufferMs = SLEEP_BUFFER_BEFORE_LEAVE_MINUTES * 60 * 1000;
-  var eventCount = 0;
+  var desiredSleep = [];
 
   for (var i = 0; i <= SCHEDULING_WINDOW; i++) {
     var dayD = new Date(now.getTime());
@@ -201,9 +199,16 @@ async function addEvents_Sleep() {
 
     for (var b = 0; b < blocksToCreate.length; b++) {
       var bl = blocksToCreate[b];
-      sleep_cal.createEvent(SLEEP_EVENT_TAG, new Date(bl.start), new Date(bl.end));
-      eventCount++;
-      if (eventCount % RATE_LIMIT_EVERY_N_EVENTS === 0) Utilities.sleep(RATE_LIMIT_SLEEP_MS);
+      desiredSleep.push({
+        title: SLEEP_EVENT_TAG,
+        start: new Date(bl.start),
+        end: new Date(bl.end),
+        key: String(bl.start)
+      });
     }
   }
+
+  syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, now, endDate, desiredSleep, {
+    keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
+  });
 }

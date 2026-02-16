@@ -15,6 +15,9 @@ const SPLIT_TIMEMAPS_BY_DAYS = true;
 // Rate limiting and buffer constants
 const RATE_LIMIT_SLEEP_MS = 3000;
 const RATE_LIMIT_EVERY_N_EVENTS = 3;
+// Sync helper: throttle calendar writes to avoid "too many events" API limit (e.g. every N ops).
+const SYNC_THROTTLE_EVERY_N = 8;
+const SYNC_THROTTLE_MS = 200;
 const SUMMARY_EVENT_DURATION_MINUTES = 5;
 const WORK_NONWORK_BUFFER_MINUTES = 60;
 
@@ -132,12 +135,17 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
       //j++;
     }
   }
-  await clean_timeMapCal(timemap_cal, '[Outside]', startDate, endDate);
-  //var niceWeather_events  =  timemap_cal.getEvents(startDate, endDate, {search: '[Outside]'});
+  var desiredOutside = [];
   for (var k in tempEventList) {
-    await AddUpdateTimeMapEvent(timemap_cal, tempEventList[k].niceweather_start, tempEventList[k].niceweather_stop, "[Outside]");
-
+    var s = tempEventList[k].niceweather_start;
+    var e = tempEventList[k].niceweather_stop;
+    if (s.valueOf() < e.valueOf()) {
+      desiredOutside.push({ title: "[Outside]", start: s, end: e, key: String(s.getTime()) });
+    }
   }
+  syncCalendarEvents(timemap_cal, "[Outside]", startDate, endDate, desiredOutside, {
+    keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
+  });
   Update_InvertedTimemap(timemap_cal, startDate, endDate, "[Outside]", "[Inside]");
   if (WORK_OFFICE_IS_INSIDE) {
     await BlindAdd_TimeMapEvents_from_EventArr(timemap_cal, timemap_cal.getEvents(startDate, endDate, { search: "[Work_Office]" }), "[Inside]");
@@ -256,15 +264,18 @@ async function updateWorkEvents() {
   const endDate = new Date();
   endDate.setHours(23, 59, 0);
   endDate.setDate(now.getDate() + SCHEDULING_WINDOW);
-  await clean_timeMapCal(timemap_cal, '[Work_Office]', now, endDate);
 
   const events = await work_cal.getEvents(now, endDate);
-
-  for (let i in events) {
-    if (!(events[i].isAllDayEvent()) && !events[i].getTitle().includes('[MIN')) { await timemap_cal.createEvent("[Work_Office]", events[i].getStartTime(), events[i].getEndTime()); }
+  var desiredWorkOffice = [];
+  for (var i = 0; i < events.length; i++) {
+    if (events[i].isAllDayEvent() || (events[i].getTitle() || "").includes("[MIN")) continue;
+    var s = events[i].getStartTime();
+    var e = events[i].getEndTime();
+    desiredWorkOffice.push({ title: "[Work_Office]", start: s, end: e, key: String(s.getTime()) });
   }
-  //Update_NonWorkTimemap(timemap_cal, now, endDate);
-
+  syncCalendarEvents(timemap_cal, "[Work_Office]", now, endDate, desiredWorkOffice, {
+    keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
+  });
 }
 
 function getCurrentPayPeriodDates(d) {
@@ -288,114 +299,97 @@ function getCurrentPayPeriodDates(d) {
 }
 
 async function addEvents_WorkingHoursTotals() {
-  //get dates for current fortnight
+  var work_cal = await CalendarApp.getCalendarById(WORK_CALENDAR_ID);
   var d = new Date();
+  var rangeStart = null;
+  var rangeEnd = null;
+  var desiredEndOfCycle = [];
+  var desiredMinAchieved = [];
+  var desiredMinNotMet = [];
+
   do {
     var payDates = getCurrentPayPeriodDates(d);
     var start_of_current_FN = payDates.payPeriodStart;
     var end_of_current_FN = payDates.payPeriodEnd;
+    if (rangeStart === null) rangeStart = new Date(start_of_current_FN.getTime());
+    rangeEnd = new Date(end_of_current_FN.getTime());
 
-    //get array of work events within fortnight
-    var work_cal = await CalendarApp.getCalendarById(WORK_CALENDAR_ID);
-    await clean_timeMapCal(work_cal, ['[MIN HOURS ACHIEVED]', '[MIN HOURS NOT MET]', '[MIN HOURS]', "[TOTAL HOURS]", "[END OF PAY CYCLE]"], start_of_current_FN, end_of_current_FN);
-    var workevents = work_cal.getEvents(start_of_current_FN, end_of_current_FN);
+    var allEvents = work_cal.getEvents(start_of_current_FN, end_of_current_FN);
+    var workevents = [];
+    for (var e = 0; e < allEvents.length; e++) {
+      var t = (allEvents[e].getTitle() || "");
+      if (t.indexOf("[MIN") === -1 && t.indexOf("[END OF PAY CYCLE]") === -1 && t.indexOf("[TOTAL HOURS]") === -1) workevents.push(allEvents[e]);
+    }
 
-    //get total hours in current fortnight
     var totalDuration = 0;
     var durationArr = [];
-    for (var i in workevents) {
+    for (var i = 0; i < workevents.length; i++) {
       var duration = Math.ceil((workevents[i].getEndTime() - workevents[i].getStartTime()) / 1000 / 60);
-      durationArr.push(duration)
+      durationArr.push(duration);
       totalDuration += duration;
     }
-    await createEventAndSetAvailabilityToFREE({ calendar: work_cal, title: "[END OF PAY CYCLE] hrs:" + Math.ceil(totalDuration / 60) + " ~$" + (totalDuration / 60 * HOURLY_RATE), startTime: new Date(end_of_current_FN.getTime() - 1000 * 60 * SUMMARY_EVENT_DURATION_MINUTES), endTime: end_of_current_FN });
 
+    var endCycleStart = new Date(end_of_current_FN.getTime() - 1000 * 60 * SUMMARY_EVENT_DURATION_MINUTES);
+    desiredEndOfCycle.push({
+      title: "[END OF PAY CYCLE] hrs:" + Math.ceil(totalDuration / 60) + " ~$" + (totalDuration / 60 * HOURLY_RATE),
+      start: endCycleStart,
+      end: end_of_current_FN,
+      key: String(end_of_current_FN.getTime()),
+      free: true
+    });
 
     if (MIN_WORK_HOURS_ENABLE) {
-      // if total is greater than threshold - add event hrs achieved
       if (totalDuration >= MIN_WORKING_MINUTES_PER_FORTNIGHT) {
         var overflow = totalDuration - MIN_WORKING_MINUTES_PER_FORTNIGHT;
         var j = durationArr.length - 1;
-        // find event where hours go over threshold
         do {
           overflow = overflow - durationArr[j];
           j--;
         } while (overflow > 0);
         var startTime = new Date(workevents[j + 1].getStartTime().getTime() + Math.abs(overflow) * 60 * 1000);
         var endTime = new Date(startTime.getTime() + 1000 * 60 * SUMMARY_EVENT_DURATION_MINUTES);
-        await work_cal.createEvent("[MIN HOURS ACHIEVED] " + Math.ceil(MIN_WORKING_MINUTES_PER_FORTNIGHT / 60) + "Hours worked!", startTime, endTime);
-
-      }
-      //else add events for hours remaining
-      else {
-        //var startTime = new Date (workevents[workevents.length-1].getEndTime().getTime());
-        //var endTime = new Date(startTime.getTime() + 1000*60*5); //duration 5 minutes
-
-        var Remaining_minutes = (MIN_WORKING_MINUTES_PER_FORTNIGHT - totalDuration);
-        var Remaining_hours = Math.ceil(Remaining_minutes / 60);
-        var RemainingDays = Math.ceil(Remaining_minutes / 60 / 8);
-
-
-        for (var i = 0; i < RemainingDays; i++) {
-          // set end time (i.e. need to add event on this day)
-          if (i == 0) {
-            var endTime = new Date(end_of_current_FN.getTime());
-          }
-          else {
-            var endTime = new Date(endTime.getTime() - ((1000 * 60 * 60 * 24)));
-          }
-          if (endTime.getDay() == 0) //if sunday skip to friday
-          {
-            endTime.setTime(endTime.getTime() - 2 * 24 * 60 * 60 * 1000);
-          } else if (endTime.getDay() == 6) {
-            endTime.setTime(endTime.getTime() - 24 * 60 * 60 * 1000);
-          }
-          endTime.setHours(17);
-          endTime.setMinutes(0);
-          endTime.setSeconds(0);
-
-          let next_Remaining_minutes = 0;
-          if (Remaining_minutes / 60 > 8) {
-            var startTime = new Date(endTime.getTime() - 8 * 60 * 60 * 1000);
-            next_Remaining_minutes = Remaining_minutes - 8 * 60;
-          }
-          else {
-            var startTime = new Date(endTime.getTime() - Remaining_minutes * 60 * 1000);
-            next_Remaining_minutes = 0;
-          }
-          /*let newEvent = await work_cal.createEvent("[MIN HOURS NOT MET] "+Remaining_minutes/60 + "hr Remaining", startTime, endTime);
-          if(WORK_REMAINING_HOUR_EVENT_STATUS_FREE)
-          {
-            //use Avanced callenderAPI to set event to 'free'
-            var eventId= newEvent.getId().slice(0,newEvent.getId().length-11);
-
-          await Calendar.Events.patch({transparency: "transparent"},WORK_CALENDAR_ID,eventId); */
-
-          if (WORK_REMAINING_HOUR_EVENT_STATUS_FREE) {
-            await createEventAndSetAvailabilityToFREE({ calendar: work_cal, title: "[MIN HOURS NOT MET] " + Remaining_minutes / 60 + "hr Remaining", startTime: startTime, endTime: endTime });
-          }
-
-          Remaining_minutes = next_Remaining_minutes;
-
-        }/*else
-          {
-            var startTime = new Date (workevents[workevents.length-1].getEndTime().getTime());
-            var endTime = new Date(startTime.getTime() + 1000*60*5); //duration 5 minutes
-            
-          }*/
-
-      }
-
-      if (workevents.length > 0) {
-        var startTime = new Date(workevents[workevents.length - 1].getEndTime().getTime());
+        desiredMinAchieved.push({
+          title: "[MIN HOURS ACHIEVED] " + Math.ceil(MIN_WORKING_MINUTES_PER_FORTNIGHT / 60) + "Hours worked!",
+          start: startTime,
+          end: endTime,
+          key: String(startTime.getTime())
+        });
       } else {
-        var startTime = new Date(end_of_current_FN.getTime());
-
+        var Remaining_minutes = (MIN_WORKING_MINUTES_PER_FORTNIGHT - totalDuration);
+        var RemainingDays = Math.ceil(Remaining_minutes / 60 / 8);
+        var endTime = new Date(end_of_current_FN.getTime());
+        for (var i = 0; i < RemainingDays; i++) {
+          if (i > 0) endTime = new Date(endTime.getTime() - (1000 * 60 * 60 * 24));
+          if (endTime.getDay() === 0) endTime.setTime(endTime.getTime() - 2 * 24 * 60 * 60 * 1000);
+          else if (endTime.getDay() === 6) endTime.setTime(endTime.getTime() - 24 * 60 * 60 * 1000);
+          endTime.setHours(17, 0, 0);
+          var startTime;
+          var nextRemaining = 0;
+          if (Remaining_minutes / 60 > 8) {
+            startTime = new Date(endTime.getTime() - 8 * 60 * 60 * 1000);
+            nextRemaining = Remaining_minutes - 8 * 60;
+          } else {
+            startTime = new Date(endTime.getTime() - Remaining_minutes * 60 * 1000);
+          }
+          desiredMinNotMet.push({
+            title: "[MIN HOURS NOT MET] " + Remaining_minutes / 60 + "hr Remaining",
+            start: startTime,
+            end: new Date(endTime.getTime()),
+            key: String(startTime.getTime()),
+            free: WORK_REMAINING_HOUR_EVENT_STATUS_FREE
+          });
+          Remaining_minutes = nextRemaining;
+        }
       }
-      var endTime = new Date(startTime.getTime() + 1000 * 60 * SUMMARY_EVENT_DURATION_MINUTES);
     }
     d = Date_add_days(d, 15);
-  } while (dateDifference(d, Date_add_days(new Date(), SCHEDULING_WINDOW), 'days') > 0)
+  } while (dateDifference(d, Date_add_days(new Date(), SCHEDULING_WINDOW), 'days') > 0);
+
+  if (rangeStart === null) return;
+  var endCycleOpts = { keyFromExisting: function (ev) { return String(ev.getEndTime().getTime()); }, setFree: _setEventFreeForSync };
+  syncCalendarEvents(work_cal, "[END OF PAY CYCLE]", rangeStart, rangeEnd, desiredEndOfCycle, endCycleOpts);
+  syncCalendarEvents(work_cal, "[MIN HOURS ACHIEVED]", rangeStart, rangeEnd, desiredMinAchieved, { keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); } });
+  syncCalendarEvents(work_cal, "[MIN HOURS NOT MET]", rangeStart, rangeEnd, desiredMinNotMet, { keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }, setFree: _setEventFreeForSync });
 }
 
 /**
@@ -407,6 +401,16 @@ async function createEventAndSetAvailabilityToFREE({ calendar, title, startTime,
   var calendarID = calendar.getId();
   var eventId = newEvent.getId().slice(0, newEvent.getId().length - 11);
   return Calendar.Events.patch({ transparency: "transparent" }, calendarID, eventId);
+}
+
+/** Sets an existing event to "free" (transparent). Used by syncCalendarEvents when desired.free is true. */
+function _setEventFreeForSync(calendar, event) {
+  try {
+    var eventId = event.getId().slice(0, event.getId().length - 11);
+    Calendar.Events.patch({ transparency: "transparent" }, calendar.getId(), eventId);
+  } catch (e) {
+    console.warn("_setEventFreeForSync failed: " + e.message);
+  }
 }
 
 function Date_add_days(date, numDays) {
@@ -471,6 +475,66 @@ function clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
     var events = timemap_cal.getEvents(startDate, endDate, { search: arrEventNames[i] });
     for (var j in events) {
       events[j].deleteEvent();
+    }
+  }
+}
+
+/**
+ * Syncs calendar events to a desired list: deletes orphans, creates missing, updates in place when only time/title changed.
+ * Reduces API churn and avoids "too many events" rate limit.
+ * @param {Calendar} calendar - Calendar to sync.
+ * @param {string} eventTag - Search tag for existing events (e.g. "[Outside]", "[Drive]").
+ * @param {Date} startDate - Range start.
+ * @param {Date} endDate - Range end.
+ * @param {Array<{title: string, start: Date, end: Date, key: string, free?: boolean}>} desiredEvents - Desired events; each must have key for matching.
+ * @param {{ keyFromExisting: (CalendarEvent) => string, setFree?: (Calendar, CalendarEvent) => void }} options - keyFromExisting(ev) returns key for an existing event; setFree called after create/update when desired.free is true.
+ */
+function syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvents, options) {
+  var keyFromExisting = options.keyFromExisting;
+  var setFree = options.setFree;
+  var existingList = calendar.getEvents(startDate, endDate, { search: eventTag });
+  var existingByKey = {};
+  for (var i = 0; i < existingList.length; i++) {
+    var ev = existingList[i];
+    var k = keyFromExisting(ev);
+    if (k != null && k !== "") existingByKey[k] = ev;
+  }
+  var desiredByKey = {};
+  for (var j = 0; j < desiredEvents.length; j++) {
+    var d = desiredEvents[j];
+    if (d.key != null && d.key !== "") desiredByKey[d.key] = d;
+  }
+  var opCount = 0;
+  function throttle() {
+    opCount++;
+    if (opCount % SYNC_THROTTLE_EVERY_N === 0) Utilities.sleep(SYNC_THROTTLE_MS);
+  }
+  // Delete existing events that are no longer desired.
+  for (var key in existingByKey) {
+    if (!desiredByKey[key]) {
+      existingByKey[key].deleteEvent();
+      throttle();
+    }
+  }
+  // For each desired event: leave alone, update in place, or create.
+  for (var k = 0; k < desiredEvents.length; k++) {
+    var desired = desiredEvents[k];
+    if (desired.start.valueOf() >= desired.end.valueOf()) continue;
+    var dKey = desired.key;
+    if (dKey == null || dKey === "") continue;
+    var existing = existingByKey[dKey];
+    if (existing) {
+      var sameTime = existing.getStartTime().getTime() === desired.start.getTime() && existing.getEndTime().getTime() === desired.end.getTime();
+      var sameTitle = (existing.getTitle() || "") === (desired.title || "");
+      if (sameTime && sameTitle) continue;
+      existing.setTime(desired.start, desired.end);
+      if (desired.title != null) existing.setTitle(desired.title);
+      if (setFree && desired.free) setFree(calendar, existing);
+      throttle();
+    } else {
+      var newEv = calendar.createEvent(desired.title || eventTag, desired.start, desired.end);
+      if (setFree && desired.free) setFree(calendar, newEv);
+      throttle();
     }
   }
 }
@@ -687,84 +751,61 @@ function Update_NonWorkTimemap(timemap_cal, startDate, endDate) {
 
 async function Update_InvertedTimemap(timemap_cal, startDate, endDate, OrigTimemap, InvertedTimemap, buffer) {
   if (buffer === undefined) {
-    var buffer = 0;
+    buffer = 0;
   }
-
-  await clean_timeMapCal(timemap_cal, InvertedTimemap, startDate, endDate);
-  var Main_events = await timemap_cal.getEvents(startDate, endDate, { search: OrigTimemap });
-
-
-
-  //var Inverted_events  =  timemap_cal.getEvents(startDate, endDate, {search: InvertedTimemap});
-  //for (var i in Main_events)
+  var Main_events = timemap_cal.getEvents(startDate, endDate, { search: OrigTimemap });
+  var desiredInside = [];
   var i = 0;
   do {
-
-
-    if (Main_events.length == 0) {
-      var start = startDate;
-      var end = endDate;
+    var start, end;
+    if (Main_events.length === 0) {
+      start = new Date(startDate.getTime());
+      end = new Date(endDate.getTime());
+    } else if (i === 0) {
+      start = new Date(startDate.getTime());
+      end = new Date(Main_events[i].getStartTime().getTime() - buffer * 60 * 1000);
+    } else if (i < Main_events.length) {
+      start = new Date(Main_events[i - 1].getEndTime().getTime() + buffer * 60 * 1000);
+      end = new Date(Main_events[i].getStartTime().getTime() - buffer * 60 * 1000);
+    } else if (i === Main_events.length) {
+      start = new Date(Main_events[Main_events.length - 1].getEndTime().getTime() + buffer * 60 * 1000);
+      end = new Date(endDate.getTime());
     }
-    else if (i == 0) {
-      var start = startDate;
-      //var end = Main_events[i].getStartTime();
-      var end = new Date(Main_events[i].getStartTime().getTime() - buffer * 60 * 1000);
-    }
-    else if (i < Main_events.length - 1) {
-      //var start = Main_events[parseInt(i,10)-1].getEndTime();
-      var start = new Date(Main_events[parseInt(i, 10) - 1].getEndTime().getTime() + buffer * 60 * 1000);
-      //var end = Main_events[parseInt(i,10)].getStartTime();
-      var end = new Date(Main_events[parseInt(i, 10)].getStartTime().getTime() - buffer * 60 * 1000);
-    }
-    else if (i == Main_events.length - 1) {
-      //var start = Main_events[i].getEndTime();
-      var start = new Date(Main_events[i].getEndTime().getTime() + buffer * 60 * 1000);
-      var end = endDate;
-    }
-    if (SPLIT_TIMEMAPS_BY_DAYS) {
-      if (start.getDate() == end.getDate()) {
-        var duration = 0;
-      }
-      else {
-        var duration = Math.ceil((end.getTime() - start.getTime()) / 1000 / 60 / 60 / 24);
-      }
-
-
-      //var duration = (end.getTime() - start.getTime()
-      if (duration == 0) {
-        await AddUpdateTimeMapEvent(timemap_cal, start, end, InvertedTimemap);
-      }
-      else {
+    if (start != null && end != null && SPLIT_TIMEMAPS_BY_DAYS) {
+      var duration = (start.getDate() === end.getDate() && start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear())
+        ? 0
+        : Math.ceil((end.getTime() - start.getTime()) / 1000 / 60 / 60 / 24);
+      if (duration === 0) {
+        if (start.valueOf() < end.valueOf()) desiredInside.push({ title: InvertedTimemap, start: start, end: end, key: String(start.getTime()) });
+      } else {
         for (var z = 0; z <= duration; z++) {
-          if (z == 0) {
-            var s = new Date(start);
-            var e = new Date(start);
+          var s, e;
+          if (z === 0) {
+            s = new Date(start.getTime());
+            e = new Date(start.getTime());
             e.setHours(23, 59, 59);
-            await AddUpdateTimeMapEvent(timemap_cal, s, e, InvertedTimemap);
-          }
-          else if (z == duration) {
-            var e = new Date(end);
-            var s = new Date(end);
+          } else if (z === duration) {
+            e = new Date(end.getTime());
+            s = new Date(end.getTime());
             s.setHours(0, 0, 0);
-            await AddUpdateTimeMapEvent(timemap_cal, s, e, InvertedTimemap);
-
-          }
-          else {
-            var s = new Date(start.getTime() + z * 1000 * 60 * 60 * 24);
-            var e = new Date(start.getTime() + z * 1000 * 60 * 60 * 24);
+          } else {
+            s = new Date(start.getTime() + z * 1000 * 60 * 60 * 24);
+            e = new Date(start.getTime() + z * 1000 * 60 * 60 * 24);
             s.setHours(0, 0, 0);
             e.setHours(23, 59, 59);
-            await AddUpdateTimeMapEvent(timemap_cal, s, e, InvertedTimemap);
           }
+          if (s.valueOf() < e.valueOf()) desiredInside.push({ title: InvertedTimemap, start: s, end: e, key: String(s.getTime()) });
         }
       }
-    }
-    else {
-      await AddUpdateTimeMapEvent(timemap_cal, start, end, InvertedTimemap);
+    } else if (start != null && end != null) {
+      if (start.valueOf() < end.valueOf()) desiredInside.push({ title: InvertedTimemap, start: start, end: end, key: String(start.getTime()) });
     }
     i++;
-  } while (i <= Main_events.length)
-  return;
+  } while (i <= Main_events.length);
+
+  syncCalendarEvents(timemap_cal, InvertedTimemap, startDate, endDate, desiredInside, {
+    keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
+  });
 }
 
 function BlindAddTimeMapEvent(timemap_cal, start, end, eventName) {
@@ -777,21 +818,18 @@ function BlindAddTimeMapEvent(timemap_cal, start, end, eventName) {
 function AddUpdateTimeMapEvent(timemap_cal, start, end, eventName) {
   if (start.valueOf() < end.valueOf()) {
     var existing_events = timemap_cal.getEvents(start, end, { search: eventName });
-    //if event exists on this day- check/update times
-    //if no event create event
-    if (existing_events.length == 1) {
-      if (existing_events[0].getStartTime() != start || existing_events[0].getEndTime() != end) {
-        existing_events[0].deleteEvent();
-        timemap_cal.createEvent(eventName, start, end);
-      }
-    }
-    else if (existing_events.length > 1) {
+    if (existing_events.length === 1) {
+      var ex = existing_events[0];
+      var sameStart = ex.getStartTime().getTime() === start.getTime();
+      var sameEnd = ex.getEndTime().getTime() === end.getTime();
+      if (sameStart && sameEnd) return;
+      ex.setTime(start, end);
+    } else if (existing_events.length > 1) {
       for (var j in existing_events) {
         existing_events[j].deleteEvent();
       }
       timemap_cal.createEvent(eventName, start, end);
-    }
-    else {
+    } else {
       timemap_cal.createEvent(eventName, start, end);
     }
   }

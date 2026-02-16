@@ -154,7 +154,7 @@ function _travelBuildDurationCache(events, homeStr) {
 
 /**
  * Main entry: updates drive events on the travel calendar for the scheduling window.
- * Cleans existing [Drive] events in range, then creates outbound/inbound drive events per located event.
+ * Syncs [Drive] events: only deletes orphans, creates missing, updates in place (avoids API rate limit).
  */
 function updateTravelDriveEvents() {
   var travelCal = CalendarApp.getCalendarById(TRAVEL_CALENDAR_ID);
@@ -172,21 +172,21 @@ function updateTravelDriveEvents() {
 
   var events = _travelCollectEventsWithLocations(startDate, endDate);
   if (events.length === 0) {
-    clean_timeMapCal(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate);
+    syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, [], {
+      keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()) + "_" + ev.getEndTime().getTime(); }
+    });
     return;
   }
 
   var homeStr = _travelHomeOrigin();
   var cache = _travelBuildDurationCache(events, homeStr);
-
   var cacheGet = function (origin, dest) {
     return cache[origin + "\n" + dest];
   };
 
-  clean_timeMapCal(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate);
-
   var arriveBeforeMs = TRAVEL_ARRIVE_MINUTES_BEFORE * 60 * 1000;
   var minHomeMs = TRAVEL_MIN_HOME_MINUTES * 60 * 1000;
+  var desiredDrive = [];
 
   for (var i = 0; i < events.length; i++) {
     var ev = events[i];
@@ -216,13 +216,17 @@ function updateTravelDriveEvents() {
       }
     }
 
-    // Only create outbound when leaving from home. When chained from previous event, that segment is created as the previous event's inbound.
     if (outboundOrigin === homeStr && outboundDurationMin != null && outboundDurationMin > 0) {
       var outboundStart = new Date(arriveAt.getTime() - outboundDurationMin * 60 * 1000);
       var outboundTitle = TRAVEL_DRIVE_EVENT_TAG + " To: " + evTitle;
       if (outboundStart.getTime() < arriveAt.getTime()) {
-        var outboundEv = travelCal.createEvent(outboundTitle, outboundStart, arriveAt);
-        if (evIsFree) _travelSetEventFree(travelCal, outboundEv);
+        desiredDrive.push({
+          title: outboundTitle,
+          start: outboundStart,
+          end: arriveAt,
+          key: String(outboundStart.getTime()) + "_" + arriveAt.getTime(),
+          free: evIsFree
+        });
       }
     }
 
@@ -250,8 +254,20 @@ function updateTravelDriveEvents() {
       var inboundTitle = inboundDest === homeStr
         ? TRAVEL_DRIVE_EVENT_TAG + " Home"
         : TRAVEL_DRIVE_EVENT_TAG + " To: " + (events[i + 1].getTitle() || "Next");
-      var inboundEv = travelCal.createEvent(inboundTitle, evEnd, inboundEnd);
-      if (evIsFree) _travelSetEventFree(travelCal, inboundEv);
+      desiredDrive.push({
+        title: inboundTitle,
+        start: evEnd,
+        end: inboundEnd,
+        key: String(evEnd.getTime()) + "_" + inboundEnd.getTime(),
+        free: evIsFree
+      });
     }
   }
+
+  syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, desiredDrive, {
+    keyFromExisting: function (ev) {
+      return String(ev.getStartTime().getTime()) + "_" + ev.getEndTime().getTime();
+    },
+    setFree: _travelSetEventFree
+  });
 }
