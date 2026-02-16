@@ -284,15 +284,25 @@ function updateTravelDriveEvents() {
     }
 
     if (inboundDurationMin != null && inboundDurationMin > 0) {
-      var inboundEnd = new Date(evEnd.getTime() + inboundDurationMin * 60 * 1000);
+      var inboundStart, inboundEnd;
+      if (inboundDest === homeStr) {
+        // Leave immediately after event, drive home.
+        inboundStart = evEnd;
+        inboundEnd = new Date(evEnd.getTime() + inboundDurationMin * 60 * 1000);
+      } else {
+        // Direct to next event: sit towards next event — finish 15 min before it.
+        var nextArriveAt = new Date(events[i + 1].getStartTime().getTime() - arriveBeforeMs);
+        inboundEnd = nextArriveAt;
+        inboundStart = new Date(nextArriveAt.getTime() - inboundDurationMin * 60 * 1000);
+      }
       var inboundTitle = inboundDest === homeStr
         ? TRAVEL_DRIVE_EVENT_TAG + " Home"
         : TRAVEL_DRIVE_EVENT_TAG + " To: " + (events[i + 1].getTitle() || "Next");
       desiredDrive.push({
         title: inboundTitle,
-        start: evEnd,
+        start: inboundStart,
         end: inboundEnd,
-        key: String(evEnd.getTime()) + "_" + inboundEnd.getTime(),
+        key: String(inboundStart.getTime()) + "_" + inboundEnd.getTime(),
         free: evIsFree
       });
     }
