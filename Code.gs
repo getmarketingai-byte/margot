@@ -18,6 +18,12 @@ const RATE_LIMIT_EVERY_N_EVENTS = 3;
 const SUMMARY_EVENT_DURATION_MINUTES = 5;
 const WORK_NONWORK_BUFFER_MINUTES = 60;
 
+// Open-Meteo cache: avoid exceeding daily API limit (429). Cache key prefix and max chunk size for Script Properties (9KB limit).
+const OPENMETEO_CACHE_DATE_KEY = 'OPENMETEO_LAST_FETCH_DATE';
+const OPENMETEO_CACHE_PREFIX = 'OPENMETEO_RAW_';
+const OPENMETEO_CACHE_CHUNK_SIZE = 8000;
+const OPENMETEO_CACHE_TIMEZONE = 'Australia/Melbourne';
+
 // Pay Period variables
 const REFERENCE_PAY_PERIOD_START = new Date('2023-11-16T00:00:00');
 const MIN_WORK_HOURS_ENABLE = false;
@@ -632,20 +638,52 @@ function fetchWithRetry(url) {
 }
 
 /**
- * Fetches hourly weather from Open-Meteo and returns array of { time, ...hourly, NiceWeather }.
- * Source: https://open-meteo.com/en/docs
+ * Returns today's date string (YYYY-MM-DD) in OPENMETEO_CACHE_TIMEZONE for cache key comparison.
  */
-async function get_WeatherData() {
-  var apiUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + LOCATION_LAT + "&longitude=" + LOCATION_LONG + "&hourly=temperature_2m,relativehumidity_2m,precipitation_probability,windspeed_10m,uv_index,is_day&timezone=Australia%2FSydney&forecast_days=10";
-  try {
-    var response = fetchWithRetry(apiUrl);
-    var json = response.getContentText();
-    var data = JSON.parse(json);
-  } catch (e) {
-    console.error('get_WeatherData failed: ' + e.message);
-    throw e;
-  }
+function _getTodayDateString() {
+  return Utilities.formatDate(new Date(), OPENMETEO_CACHE_TIMEZONE, 'yyyy-MM-dd');
+}
 
+/**
+ * Saves a long string to Script Properties in chunks (9KB limit per value).
+ */
+function _setOpenMeteoCache(dateStr, rawJson) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(OPENMETEO_CACHE_DATE_KEY, dateStr);
+  var len = rawJson.length;
+  var numChunks = Math.ceil(len / OPENMETEO_CACHE_CHUNK_SIZE);
+  props.setProperty(OPENMETEO_CACHE_PREFIX + 'N', String(numChunks));
+  for (var c = 0; c < numChunks; c++) {
+    props.setProperty(OPENMETEO_CACHE_PREFIX + c, rawJson.slice(c * OPENMETEO_CACHE_CHUNK_SIZE, (c + 1) * OPENMETEO_CACHE_CHUNK_SIZE));
+  }
+}
+
+/**
+ * Reads chunked Open-Meteo cache and returns parsed raw API object, or null if missing/invalid.
+ */
+function _getOpenMeteoCache() {
+  var props = PropertiesService.getScriptProperties();
+  var dateStr = props.getProperty(OPENMETEO_CACHE_DATE_KEY);
+  var numChunksStr = props.getProperty(OPENMETEO_CACHE_PREFIX + 'N');
+  if (!dateStr || !numChunksStr) return null;
+  var numChunks = parseInt(numChunksStr, 10);
+  var parts = [];
+  for (var c = 0; c < numChunks; c++) {
+    var part = props.getProperty(OPENMETEO_CACHE_PREFIX + c);
+    if (!part) return null;
+    parts.push(part);
+  }
+  try {
+    return JSON.parse(parts.join(''));
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Converts raw Open-Meteo API response (data) into the processed newData array used by callers.
+ */
+function _processWeatherRawToNewData(data) {
   var newData = [];
   for (var i in data.hourly.time) {
     var timeData = {};
@@ -660,6 +698,80 @@ async function get_WeatherData() {
     newData.push(timeData);
   }
   return newData;
+}
+
+/**
+ * Fetches hourly weather from Open-Meteo and returns array of { time, ...hourly, NiceWeather }.
+ * Uses Script Properties cache so the API is called at most once per calendar day (Melbourne);
+ * on 429 (daily limit exceeded) falls back to last cached response if available.
+ * Source: https://open-meteo.com/en/docs
+ */
+function get_WeatherData() {
+  var apiUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + LOCATION_LAT + "&longitude=" + LOCATION_LONG + "&hourly=temperature_2m,relativehumidity_2m,precipitation_probability,windspeed_10m,uv_index,is_day&timezone=Australia%2FSydney&forecast_days=10";
+  var today = _getTodayDateString();
+  var props = PropertiesService.getScriptProperties();
+  var lastFetchDate = props.getProperty(OPENMETEO_CACHE_DATE_KEY);
+
+  // If we already have a successful fetch for today, use cache only (no API call).
+  if (lastFetchDate === today) {
+    var cached = _getOpenMeteoCache();
+    if (cached) {
+      return _processWeatherRawToNewData(cached);
+    }
+  }
+
+  // Fetch with muteHttpExceptions so we can handle 429 without throwing.
+  var options = { muteHttpExceptions: true };
+  var response;
+  try {
+    response = UrlFetchApp.fetch(apiUrl, options);
+  } catch (e) {
+    console.error('get_WeatherData fetch error: ' + e.message);
+    var fallback = _getOpenMeteoCache();
+    if (fallback) {
+      console.warn('Using last cached Open-Meteo data due to fetch error.');
+      return _processWeatherRawToNewData(fallback);
+    }
+    throw e;
+  }
+
+  var code = response.getResponseCode();
+  var json = response.getContentText();
+
+  if (code === 429) {
+    console.warn('Open-Meteo daily API limit exceeded (429). Using last cached forecast if available.');
+    var fallback = _getOpenMeteoCache();
+    if (fallback) {
+      return _processWeatherRawToNewData(fallback);
+    }
+    throw new Error('Open-Meteo daily API limit exceeded and no cached forecast available. Try again tomorrow or reduce run frequency.');
+  }
+
+  if (code !== 200) {
+    console.error('get_WeatherData failed: HTTP ' + code + ' ' + json);
+    var fallback = _getOpenMeteoCache();
+    if (fallback) {
+      console.warn('Using last cached Open-Meteo data.');
+      return _processWeatherRawToNewData(fallback);
+    }
+    throw new Error('Open-Meteo request failed with HTTP ' + code);
+  }
+
+  var data;
+  try {
+    data = JSON.parse(json);
+  } catch (e) {
+    console.error('get_WeatherData JSON parse failed: ' + e.message);
+    var fallback = _getOpenMeteoCache();
+    if (fallback) {
+      return _processWeatherRawToNewData(fallback);
+    }
+    throw e;
+  }
+
+  // Success: persist for today so we don't call again this calendar day.
+  _setOpenMeteoCache(today, json);
+  return _processWeatherRawToNewData(data);
 }
 
 function Update_NonWorkTimemap(timemap_cal, startDate, endDate) {
