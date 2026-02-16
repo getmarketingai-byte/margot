@@ -4,8 +4,9 @@
  * and creates [Drive] events on a dedicated travel calendar. Arrive 15 min before each event,
  * leave immediately after. When time at home between two events would be < 30 min, travel
  * goes directly between those locations instead of via home.
+ * If the source event is marked as "free", the drive events for that leg are also created as free.
  *
- * Requires: Maps service enabled (Resources > Advanced Google services > Maps).
+ * Requires: Maps service and Calendar Advanced Service (Resources > Advanced Google services).
  * Set TRAVEL_CALENDAR_ID to your travel calendar ID (create the calendar in Google Calendar first).
  */
 
@@ -52,6 +53,32 @@ function getDriveDurationMinutes(origin, destination) {
  */
 function _travelHomeOrigin() {
   return LOCATION_LAT + "," + LOCATION_LONG;
+}
+
+/**
+ * Returns true if the calendar event is marked as "free" (transparent). Uses Calendar Advanced Service.
+ */
+function _travelIsEventFree(calendarEvent) {
+  try {
+    var calId = calendarEvent.getCalendar().getId();
+    var eventId = calendarEvent.getId();
+    var resource = Calendar.Events.get(calId, eventId);
+    return resource.transparency === "transparent";
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Sets an existing calendar event to "free" (transparent). Uses Calendar Advanced Service.
+ */
+function _travelSetEventFree(calendar, event) {
+  try {
+    var eventId = event.getId().slice(0, event.getId().length - 11);
+    Calendar.Events.patch({ transparency: "transparent" }, calendar.getId(), eventId);
+  } catch (e) {
+    console.warn("_travelSetEventFree failed: " + e.message);
+  }
 }
 
 /**
@@ -167,6 +194,7 @@ function updateTravelDriveEvents() {
     var evEnd = ev.getEndTime();
     var evLoc = ev.getLocation();
     var evTitle = ev.getTitle() || "Event";
+    var evIsFree = _travelIsEventFree(ev);
     var arriveAt = new Date(evStart.getTime() - arriveBeforeMs);
 
     // --- Outbound ---
@@ -193,7 +221,8 @@ function updateTravelDriveEvents() {
       var outboundStart = new Date(arriveAt.getTime() - outboundDurationMin * 60 * 1000);
       var outboundTitle = TRAVEL_DRIVE_EVENT_TAG + " To: " + evTitle;
       if (outboundStart.getTime() < arriveAt.getTime()) {
-        travelCal.createEvent(outboundTitle, outboundStart, arriveAt);
+        var outboundEv = travelCal.createEvent(outboundTitle, outboundStart, arriveAt);
+        if (evIsFree) _travelSetEventFree(travelCal, outboundEv);
       }
     }
 
@@ -221,7 +250,8 @@ function updateTravelDriveEvents() {
       var inboundTitle = inboundDest === homeStr
         ? TRAVEL_DRIVE_EVENT_TAG + " Home"
         : TRAVEL_DRIVE_EVENT_TAG + " To: " + (events[i + 1].getTitle() || "Next");
-      travelCal.createEvent(inboundTitle, evEnd, inboundEnd);
+      var inboundEv = travelCal.createEvent(inboundTitle, evEnd, inboundEnd);
+      if (evIsFree) _travelSetEventFree(travelCal, inboundEv);
     }
   }
 }
