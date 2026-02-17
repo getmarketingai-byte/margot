@@ -57,9 +57,9 @@ function _sleepEventIsBusy(calendarEvent) {
 }
 
 /**
- * Collects events (timed and all-day) in the given range from all calendars except
+ * Collects timed (non-all-day) events in the given range from all calendars except
  * those excluded by _sleepIsCalendarExcluded. Only includes events that are "busy"
- * (transparency !== "transparent"); "free" events are not counted as conflicts.
+ * (transparency !== "transparent"); "free" and all-day events are not counted as conflicts.
  * Returns array of CalendarEvent sorted by start time.
  */
 function _sleepCollectCommitmentEvents(start, end) {
@@ -71,7 +71,8 @@ function _sleepCollectCommitmentEvents(start, end) {
     if (_sleepIsCalendarExcluded(cal)) continue;
     var calEvents = cal.getEvents(start, end);
     for (var k = 0; k < calEvents.length; k++) {
-      if (_sleepEventIsBusy(calEvents[k])) events.push(calEvents[k]);
+      var ev = calEvents[k];
+      if (!ev.isAllDayEvent() && _sleepEventIsBusy(ev)) events.push(ev);
     }
   }
   events.sort(function (a, b) {
