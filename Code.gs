@@ -44,7 +44,7 @@ const LOCATION_LAT = -37.910156;
 const LOCATION_LONG = 145.107420;
 
 // Calendars to exclude when scanning (Sleep commitments, Travel locations, etc.). Use names (e.g. "Travel", "Timemap") or full IDs. Each module also excludes its own calendar by ID.
-const CALENDARS_TO_EXCLUDE = ["Travel", "Sleep", "Birthdays", "Timemaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
+const CALENDARS_TO_EXCLUDE = ["Travel", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
 
 async function Update_InsideTimemap() //rolls daylight and nice weather into one timemap.
 {
@@ -197,6 +197,29 @@ async function wipeWorkCalendar() {
 
 async function wipeTimeMapCalendar() {
   wipeCalendar(TIMEMAP_CALENDAR_ID);
+}
+
+/**
+ * Deletes all events in the given calendar that start on or after 'now'.
+ * Does not filter by tag - every future event in the calendar is removed.
+ * @param {string} calendarId - Full calendar ID (from Calendar settings).
+ * @param {number} [daysAhead=400] - How far ahead to look (default covers scheduling window + buffer).
+ */
+function wipeCalendarFutureEvents(calendarId, daysAhead) {
+  if (daysAhead == null) daysAhead = 400;
+  var cal = CalendarApp.getCalendarById(calendarId);
+  if (!cal) {
+    console.warn("wipeCalendarFutureEvents: calendar not found for id " + calendarId);
+    return;
+  }
+  var now = new Date();
+  var end = new Date(now.getTime());
+  end.setDate(end.getDate() + daysAhead);
+  end.setHours(23, 59, 59, 999);
+  var events = cal.getEvents(now, end);
+  for (var j = 0; j < events.length; j++) {
+    events[j].deleteEvent();
+  }
 }
 
 async function wipeCalendar(CALENDAR_ID) {
@@ -523,23 +546,25 @@ function syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvent
     }
   }
   // For each desired event: leave alone, update in place, or create.
+  // Support both { start, end } (Date) and { startMs, endMs } (number) so Sleep can pass timestamps.
   for (var k = 0; k < desiredEvents.length; k++) {
     var desired = desiredEvents[k];
-    if (desired.start.valueOf() >= desired.end.valueOf()) continue;
+    var startTime = desired.start instanceof Date ? desired.start : (desired.startMs != null ? new Date(desired.startMs) : null);
+    var endTime = desired.end instanceof Date ? desired.end : (desired.endMs != null ? new Date(desired.endMs) : null);
+    if (startTime == null || endTime == null || startTime.getTime() >= endTime.getTime()) continue;
     var dKey = desired.key;
     if (dKey == null || dKey === "") continue;
     var existing = existingByKey[dKey];
     if (existing) {
-      var sameTime = existing.getStartTime().getTime() === desired.start.getTime() && existing.getEndTime().getTime() === desired.end.getTime();
+      var sameTime = existing.getStartTime().getTime() === startTime.getTime() && existing.getEndTime().getTime() === endTime.getTime();
       var sameTitle = (existing.getTitle() || "") === (desired.title || "");
       if (sameTime && sameTitle) continue;
-      existing.setTime(desired.start, desired.end);
+      existing.setTime(startTime, endTime);
       if (desired.title != null) existing.setTitle(desired.title);
       if (setFree && desired.free) setFree(calendar, existing);
       throttle();
     } else {
-      // Create new event (used by Sleep, Travel, Timemap, pay-period, etc.)
-      var newEv = calendar.createEvent(desired.title || eventTag, desired.start, desired.end);
+      var newEv = calendar.createEvent(desired.title || eventTag, startTime, endTime);
       if (setFree && desired.free) setFree(calendar, newEv);
       throttle();
     }

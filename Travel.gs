@@ -315,3 +315,8 @@ function updateTravelDriveEvents() {
     setFree: _travelSetEventFree
   });
 }
+
+/** Wipes all future events on the Travel calendar (no tag filter). Uses wipeCalendarFutureEvents in Code.gs. */
+function wipeTravelCalendar() {
+  wipeCalendarFutureEvents(TRAVEL_CALENDAR_ID);
+}

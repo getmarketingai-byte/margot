@@ -43,6 +43,7 @@ function _sleepIsCalendarExcluded(cal) {
  * those excluded by _sleepIsCalendarExcluded. Returns array of CalendarEvent sorted by start time.
  */
 function _sleepCollectCommitmentEvents(start, end) {
+  if (start.getTime() >= end.getTime()) return [];
   var allCalendars = CalendarApp.getAllCalendars();
   var events = [];
   for (var i = 0; i < allCalendars.length; i++) {
@@ -127,9 +128,9 @@ async function addEvents_Sleep() {
   }
 
   var now = new Date();
-  var endDate = new Date(now.getTime());
+  var msPerDay = 24 * 60 * 60 * 1000;
+  var endDate = new Date(now.getTime() + SCHEDULING_WINDOW * msPerDay);
   endDate.setHours(23, 59, 59, 999);
-  endDate.setDate(endDate.getDate() + SCHEDULING_WINDOW);
 
   var leaveByDay = _sleepGetLeaveTimesByDay(now, endDate);
   var msPerHour = 60 * 60 * 1000;
@@ -137,11 +138,10 @@ async function addEvents_Sleep() {
   var ms4 = SLEEP_MIN_BLOCK_HOURS * msPerHour;
   var bufferMs = SLEEP_BUFFER_BEFORE_LEAVE_MINUTES * 60 * 1000;
   var desiredSleep = [];
-
   for (var i = 0; i <= SCHEDULING_WINDOW; i++) {
     var dayD = new Date(now.getTime());
-    dayD.setDate(dayD.getDate() + i);
     dayD.setHours(0, 0, 0, 0);
+    dayD = new Date(dayD.getTime() + i * msPerDay);
 
     var dateKey = dayD.getFullYear() + "-" + dayD.getMonth() + "-" + dayD.getDate();
     var targetWake;
@@ -155,33 +155,37 @@ async function addEvents_Sleep() {
     var targetEnd = targetWake.getTime();
     var targetStart = targetEnd - ms8;
 
-    var nightStart = new Date(dayD.getTime());
-    nightStart.setDate(nightStart.getDate() - 1);
+    // Only schedule nights that end in the future (skip "night ending today" / past nights).
+    if (targetEnd <= now.getTime()) continue;
+
+    var nightStart = new Date(dayD.getTime() - msPerDay);
     nightStart.setHours(SLEEP_BEGIN, 0, 0, 0);
     var nightEnd = new Date(dayD.getTime());
     nightEnd.setHours(SLEEP_END, 59, 59, 999);
     if (targetWake.getTime() > nightEnd.getTime()) nightEnd = new Date(targetWake.getTime());
+    if (nightStart.getTime() >= nightEnd.getTime()) continue;
 
     var commitments = _sleepCollectCommitmentEvents(nightStart, nightEnd);
-    var overlapsTarget = false;
+    var conflictTitles = [];
     for (var c = 0; c < commitments.length; c++) {
       var evStart = commitments[c].getStartTime().getTime();
       var evEnd = commitments[c].getEndTime().getTime();
       if (_sleepOverlaps(targetStart, targetEnd, evStart, evEnd)) {
-        overlapsTarget = true;
-        break;
+        var t = (commitments[c].getTitle() || "").trim();
+        if (t && conflictTitles.indexOf(t) === -1) conflictTitles.push(t);
       }
     }
+    var overlapsTarget = conflictTitles.length > 0;
 
     var blocksToCreate = [];
     if (!overlapsTarget) {
-      blocksToCreate.push({ start: targetStart, end: targetEnd });
+      blocksToCreate.push({ start: targetStart, end: targetEnd, conflictTitles: [] });
     } else {
       var gaps = _sleepFreeGaps(nightStart, nightEnd, commitments);
       var found8 = false;
       for (var g = 0; g < gaps.length; g++) {
         if (gaps[g].end - gaps[g].start >= ms8) {
-          blocksToCreate.push({ start: gaps[g].end - ms8, end: gaps[g].end });
+          blocksToCreate.push({ start: gaps[g].end - ms8, end: gaps[g].end, conflictTitles: conflictTitles });
           found8 = true;
           break;
         }
@@ -189,18 +193,28 @@ async function addEvents_Sleep() {
       if (!found8) {
         for (var g = 0; g < gaps.length && blocksToCreate.length < 2; g++) {
           if (gaps[g].end - gaps[g].start >= ms4) {
-            blocksToCreate.push({ start: gaps[g].end - ms4, end: gaps[g].end });
+            blocksToCreate.push({ start: gaps[g].end - ms4, end: gaps[g].end, conflictTitles: conflictTitles });
           }
         }
       }
+      if (blocksToCreate.length === 0) {
+        blocksToCreate.push({ start: targetStart, end: targetEnd, conflictTitles: conflictTitles });
+      }
     }
 
+    var maxConflictLen = 80;
     for (var b = 0; b < blocksToCreate.length; b++) {
       var bl = blocksToCreate[b];
+      var title = SLEEP_EVENT_TAG;
+      if (bl.conflictTitles && bl.conflictTitles.length > 0) {
+        var conflictStr = bl.conflictTitles.join(", ");
+        if (conflictStr.length > maxConflictLen) conflictStr = conflictStr.slice(0, maxConflictLen - 3) + "...";
+        title = title + " (conflicts: " + conflictStr + ")";
+      }
       desiredSleep.push({
-        title: SLEEP_EVENT_TAG,
-        start: new Date(bl.start),
-        end: new Date(bl.end),
+        title: title,
+        startMs: bl.start,
+        endMs: bl.end,
         key: String(bl.start)
       });
     }
@@ -208,9 +222,19 @@ async function addEvents_Sleep() {
 
   if (desiredSleep.length === 0) {
     console.warn("addEvents_Sleep: no [SLEEP] blocks computed for the window; no events will be written.");
+    return;
   }
-  // Create/update/delete [SLEEP] events on the calendar (see Code.gs syncCalendarEvents → calendar.createEvent / setTime).
-  syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, now, endDate, desiredSleep, {
+
+  var todayStart = new Date(now.getTime());
+  todayStart.setHours(0, 0, 0, 0);
+  var syncStart = new Date(todayStart.getTime() - msPerDay);
+
+  syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, endDate, desiredSleep, {
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });
+}
+
+/** Wipes all future events on the Sleep calendar (no tag filter). Uses wipeCalendarFutureEvents in Code.gs. */
+function wipeSleepCalendar() {
+  wipeCalendarFutureEvents(SLEEP_CALENDAR_ID);
 }
