@@ -44,7 +44,7 @@ const LOCATION_LAT = -37.910156;
 const LOCATION_LONG = 145.107420;
 
 // Calendars to exclude when scanning (Sleep commitments, Travel locations, etc.). Use names (e.g. "Travel", "Timemap") or full IDs. Each module also excludes its own calendar by ID.
-const CALENDARS_TO_EXCLUDE = ["Travel", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
+const CALENDARS_TO_EXCLUDE = ["Travel", "Travel Time", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
 
 async function Update_InsideTimemap() //rolls daylight and nice weather into one timemap.
 {
@@ -516,16 +516,17 @@ function clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
  * @param {Date} startDate - Range start.
  * @param {Date} endDate - Range end.
  * @param {Array<{title: string, start: Date, end: Date, key: string, free?: boolean}>} desiredEvents - Desired events; each must have key for matching.
- * @param {{ keyFromExisting: (CalendarEvent) => string, setFree?: (Calendar, CalendarEvent) => void }} options - keyFromExisting(ev) returns key for an existing event; setFree called after create/update when desired.free is true.
+ * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep).
  */
 function syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvents, options) {
   var keyFromExisting = options.keyFromExisting;
+  var keyFromExistingWithList = options.keyFromExistingWithList;
   var setFree = options.setFree;
   var existingList = calendar.getEvents(startDate, endDate, { search: eventTag });
   var existingByKey = {};
   for (var i = 0; i < existingList.length; i++) {
     var ev = existingList[i];
-    var k = keyFromExisting(ev);
+    var k = keyFromExistingWithList ? keyFromExistingWithList(ev, existingList) : keyFromExisting(ev);
     if (k != null && k !== "") existingByKey[k] = ev;
   }
   var desiredByKey = {};

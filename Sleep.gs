@@ -6,6 +6,7 @@
  *
  * Requires: Travel calendar to be updated first (run updateTravelDriveEvents before addEvents_Sleep).
  * Set SLEEP_CALENDAR_ID to your sleep calendar ID. Uses CALENDARS_TO_EXCLUDE from Code.gs when scanning for commitments.
+ * Events with status "free" (transparency: transparent) are not counted as conflicts; requires Calendar advanced service.
  */
 
 // Replace with your sleep calendar ID (create calendar in Google Calendar, then copy ID from settings).
@@ -24,12 +25,15 @@ const SLEEP_EVENT_TAG = "[SLEEP]";
 const SLEEP_DRIVE_OUTBOUND_PREFIX = "[Drive] To:";
 
 /**
- * Returns true if the calendar should be excluded when collecting commitment events
- * (sleep calendar or name/ID in CALENDARS_TO_EXCLUDE from Code.gs).
+ * Returns true if the calendar should be excluded when collecting commitment events.
+ * Travel is excluded so [Drive] events never count as conflicts and never pull sleep later
+ * (no "sleep-in"). Leave times from Travel are still used in _sleepGetLeaveTimesByDay to
+ * set target wake earlier when you have an early drive.
  */
 function _sleepIsCalendarExcluded(cal) {
   var id = cal.getId();
   if (id === SLEEP_CALENDAR_ID) return true;
+  if (id === TRAVEL_CALENDAR_ID) return true;
   var name = cal.getName();
   for (var i = 0; i < CALENDARS_TO_EXCLUDE.length; i++) {
     var ex = CALENDARS_TO_EXCLUDE[i];
@@ -39,8 +43,24 @@ function _sleepIsCalendarExcluded(cal) {
 }
 
 /**
- * Collects timed (non–all-day) events in the given range from all calendars except
- * those excluded by _sleepIsCalendarExcluded. Returns array of CalendarEvent sorted by start time.
+ * Returns true if the event blocks time (busy). Returns false if status is "free" (transparent).
+ * Uses Calendar advanced service; if lookup fails, treats as busy to be safe.
+ */
+function _sleepEventIsBusy(calendarEvent) {
+  try {
+    var cal = calendarEvent.getCalendar();
+    var ev = Calendar.Events.get(cal.getId(), calendarEvent.getId());
+    return ev.transparency !== "transparent";
+  } catch (e) {
+    return true;
+  }
+}
+
+/**
+ * Collects events (timed and all-day) in the given range from all calendars except
+ * those excluded by _sleepIsCalendarExcluded. Only includes events that are "busy"
+ * (transparency !== "transparent"); "free" events are not counted as conflicts.
+ * Returns array of CalendarEvent sorted by start time.
  */
 function _sleepCollectCommitmentEvents(start, end) {
   if (start.getTime() >= end.getTime()) return [];
@@ -51,9 +71,7 @@ function _sleepCollectCommitmentEvents(start, end) {
     if (_sleepIsCalendarExcluded(cal)) continue;
     var calEvents = cal.getEvents(start, end);
     for (var k = 0; k < calEvents.length; k++) {
-      var ev = calEvents[k];
-      if (ev.isAllDayEvent()) continue;
-      events.push(ev);
+      if (_sleepEventIsBusy(calEvents[k])) events.push(calEvents[k]);
     }
   }
   events.sort(function (a, b) {
@@ -167,25 +185,29 @@ async function addEvents_Sleep() {
 
     var commitments = _sleepCollectCommitmentEvents(nightStart, nightEnd);
     var conflictTitles = [];
+    var hasOverlap = false;
     for (var c = 0; c < commitments.length; c++) {
       var evStart = commitments[c].getStartTime().getTime();
       var evEnd = commitments[c].getEndTime().getTime();
       if (_sleepOverlaps(targetStart, targetEnd, evStart, evEnd)) {
+        hasOverlap = true;
         var t = (commitments[c].getTitle() || "").trim();
-        if (t && conflictTitles.indexOf(t) === -1) conflictTitles.push(t);
+        if (!t) t = "(" + (commitments[c].getCalendar().getName() || "no title") + ")";
+        if (conflictTitles.indexOf(t) === -1) conflictTitles.push(t);
       }
     }
-    var overlapsTarget = conflictTitles.length > 0;
+    var overlapsTarget = hasOverlap;
 
     var blocksToCreate = [];
     if (!overlapsTarget) {
       blocksToCreate.push({ start: targetStart, end: targetEnd, conflictTitles: [] });
     } else {
+      // Prefer placing sleep at the start of a gap so it begins right after the conflict (e.g. after reception ends), not at the end of the night.
       var gaps = _sleepFreeGaps(nightStart, nightEnd, commitments);
       var found8 = false;
       for (var g = 0; g < gaps.length; g++) {
         if (gaps[g].end - gaps[g].start >= ms8) {
-          blocksToCreate.push({ start: gaps[g].end - ms8, end: gaps[g].end, conflictTitles: conflictTitles });
+          blocksToCreate.push({ start: gaps[g].start, end: gaps[g].start + ms8, conflictTitles: conflictTitles });
           found8 = true;
           break;
         }
@@ -193,7 +215,7 @@ async function addEvents_Sleep() {
       if (!found8) {
         for (var g = 0; g < gaps.length && blocksToCreate.length < 2; g++) {
           if (gaps[g].end - gaps[g].start >= ms4) {
-            blocksToCreate.push({ start: gaps[g].end - ms4, end: gaps[g].end, conflictTitles: conflictTitles });
+            blocksToCreate.push({ start: gaps[g].start, end: gaps[g].start + ms4, conflictTitles: conflictTitles });
           }
         }
       }
@@ -202,20 +224,24 @@ async function addEvents_Sleep() {
       }
     }
 
+    // Stable key per night + block index so when conflict goes away we update the same event to correct times (not delete+create).
     var maxConflictLen = 80;
     for (var b = 0; b < blocksToCreate.length; b++) {
       var bl = blocksToCreate[b];
+      // Always start from clean tag so title is cleared when conflict is no longer there (sync overwrites existing title).
       var title = SLEEP_EVENT_TAG;
       if (bl.conflictTitles && bl.conflictTitles.length > 0) {
         var conflictStr = bl.conflictTitles.join(", ");
         if (conflictStr.length > maxConflictLen) conflictStr = conflictStr.slice(0, maxConflictLen - 3) + "...";
         title = title + " (conflicts: " + conflictStr + ")";
+      } else if (overlapsTarget && bl.conflictTitles && bl.conflictTitles.length === 0) {
+        title = title + " (moved; conflict had no title)";
       }
       desiredSleep.push({
         title: title,
         startMs: bl.start,
         endMs: bl.end,
-        key: String(bl.start)
+        key: dateKey + "_" + b
       });
     }
   }
@@ -230,7 +256,19 @@ async function addEvents_Sleep() {
   var syncStart = new Date(todayStart.getTime() - msPerDay);
 
   syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, endDate, desiredSleep, {
-    keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
+    keyFromExistingWithList: function (ev, existingList) {
+      var endT = ev.getEndTime();
+      var endDateKey = endT.getFullYear() + "-" + endT.getMonth() + "-" + endT.getDate();
+      var sorted = existingList.slice().sort(function (a, b) { return a.getStartTime().getTime() - b.getStartTime().getTime(); });
+      var idx = 0;
+      for (var s = 0; s < sorted.length; s++) {
+        if (sorted[s].getId() === ev.getId()) return endDateKey + "_" + idx;
+        var oEnd = sorted[s].getEndTime();
+        var oKey = oEnd.getFullYear() + "-" + oEnd.getMonth() + "-" + oEnd.getDate();
+        if (oKey === endDateKey) idx++;
+      }
+      return endDateKey + "_" + idx;
+    }
   });
 }
 
