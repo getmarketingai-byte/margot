@@ -159,12 +159,14 @@ function _sleepFreeGaps(nightStart, nightEnd, events) {
 }
 
 /**
- * Adds [SLEEP] blocks to the sleep calendar for the scheduling window.
+ * Adds [SLEEP] blocks to the sleep calendar for the scheduling window (or a day range when using progressive scheduling).
  * Run updateTravelDriveEvents() before this so leave times are available.
  * Creates/updates/deletes events via _syncCalendarEvents() in Code.gs (that function
  * calls calendar.createEvent() for new events and setTime/setTitle for updates).
+ * @param {number} [dayOffset=0] - Start day index (0 = today). Used with dayCount for progressive scheduling.
+ * @param {number} [dayCount] - Number of days to process; default full SCHEDULING_WINDOW when omitted.
  */
-async function addEvents_Sleep() {
+async function addEvents_Sleep(dayOffset, dayCount) {
   var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
   if (!sleep_cal) {
     console.warn("Sleep calendar not found. Set SLEEP_CALENDAR_ID in Sleep.gs.");
@@ -173,16 +175,20 @@ async function addEvents_Sleep() {
 
   var now = new Date();
   var msPerDay = 24 * 60 * 60 * 1000;
-  var endDate = new Date(now.getTime() + SCHEDULING_WINDOW * msPerDay);
-  endDate.setHours(23, 59, 59, 999);
+  var offset = (dayOffset != null && dayOffset >= 0) ? dayOffset : 0;
+  var count = (dayCount != null && dayCount > 0) ? dayCount : SCHEDULING_WINDOW;
+  var endDay = Math.min(offset + count, SCHEDULING_WINDOW);
 
-  var leaveByDay = _sleepGetLeaveTimesByDay(now, endDate);
+  var rangeEndDate = new Date(now.getTime() + SCHEDULING_WINDOW * msPerDay);
+  rangeEndDate.setHours(23, 59, 59, 999);
+  var leaveByDay = _sleepGetLeaveTimesByDay(now, rangeEndDate);
+
   var msPerHour = 60 * 60 * 1000;
   var ms8 = SLEEP_DURATION_HOURS * msPerHour;
   var ms4 = SLEEP_MIN_BLOCK_HOURS * msPerHour;
   var bufferMs = SLEEP_BUFFER_BEFORE_LEAVE_MINUTES * 60 * 1000;
   var desiredSleep = [];
-  for (var i = 0; i <= SCHEDULING_WINDOW; i++) {
+  for (var i = offset; i <= endDay; i++) {
     var dayD = new Date(now.getTime());
     dayD.setHours(0, 0, 0, 0);
     dayD = new Date(dayD.getTime() + i * msPerDay);
@@ -289,9 +295,13 @@ async function addEvents_Sleep() {
 
   var todayStart = new Date(now.getTime());
   todayStart.setHours(0, 0, 0, 0);
-  var syncStart = new Date(todayStart.getTime() - msPerDay);
+  var syncStart = new Date(todayStart.getTime() + offset * msPerDay);
+  syncStart.setHours(0, 0, 0, 0);
+  if (offset === 0) syncStart = new Date(todayStart.getTime() - msPerDay);
+  var syncEnd = new Date(todayStart.getTime() + endDay * msPerDay);
+  syncEnd.setHours(23, 59, 59, 999);
 
-  _syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, endDate, desiredSleep, {
+  _syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, syncEnd, desiredSleep, {
     keyFromExistingWithList: function (ev, existingList) {
       var endT = ev.getEndTime();
       var endDateKey = endT.getFullYear() + "-" + endT.getMonth() + "-" + endT.getDate();

@@ -174,27 +174,113 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
 
 /**
  * Master TimeMap: updates Travel drive events then Sleep blocks.
- * Can exceed 6 min execution limit with a large scheduling window. Prefer using separate triggers:
- * - update_Master_TimeMap_Travel() then update_Master_TimeMap_Sleep() (e.g. 5 min apart), or
- * - update_Master_TimeMap_Travel_Chunk(0) and update_Master_TimeMap_Travel_Chunk(1) for Travel in two runs.
+ * If USE_PROGRESSIVE_SCHEDULE is true, only day-ranges that are due (by interval) are updated, reducing runtime.
+ * Otherwise runs full window; for long windows consider separate triggers or chunked runs.
  */
 async function update_Master_TimeMap() {
-  updateTravelDriveEvents();
-  await addEvents_Sleep();
+  var result = USE_PROGRESSIVE_SCHEDULE ? _getProgressiveDayRangesToUpdate() : _getFullWindowRanges();
+  var ranges = result.ranges;
+  for (var r = 0; r < ranges.length; r++) {
+    updateTravelDriveEvents(ranges[r].offset, ranges[r].count);
+    await addEvents_Sleep(ranges[r].offset, ranges[r].count);
+  }
+  if (result.bandKeys && result.bandKeys.length > 0) _markProgressiveRangesUpdated(result.bandKeys);
 }
 
-/** Runs only Travel drive events update. Use with a separate trigger to avoid execution time limit. */
+/** Runs only Travel drive events update. Uses progressive schedule when USE_PROGRESSIVE_SCHEDULE is true. Does not mark bands updated (Sleep or combined run does that). */
 function update_Master_TimeMap_Travel() {
-  updateTravelDriveEvents();
+  var result = USE_PROGRESSIVE_SCHEDULE ? _getProgressiveDayRangesToUpdate() : _getFullWindowRanges();
+  var ranges = result.ranges;
+  for (var r = 0; r < ranges.length; r++) {
+    updateTravelDriveEvents(ranges[r].offset, ranges[r].count);
+  }
 }
 
-/** Runs only Sleep block updates. Run after Travel (e.g. trigger 5 min after update_Master_TimeMap_Travel). */
+/** Runs only Sleep block updates. Uses progressive schedule when USE_PROGRESSIVE_SCHEDULE is true. Marks bands updated so next run knows they are done. Run after Travel when splitting. */
 async function update_Master_TimeMap_Sleep() {
-  await addEvents_Sleep();
+  var result = USE_PROGRESSIVE_SCHEDULE ? _getProgressiveDayRangesToUpdate() : _getFullWindowRanges();
+  var ranges = result.ranges;
+  for (var r = 0; r < ranges.length; r++) {
+    await addEvents_Sleep(ranges[r].offset, ranges[r].count);
+  }
+  if (result.bandKeys && result.bandKeys.length > 0) _markProgressiveRangesUpdated(result.bandKeys);
 }
 
 /** Number of days per Travel chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
 const TRAVEL_DAYS_PER_CHUNK = 30;
+
+/**
+ * Progressive scheduling: only update day-ranges that are "due" by minimum interval, to cut runtime per execution.
+ * Set USE_PROGRESSIVE_SCHEDULE = true and run one trigger (e.g. every 30–60 min); no need for multiple triggers.
+ * Each band: { startDay, endDay, minIntervalMinutes }. A band is included this run if (now - lastUpdate) >= minIntervalMinutes.
+ * Last update time per band is stored in Script Properties (key PROG_LAST_<startDay>_<endDay>).
+ */
+const USE_PROGRESSIVE_SCHEDULE = true;
+const PROGRESSIVE_SCHEDULE = [
+  { startDay: 0,  endDay: 3,  minIntervalMinutes: 0 },     // next 3 days: every run
+  { startDay: 3,  endDay: 7,  minIntervalMinutes: 60 },    // 3–7 days: ~every second run (if trigger hourly)
+  { startDay: 7,  endDay: 14, minIntervalMinutes: 720 },   // 1–2 weeks: twice a day (12 h)
+  { startDay: 14, endDay: 28, minIntervalMinutes: 1440 },   // 2–4 weeks: once a day (24 h)
+  { startDay: 28, endDay: 60, minIntervalMinutes: 4320 },   // beyond 4 weeks: every 3 days (4320 min)
+];
+const PROG_LAST_PREFIX = "PROG_LAST_";
+
+/**
+ * Returns which day-ranges to update this run based on PROGRESSIVE_SCHEDULE and last-update timestamps.
+ * Does not write Script Properties; caller must call _markProgressiveRangesUpdated(bandKeys) after updating (so split Travel/Sleep triggers work).
+ * @returns {{ ranges: Array<{offset: number, count: number}>, bandKeys: Array<string> }}
+ */
+function _getProgressiveDayRangesToUpdate() {
+  var props = PropertiesService.getScriptProperties();
+  var now = Date.now();
+  var due = [];
+  var bandKeys = [];
+  for (var b = 0; b < PROGRESSIVE_SCHEDULE.length; b++) {
+    var band = PROGRESSIVE_SCHEDULE[b];
+    var key = PROG_LAST_PREFIX + band.startDay + "_" + band.endDay;
+    var lastStr = props.getProperty(key);
+    var last = lastStr ? parseInt(lastStr, 10) : 0;
+    var intervalMs = band.minIntervalMinutes * 60 * 1000;
+    if (intervalMs === 0 || (now - last) >= intervalMs) {
+      due.push({ offset: band.startDay, count: band.endDay - band.startDay });
+      bandKeys.push(key);
+    }
+  }
+  if (due.length === 0) return { ranges: [], bandKeys: [] };
+  due.sort(function (a, b) { return a.offset - b.offset; });
+  var merged = [];
+  var cur = { offset: due[0].offset, count: due[0].count };
+  for (var i = 1; i < due.length; i++) {
+    if (due[i].offset === cur.offset + cur.count) {
+      cur.count += due[i].count;
+    } else {
+      merged.push(cur);
+      cur = { offset: due[i].offset, count: due[i].count };
+    }
+  }
+  merged.push(cur);
+  return { ranges: merged, bandKeys: bandKeys };
+}
+
+/**
+ * Marks the given progressive bands as updated (sets last-update timestamp). Call after Travel+Sleep for those ranges.
+ * @param {Array<string>} bandKeys - Keys from _getProgressiveDayRangesToUpdate().bandKeys
+ */
+function _markProgressiveRangesUpdated(bandKeys) {
+  if (!bandKeys || bandKeys.length === 0) return;
+  var props = PropertiesService.getScriptProperties();
+  var now = String(Date.now());
+  for (var k = 0; k < bandKeys.length; k++) {
+    props.setProperty(bandKeys[k], now);
+  }
+}
+
+/**
+ * When progressive scheduling is off, returns a single range covering the full window (same shape as _getProgressiveDayRangesToUpdate).
+ */
+function _getFullWindowRanges() {
+  return { ranges: [{ offset: 0, count: SCHEDULING_WINDOW }], bandKeys: [] };
+}
 
 /**
  * Runs Travel drive events for one chunk of the scheduling window. Use to stay under execution time limit:
