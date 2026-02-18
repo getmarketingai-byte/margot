@@ -66,7 +66,7 @@ function _travelExistingDriveDurationMinutes(existingDriveEvents, exactTitle, an
  * origin and destination can be address strings or "lat,lng".
  * Uses DirectionFinder with DRIVING mode and avoid tolls.
  */
-function getDriveDurationMinutes(origin, destination) {
+function _getDriveDurationMinutes(origin, destination) {
   if (!origin || !destination) return null;
   try {
     var directions = Maps.newDirectionFinder()
@@ -82,7 +82,7 @@ function getDriveDurationMinutes(origin, destination) {
     return Math.ceil(seconds / 60);
   } catch (e) {
     if (_travelIsMapsQuotaError(e)) throw e;
-    console.warn("getDriveDurationMinutes failed: " + e.message + " (" + origin + " -> " + destination + ")");
+    console.warn("_getDriveDurationMinutes failed: " + e.message + " (" + origin + " -> " + destination + ")");
     return null;
   }
 }
@@ -230,7 +230,7 @@ function _travelBuildDurationCache(events, homeStr) {
   var get = function (origin, dest) {
     var k = key(origin, dest);
     if (cache[k] !== undefined) return cache[k];
-    var mins = getDriveDurationMinutes(origin, dest);
+    var mins = _getDriveDurationMinutes(origin, dest);
     cache[k] = mins;
     if (TRAVEL_MAPS_SLEEP_EVERY_N > 0) {
       Utilities.sleep(TRAVEL_MAPS_SLEEP_MS);
@@ -298,7 +298,7 @@ function updateTravelDriveEvents(dayOffset, dayCount) {
 
   var events = _travelCollectEventsWithLocations(startDate, endDate);
   if (events.length === 0) {
-    syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, [], {
+    _syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, [], {
       keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()) + "_" + ev.getEndTime().getTime(); }
     });
     return;
@@ -455,7 +455,7 @@ function updateTravelDriveEvents(dayOffset, dayCount) {
     }
   }
 
-  syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, desiredDrive, {
+  _syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, desiredDrive, {
     keyFromExisting: function (ev) {
       return String(ev.getStartTime().getTime()) + "_" + ev.getEndTime().getTime();
     },
@@ -463,9 +463,9 @@ function updateTravelDriveEvents(dayOffset, dayCount) {
   });
 }
 
-/** Wipes all future events on the Travel calendar (no tag filter). Uses wipeCalendarFutureEvents in Code.gs. */
+/** Wipes all future events on the Travel calendar (no tag filter). Uses _wipeCalendarFutureEvents in Code.gs. */
 function wipeTravelCalendar() {
-  wipeCalendarFutureEvents(TRAVEL_CALENDAR_ID);
+  _wipeCalendarFutureEvents(TRAVEL_CALENDAR_ID);
 }
 
 /**

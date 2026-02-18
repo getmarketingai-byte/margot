@@ -56,7 +56,7 @@ async function Update_InsideTimemap() //rolls daylight and nice weather into one
   endDate.setHours(23, 59, 0);
   endDate.setDate(startDate.getDate() + SCHEDULING_WINDOW);
 
-  Update_InvertedTimemap(timemap_cal, startDate, endDate, "[Outside]", "[Inside]");
+  _Update_InvertedTimemap(timemap_cal, startDate, endDate, "[Outside]", "[Inside]");
 }
 
 async function Update_InsideOutsideTimemap() //rolls daylight and nice weather into one timemap.
@@ -146,16 +146,16 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
       desiredOutside.push({ title: "[Outside]", start: s, end: e, key: String(s.getTime()) });
     }
   }
-  syncCalendarEvents(timemap_cal, "[Outside]", startDate, endDate, desiredOutside, {
+  _syncCalendarEvents(timemap_cal, "[Outside]", startDate, endDate, desiredOutside, {
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });
-  Update_InvertedTimemap(timemap_cal, startDate, endDate, "[Outside]", "[Inside]");
+  _Update_InvertedTimemap(timemap_cal, startDate, endDate, "[Outside]", "[Inside]");
   if (WORK_OFFICE_IS_INSIDE) {
-    await BlindAdd_TimeMapEvents_from_EventArr(timemap_cal, timemap_cal.getEvents(startDate, endDate, { search: "[Work_Office]" }), "[Inside]");
+    await _BlindAdd_TimeMapEvents_from_EventArr(timemap_cal, timemap_cal.getEvents(startDate, endDate, { search: "[Work_Office]" }), "[Inside]");
   }
   if (BEYOND_FORCAST_IS_INSIDE) {
     if (ASSUME_NICEWEATHER_BEYOND_FORCAST) {
-    
+
       var j = 0;
       var notFound = true;
       while (notFound) {
@@ -166,7 +166,7 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
         j++;
       }
       console.log(endDate.getDate());
-      await BlindAdd_TimeMapEvents_from_EventArr(timemap_cal, timemap_cal.getEvents(sDate, endDate, { search: "[Outside]" }), "[Inside]");
+      await _BlindAdd_TimeMapEvents_from_EventArr(timemap_cal, timemap_cal.getEvents(sDate, endDate, { search: "[Outside]" }), "[Inside]");
     }
   }
   return 0;
@@ -223,11 +223,11 @@ async function wipeAllCalendars() {
 }
 
 async function wipeWorkCalendar() {
-  wipeCalendar(WORK_CALENDAR_ID);
+  _wipeCalendar(WORK_CALENDAR_ID);
 }
 
 async function wipeTimeMapCalendar() {
-  wipeCalendar(TIMEMAP_CALENDAR_ID);
+  _wipeCalendar(TIMEMAP_CALENDAR_ID);
 }
 
 /**
@@ -236,11 +236,11 @@ async function wipeTimeMapCalendar() {
  * @param {string} calendarId - Full calendar ID (from Calendar settings).
  * @param {number} [daysAhead=400] - How far ahead to look (default covers scheduling window + buffer).
  */
-function wipeCalendarFutureEvents(calendarId, daysAhead) {
+function _wipeCalendarFutureEvents(calendarId, daysAhead) {
   if (daysAhead == null) daysAhead = 400;
   var cal = CalendarApp.getCalendarById(calendarId);
   if (!cal) {
-    console.warn("wipeCalendarFutureEvents: calendar not found for id " + calendarId);
+    console.warn("_wipeCalendarFutureEvents: calendar not found for id " + calendarId);
     return;
   }
   var now = new Date();
@@ -253,7 +253,7 @@ function wipeCalendarFutureEvents(calendarId, daysAhead) {
   }
 }
 
-async function wipeCalendar(CALENDAR_ID) {
+async function _wipeCalendar(CALENDAR_ID) {
   const cal = CalendarApp.getCalendarById(CALENDAR_ID);
   const now = new Date();
   const endDate = new Date();
@@ -269,7 +269,7 @@ async function wipeCalendar(CALENDAR_ID) {
 
 
 
-function isNiceWeather(weatherData) {
+function _isNiceWeather(weatherData) {
 
   //var nice = true;
   /***************************
@@ -305,7 +305,7 @@ function isNiceWeather(weatherData) {
   return true;
 }
 
-function addDays(date, days) {
+function _addDays(date, days) {
   var result = new Date(date);
   result.setDate(result.getDate() + days);
   return result;
@@ -330,12 +330,12 @@ async function updateWorkEvents() {
     var e = events[i].getEndTime();
     desiredWorkOffice.push({ title: "[Work_Office]", start: s, end: e, key: String(s.getTime()) });
   }
-  syncCalendarEvents(timemap_cal, "[Work_Office]", now, endDate, desiredWorkOffice, {
+  _syncCalendarEvents(timemap_cal, "[Work_Office]", now, endDate, desiredWorkOffice, {
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });
 }
 
-function getCurrentPayPeriodDates(d) {
+function _getCurrentPayPeriodDates(d) {
   if (typeof d === 'undefined') {
     var d = new Date();
   }
@@ -344,12 +344,12 @@ function getCurrentPayPeriodDates(d) {
   // calculate start of pay period
   var start_of_current_PayPeriod = new Date(REFERENCE_PAY_PERIOD_START);
   var payStart = Math.floor(((d - REFERENCE_PAY_PERIOD_START) / 1000 / 60 / 60 / 24) / PAY_PERIOD); // how many pay periods between reference and now
-  start_of_current_PayPeriod = addDays(start_of_current_PayPeriod, PAY_PERIOD * payStart);
+  start_of_current_PayPeriod = _addDays(start_of_current_PayPeriod, PAY_PERIOD * payStart);
   start_of_current_PayPeriod.setHours(0, 0, 0);
 
   // calulate end of pay period
   var end_of_current_PayPeriod = new Date(start_of_current_PayPeriod);
-  end_of_current_PayPeriod = addDays(end_of_current_PayPeriod, PAY_PERIOD - 1);
+  end_of_current_PayPeriod = _addDays(end_of_current_PayPeriod, PAY_PERIOD - 1);
   end_of_current_PayPeriod.setHours(23, 59, 0);
 
   return { payPeriodStart: start_of_current_PayPeriod, payPeriodEnd: end_of_current_PayPeriod };
@@ -365,7 +365,7 @@ async function addEvents_WorkingHoursTotals() {
   var desiredMinNotMet = [];
 
   do {
-    var payDates = getCurrentPayPeriodDates(d);
+    var payDates = _getCurrentPayPeriodDates(d);
     var start_of_current_FN = payDates.payPeriodStart;
     var end_of_current_FN = payDates.payPeriodEnd;
     if (rangeStart === null) rangeStart = new Date(start_of_current_FN.getTime());
@@ -439,14 +439,14 @@ async function addEvents_WorkingHoursTotals() {
         }
       }
     }
-    d = Date_add_days(d, 15);
-  } while (dateDifference(d, Date_add_days(new Date(), SCHEDULING_WINDOW), 'days') > 0);
+    d = _Date_add_days(d, 15);
+  } while (_dateDifference(d, _Date_add_days(new Date(), SCHEDULING_WINDOW), 'days') > 0);
 
   if (rangeStart === null) return;
   var endCycleOpts = { keyFromExisting: function (ev) { return String(ev.getEndTime().getTime()); }, setFree: _setEventFreeForSync };
-  syncCalendarEvents(work_cal, "[END OF PAY CYCLE]", rangeStart, rangeEnd, desiredEndOfCycle, endCycleOpts);
-  syncCalendarEvents(work_cal, "[MIN HOURS ACHIEVED]", rangeStart, rangeEnd, desiredMinAchieved, { keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); } });
-  syncCalendarEvents(work_cal, "[MIN HOURS NOT MET]", rangeStart, rangeEnd, desiredMinNotMet, { keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }, setFree: _setEventFreeForSync });
+  _syncCalendarEvents(work_cal, "[END OF PAY CYCLE]", rangeStart, rangeEnd, desiredEndOfCycle, endCycleOpts);
+  _syncCalendarEvents(work_cal, "[MIN HOURS ACHIEVED]", rangeStart, rangeEnd, desiredMinAchieved, { keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); } });
+  _syncCalendarEvents(work_cal, "[MIN HOURS NOT MET]", rangeStart, rangeEnd, desiredMinNotMet, { keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }, setFree: _setEventFreeForSync });
 }
 
 /**
@@ -460,7 +460,7 @@ async function createEventAndSetAvailabilityToFREE({ calendar, title, startTime,
   return Calendar.Events.patch({ transparency: "transparent" }, calendarID, eventId);
 }
 
-/** Sets an existing event to "free" (transparent). Used by syncCalendarEvents when desired.free is true. */
+/** Sets an existing event to "free" (transparent). Used by _syncCalendarEvents when desired.free is true. */
 function _setEventFreeForSync(calendar, event) {
   try {
     var eventId = event.getId().slice(0, event.getId().length - 11);
@@ -470,7 +470,7 @@ function _setEventFreeForSync(calendar, event) {
   }
 }
 
-function Date_add_days(date, numDays) {
+function _Date_add_days(date, numDays) {
   var newDate = new Date();
   newDate.setTime(date.getTime() + 1000 * 60 * 60 * 24 * numDays);
   return newDate;
@@ -484,7 +484,7 @@ function Date_add_days(date, numDays) {
  * @param {string} unit - 'milliseconds'|'seconds'|'minutes'|'hours'|'days'|'weeks'|'years'
  * @return {number}
  */
-function dateDifference(firstDate, secondDate, unit) {
+function _dateDifference(firstDate, secondDate, unit) {
   var val1 = firstDate.valueOf();
   var val2 = secondDate.valueOf();
   var differenceMilliSec = val2 - val1;
@@ -519,11 +519,11 @@ function clean_used_timeMapCal() {
   endDate.setDate(now.getDate() + SCHEDULING_WINDOW);
   var timemap_calendar = CalendarApp.getCalendarById(TIMEMAP_CALENDAR_ID);
   var arr = ['[Outside]', '[Inside]', '[NiceWeather]', '[Daylight]', '[Not@work]', '[SLEEP]'];
-  return clean_timeMapCal(timemap_calendar, arr, now, endDate);
+  return _clean_timeMapCal(timemap_calendar, arr, now, endDate);
 
 }
 
-function clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
+function _clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
   if (!Array.isArray(arrEventNames)) {
     arrEventNames = [arrEventNames];
   }
@@ -549,7 +549,7 @@ function clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
  * @param {Array<{title: string, start: Date, end: Date, key: string, free?: boolean}>} desiredEvents - Desired events; each must have key for matching.
  * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep).
  */
-function syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvents, options) {
+function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvents, options) {
   var keyFromExisting = options.keyFromExisting;
   var keyFromExistingWithList = options.keyFromExistingWithList;
   var setFree = options.setFree;
@@ -603,17 +603,17 @@ function syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvent
   }
 }
 
-function Add_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
+function _Add_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
   for (var i in EventsArr) {
     var start = EventsArr[i].getStartTime();
     var end = EventsArr[i].getEndTime();
-    AddUpdateTimeMapEvent(timemapCal, EventsArr[i].getStartTime(), EventsArr[i].getEndTime(), timeMapTitle);
+    _AddUpdateTimeMapEvent(timemapCal, EventsArr[i].getStartTime(), EventsArr[i].getEndTime(), timeMapTitle);
   }
 }
 
-function BlindAdd_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
+function _BlindAdd_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
   for (var i in EventsArr) {
-    BlindAddTimeMapEvent(timemapCal, EventsArr[i].getStartTime(), EventsArr[i].getEndTime(), timeMapTitle);
+    _BlindAddTimeMapEvent(timemapCal, EventsArr[i].getStartTime(), EventsArr[i].getEndTime(), timeMapTitle);
     if (i % RATE_LIMIT_EVERY_N_EVENTS === 0) {
       Utilities.sleep(RATE_LIMIT_SLEEP_MS);
     }
@@ -656,7 +656,7 @@ var URL_FETCH_RETRY_DELAY_MS = 2000;
 /**
  * Fetches URL with simple retries on failure.
  */
-function fetchWithRetry(url) {
+function _fetchWithRetry(url) {
   var lastError;
   for (var attempt = 0; attempt < URL_FETCH_MAX_RETRIES; attempt++) {
     try {
@@ -723,12 +723,12 @@ function _processWeatherRawToNewData(data) {
     var timeData = {};
     for (var j in data.hourly) {
       if (j === "time") {
-        timeData[j] = new Date(getDateFromIso(data.hourly[j][i]));
+        timeData[j] = new Date(_getDateFromIso(data.hourly[j][i]));
       } else {
         timeData[j] = data.hourly[j][i];
       }
     }
-    timeData['NiceWeather'] = isNiceWeather(timeData);
+    timeData['NiceWeather'] = _isNiceWeather(timeData);
     newData.push(timeData);
   }
   return newData;
@@ -808,12 +808,12 @@ function get_WeatherData() {
   return _processWeatherRawToNewData(data);
 }
 
-function Update_NonWorkTimemap(timemap_cal, startDate, endDate) {
-  return Update_InvertedTimemap(timemap_cal, startDate, endDate, '[Work_Office]', '[Not@work]', WORK_NONWORK_BUFFER_MINUTES);
+function _Update_NonWorkTimemap(timemap_cal, startDate, endDate) {
+  return _Update_InvertedTimemap(timemap_cal, startDate, endDate, '[Work_Office]', '[Not@work]', WORK_NONWORK_BUFFER_MINUTES);
 }
 
 
-async function Update_InvertedTimemap(timemap_cal, startDate, endDate, OrigTimemap, InvertedTimemap, buffer) {
+async function _Update_InvertedTimemap(timemap_cal, startDate, endDate, OrigTimemap, InvertedTimemap, buffer) {
   if (buffer === undefined) {
     buffer = 0;
   }
@@ -867,19 +867,19 @@ async function Update_InvertedTimemap(timemap_cal, startDate, endDate, OrigTimem
     i++;
   } while (i <= Main_events.length);
 
-  syncCalendarEvents(timemap_cal, InvertedTimemap, startDate, endDate, desiredInside, {
+  _syncCalendarEvents(timemap_cal, InvertedTimemap, startDate, endDate, desiredInside, {
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });
 }
 
-function BlindAddTimeMapEvent(timemap_cal, start, end, eventName) {
+function _BlindAddTimeMapEvent(timemap_cal, start, end, eventName) {
   if (start.valueOf() < end.valueOf()) {
     timemap_cal.createEvent(eventName, start, end);
   }
   return;
 }
 
-function AddUpdateTimeMapEvent(timemap_cal, start, end, eventName) {
+function _AddUpdateTimeMapEvent(timemap_cal, start, end, eventName) {
   if (start.valueOf() < end.valueOf()) {
     var existing_events = timemap_cal.getEvents(start, end, { search: eventName });
     if (existing_events.length === 1) {
@@ -900,7 +900,7 @@ function AddUpdateTimeMapEvent(timemap_cal, start, end, eventName) {
   return;
 }
 
-function add_daylightEvent(cal, date) {
+function _add_daylightEvent(cal, date) {
   var data = get_SunRiseSet(LOCATION_LAT, LOCATION_LONG, date);
   var sunrise = data.results.sunrise;
   var sunset = data.results.sunset;
@@ -925,7 +925,7 @@ function add_daylightEvent(cal, date) {
 function get_SunRiseSet(lat, lng, date) {
   var url = "https://api.sunrise-sunset.org/json?lat=" + lat + "&lng=" + lng + "&date=" + Utilities.formatDate(date, 'Australia/Melbourne', 'YYYY-MM-dd') + "&formatted=0";
   try {
-    var response = fetchWithRetry(url);
+    var response = _fetchWithRetry(url);
     var json = response.getContentText();
     var data = JSON.parse(json);
   } catch (e) {
@@ -940,10 +940,10 @@ function get_SunRiseSet(lat, lng, date) {
   return data;
 }
 
-//var dt = new Date(getDateFromIso("2012-08-03T23:00:26-05:00"));
+//var dt = new Date(_getDateFromIso("2012-08-03T23:00:26-05:00"));
 
 // http://delete.me.uk/2005/03/iso8601.html
-function getDateFromIso(string) {
+function _getDateFromIso(string) {
   try {
     var aDate = new Date();
     var regexp = "([0-9]{4})(-([0-9]{2})(-([0-9]{2})" +
