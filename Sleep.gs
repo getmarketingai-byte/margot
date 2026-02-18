@@ -82,8 +82,8 @@ function _sleepCollectCommitmentEvents(start, end) {
 }
 
 /**
- * Returns a map of calendar-day key (YYYY-M-D) to Date (earliest leave time that day).
- * Reads Travel calendar for [Drive] events whose title starts with "[Drive] To:" (outbound from home).
+ * Returns a map of calendar-day key (YYYY-M-D) to { time: Date, title: string } for the
+ * earliest leave time that day. Reads Travel calendar for [Drive] events with "[Drive] To:".
  * TRAVEL_CALENDAR_ID must be in scope (Travel.gs).
  */
 function _sleepGetLeaveTimesByDay(startDate, endDate) {
@@ -97,8 +97,8 @@ function _sleepGetLeaveTimesByDay(startDate, endDate) {
     if (title.indexOf(SLEEP_DRIVE_OUTBOUND_PREFIX) !== 0) continue;
     var start = ev.getStartTime();
     var key = start.getFullYear() + "-" + start.getMonth() + "-" + start.getDate();
-    if (byDay[key] === undefined || start.getTime() < byDay[key].getTime()) {
-      byDay[key] = new Date(start.getTime());
+    if (byDay[key] === undefined || start.getTime() < byDay[key].time.getTime()) {
+      byDay[key] = { time: new Date(start.getTime()), title: title };
     }
   }
   return byDay;
@@ -163,16 +163,22 @@ async function addEvents_Sleep() {
     dayD = new Date(dayD.getTime() + i * msPerDay);
 
     var dateKey = dayD.getFullYear() + "-" + dayD.getMonth() + "-" + dayD.getDate();
+    var idealWake = new Date(dayD.getTime());
+    idealWake.setHours(SLEEP_IDEAL_WAKE_UP_HRS, SLEEP_IDEAL_WAKE_UP_MIN, 0, 0);
     var targetWake;
     if (leaveByDay[dateKey]) {
-      targetWake = new Date(leaveByDay[dateKey].getTime() - bufferMs);
+      var wakeFromLeave = new Date(leaveByDay[dateKey].time.getTime() - bufferMs);
+      // Use leave only to wake earlier, never later (no sleep-in from travel).
+      targetWake = wakeFromLeave.getTime() < idealWake.getTime() ? wakeFromLeave : idealWake;
     } else {
-      targetWake = new Date(dayD.getTime());
-      targetWake.setHours(SLEEP_IDEAL_WAKE_UP_HRS, SLEEP_IDEAL_WAKE_UP_MIN, 0, 0);
+      targetWake = new Date(idealWake.getTime());
     }
 
     var targetEnd = targetWake.getTime();
     var targetStart = targetEnd - ms8;
+    var leaveInfo = leaveByDay[dateKey];
+    var usedLeaveForWake = leaveInfo && targetWake.getTime() === leaveInfo.time.getTime() - bufferMs;
+    var leaveTitleForDay = leaveInfo ? leaveInfo.title : null;
 
     // Only schedule nights that end in the future (skip "night ending today" / past nights).
     if (targetEnd <= now.getTime()) continue;
@@ -230,11 +236,15 @@ async function addEvents_Sleep() {
     for (var b = 0; b < blocksToCreate.length; b++) {
       var bl = blocksToCreate[b];
       // Always start from clean tag so title is cleared when conflict is no longer there (sync overwrites existing title).
+      // Any modified-time block must show the reason (conflicts or "before [Drive]...").
       var title = SLEEP_EVENT_TAG;
       if (bl.conflictTitles && bl.conflictTitles.length > 0) {
         var conflictStr = bl.conflictTitles.join(", ");
         if (conflictStr.length > maxConflictLen) conflictStr = conflictStr.slice(0, maxConflictLen - 3) + "...";
         title = title + " (conflicts: " + conflictStr + ")";
+      } else if (usedLeaveForWake && leaveTitleForDay && bl.endMs === targetEnd && !overlapsTarget) {
+        var leaveStr = leaveTitleForDay.length > maxConflictLen ? leaveTitleForDay.slice(0, maxConflictLen - 3) + "..." : leaveTitleForDay;
+        title = title + " (before " + leaveStr + ")";
       } else if (overlapsTarget && bl.conflictTitles && bl.conflictTitles.length === 0) {
         title = title + " (moved; conflict had no title)";
       }
