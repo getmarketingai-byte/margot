@@ -19,9 +19,9 @@ const TRAVEL_VIRTUAL_LOCATION_SUBSTRINGS = ["microsoft teams meeting", "teams me
 const TRAVEL_ARRIVE_MINUTES_BEFORE = 15;
 const TRAVEL_MIN_HOME_MINUTES = 30;
 const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
-/** Special case: event with this title and location uses fixed 10 min travel and no arrival buffer. */
+/** Special case: event with this title and location (substring match) uses fixed 10 min travel and no arrival buffer. */
 const TRAVEL_GYM_TITLE = "Gym";
-const TRAVEL_GYM_LOCATION_ASHBURTON = "Snap Fitness 24/7 Ashburton";
+const TRAVEL_GYM_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
 const TRAVEL_GYM_DRIVE_MINUTES = 10;
 
 // Rate limiting for Maps API calls (avoid quota issues).
@@ -136,11 +136,12 @@ function _travelIsCalendarExcluded(cal) {
 
 /**
  * Returns true if the event is the special-case Gym at Snap Fitness Ashburton (10 min drive, no arrival buffer).
+ * Location is matched by containing TRAVEL_GYM_LOCATION_SUBSTRING (handles full address e.g. "..., 234 High St, ...").
  */
 function _travelIsGymAshburton(calendarEvent) {
   var title = (calendarEvent.getTitle() || "").trim();
   var loc = (calendarEvent.getLocation() || "").trim();
-  return title === TRAVEL_GYM_TITLE && loc === TRAVEL_GYM_LOCATION_ASHBURTON;
+  return title === TRAVEL_GYM_TITLE && loc.indexOf(TRAVEL_GYM_LOCATION_SUBSTRING) !== -1;
 }
 
 /**
@@ -434,4 +435,71 @@ function updateTravelDriveEvents() {
 /** Wipes all future events on the Travel calendar (no tag filter). Uses wipeCalendarFutureEvents in Code.gs. */
 function wipeTravelCalendar() {
   wipeCalendarFutureEvents(TRAVEL_CALENDAR_ID);
+}
+
+/**
+ * DIAGNOSTIC: Run this from the Apps Script editor to log any gym-like events in the next 14 days.
+ * Use the output to tune TRAVEL_GYM_* / SLEEP_IGNORE_* criteria. View log: Executions > (run) > Logs.
+ * Copy the "--- EVENT DATA (paste this for tuning) ---" block and paste it back so we can fix matching.
+ */
+function logGymCandidatesForTuning() {
+  var now = new Date();
+  var startDate = new Date(now.getTime());
+  startDate.setHours(0, 0, 0, 0);
+  var endDate = new Date(startDate.getTime());
+  endDate.setDate(endDate.getDate() + 14);
+  endDate.setHours(23, 59, 59, 999);
+
+  var keywords = ["gym", "snap", "fitness", "ashburton"];
+  var allCalendars = CalendarApp.getAllCalendars();
+  var found = [];
+
+  for (var i = 0; i < allCalendars.length; i++) {
+    var cal = allCalendars[i];
+    if (_travelIsCalendarExcluded(cal)) continue;
+    var calEvents = cal.getEvents(startDate, endDate);
+    for (var k = 0; k < calEvents.length; k++) {
+      var ev = calEvents[k];
+      if (ev.isAllDayEvent()) continue;
+      var title = (ev.getTitle() || "");
+      var loc = (ev.getLocation() || "");
+      var titleLower = title.toLowerCase();
+      var locLower = loc.toLowerCase();
+      var match = false;
+      for (var w = 0; w < keywords.length; w++) {
+        if (titleLower.indexOf(keywords[w]) !== -1 || locLower.indexOf(keywords[w]) !== -1) {
+          match = true;
+          break;
+        }
+      }
+      if (!match) continue;
+      var isMatch = _travelIsGymAshburton(ev);
+      found.push({
+        title: title,
+        location: loc,
+        start: ev.getStartTime(),
+        end: ev.getEndTime(),
+        calendar: cal.getName(),
+        currentMatch: isMatch
+      });
+    }
+  }
+
+  Logger.log("=== Gym candidate events (next 14 days) ===");
+  if (found.length === 0) {
+    Logger.log("No events found containing gym/snap/fitness/ashburton. Try widening the date range or keywords.");
+    return;
+  }
+  for (var f = 0; f < found.length; f++) {
+    var o = found[f];
+    Logger.log("--- EVENT DATA (paste this for tuning) ---");
+    Logger.log("title: " + JSON.stringify(o.title));
+    Logger.log("location: " + JSON.stringify(o.location));
+    Logger.log("title.length: " + o.title.length + ", location.length: " + o.location.length);
+    Logger.log("start: " + o.start.toISOString ? o.start.toISOString() : String(o.start));
+    Logger.log("end: " + o.end.toISOString ? o.end.toISOString() : String(o.end));
+    Logger.log("calendar: " + o.calendar);
+    Logger.log("currentMatch (is Gym Ashburton?): " + o.currentMatch);
+    Logger.log("--- END EVENT ---");
+  }
 }

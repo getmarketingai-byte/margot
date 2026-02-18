@@ -56,9 +56,9 @@ function _sleepEventIsBusy(calendarEvent) {
   }
 }
 
-/** Event title/location that should not affect sleep conflicts (e.g. Gym; may add scheduling later). */
+/** Event title/location that should not affect sleep conflicts (e.g. Gym; may add scheduling later). Location is substring match. */
 const SLEEP_IGNORE_TITLE = "Gym";
-const SLEEP_IGNORE_LOCATION = "Snap Fitness 24/7 Ashburton";
+const SLEEP_IGNORE_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
 
 /**
  * Returns true if the event should be ignored for sleep conflict detection (e.g. Gym at Snap Fitness Ashburton).
@@ -66,7 +66,7 @@ const SLEEP_IGNORE_LOCATION = "Snap Fitness 24/7 Ashburton";
 function _sleepIsEventIgnoredForConflicts(calendarEvent) {
   var title = (calendarEvent.getTitle() || "").trim();
   var loc = (calendarEvent.getLocation() || "").trim();
-  return title === SLEEP_IGNORE_TITLE && loc === SLEEP_IGNORE_LOCATION;
+  return title === SLEEP_IGNORE_TITLE && loc.indexOf(SLEEP_IGNORE_LOCATION_SUBSTRING) !== -1;
 }
 
 /** Events spanning at least this many hours are treated as all-day and do not affect sleep conflicts. */
