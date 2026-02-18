@@ -24,9 +24,9 @@ const TRAVEL_GYM_TITLE = "Gym";
 const TRAVEL_GYM_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
 const TRAVEL_GYM_DRIVE_MINUTES = 10;
 
-// Rate limiting for Maps API calls (avoid quota issues).
-const TRAVEL_MAPS_SLEEP_MS = 500;
-const TRAVEL_MAPS_SLEEP_EVERY_N = 1;
+// Rate limiting for Maps API calls (avoid quota issues). Sleep every N calls to balance runtime vs quota.
+const TRAVEL_MAPS_SLEEP_MS = 300;
+const TRAVEL_MAPS_SLEEP_EVERY_N = 2;
 /** When Maps API limit is hit, use this duration (minutes) for legs that cannot be realigned from existing drive events. Rechecked on next run when Maps is available. */
 const TRAVEL_FALLBACK_DURATION_MINUTES = 45;
 
@@ -275,8 +275,10 @@ function _travelBuildDurationCache(events, homeStr) {
 /**
  * Main entry: updates drive events on the travel calendar for the scheduling window.
  * Syncs [Drive] events: only deletes orphans, creates missing, updates in place (avoids API rate limit).
+ * @param {number} [dayOffset=0] - Start this many days from today (for chunked runs).
+ * @param {number} [dayCount] - Number of days to process; default SCHEDULING_WINDOW. Use with dayOffset to run in chunks.
  */
-function updateTravelDriveEvents() {
+function updateTravelDriveEvents(dayOffset, dayCount) {
   var travelCal = CalendarApp.getCalendarById(TRAVEL_CALENDAR_ID);
   if (!travelCal) {
     console.warn("Travel calendar not found. Set TRAVEL_CALENDAR_ID in Travel.gs.");
@@ -286,8 +288,12 @@ function updateTravelDriveEvents() {
   var now = new Date();
   var startDate = new Date(now.getTime());
   startDate.setHours(0, 0, 0, 0);
+  if (dayOffset != null && dayOffset > 0) {
+    startDate.setDate(startDate.getDate() + dayOffset);
+  }
+  var numDays = (dayCount != null && dayCount > 0) ? dayCount : SCHEDULING_WINDOW;
   var endDate = new Date(startDate.getTime());
-  endDate.setDate(endDate.getDate() + SCHEDULING_WINDOW);
+  endDate.setDate(endDate.getDate() + numDays);
   endDate.setHours(23, 59, 59, 999);
 
   var events = _travelCollectEventsWithLocations(startDate, endDate);

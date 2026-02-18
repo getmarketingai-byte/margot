@@ -172,9 +172,40 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
   return 0;
 }
 
+/**
+ * Master TimeMap: updates Travel drive events then Sleep blocks.
+ * Can exceed 6 min execution limit with a large scheduling window. Prefer using separate triggers:
+ * - update_Master_TimeMap_Travel() then update_Master_TimeMap_Sleep() (e.g. 5 min apart), or
+ * - update_Master_TimeMap_Travel_Chunk(0) and update_Master_TimeMap_Travel_Chunk(1) for Travel in two runs.
+ */
 async function update_Master_TimeMap() {
   updateTravelDriveEvents();
   await addEvents_Sleep();
+}
+
+/** Runs only Travel drive events update. Use with a separate trigger to avoid execution time limit. */
+function update_Master_TimeMap_Travel() {
+  updateTravelDriveEvents();
+}
+
+/** Runs only Sleep block updates. Run after Travel (e.g. trigger 5 min after update_Master_TimeMap_Travel). */
+async function update_Master_TimeMap_Sleep() {
+  await addEvents_Sleep();
+}
+
+/** Number of days per Travel chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
+const TRAVEL_DAYS_PER_CHUNK = 30;
+
+/**
+ * Runs Travel drive events for one chunk of the scheduling window. Use to stay under execution time limit:
+ * e.g. trigger update_Master_TimeMap_Travel_Chunk(0) and update_Master_TimeMap_Travel_Chunk(1) 5 min apart.
+ * @param {number} chunkIndex - 0 = first TRAVEL_DAYS_PER_CHUNK days, 1 = next TRAVEL_DAYS_PER_CHUNK, etc.
+ */
+function update_Master_TimeMap_Travel_Chunk(chunkIndex) {
+  var offset = (chunkIndex || 0) * TRAVEL_DAYS_PER_CHUNK;
+  var count = Math.min(TRAVEL_DAYS_PER_CHUNK, SCHEDULING_WINDOW - offset);
+  if (count <= 0) return;
+  updateTravelDriveEvents(offset, count);
 }
 
 
