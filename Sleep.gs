@@ -56,10 +56,35 @@ function _sleepEventIsBusy(calendarEvent) {
   }
 }
 
+/** Event title/location that should not affect sleep conflicts (e.g. Gym; may add scheduling later). */
+const SLEEP_IGNORE_TITLE = "Gym";
+const SLEEP_IGNORE_LOCATION = "Snap Fitness 24/7 Ashburton";
+
+/**
+ * Returns true if the event should be ignored for sleep conflict detection (e.g. Gym at Snap Fitness Ashburton).
+ */
+function _sleepIsEventIgnoredForConflicts(calendarEvent) {
+  var title = (calendarEvent.getTitle() || "").trim();
+  var loc = (calendarEvent.getLocation() || "").trim();
+  return title === SLEEP_IGNORE_TITLE && loc === SLEEP_IGNORE_LOCATION;
+}
+
+/** Events spanning at least this many hours are treated as all-day and do not affect sleep conflicts. */
+const SLEEP_MULTIDAY_HOURS = 24;
+
+/**
+ * Returns true if the event spans multiple days (duration >= 24 hours). Such events are treated as all-day and do not affect sleep.
+ */
+function _sleepIsMultiDayEvent(calendarEvent) {
+  var startMs = calendarEvent.getStartTime().getTime();
+  var endMs = calendarEvent.getEndTime().getTime();
+  return (endMs - startMs) >= SLEEP_MULTIDAY_HOURS * 60 * 60 * 1000;
+}
+
 /**
  * Collects timed (non-all-day) events in the given range from all calendars except
  * those excluded by _sleepIsCalendarExcluded. Only includes events that are "busy"
- * (transparency !== "transparent"); "free" and all-day events are not counted as conflicts.
+ * (transparency !== "transparent"). Events with status "free" do not affect sleep scheduling; all-day and multi-day events are also excluded.
  * Returns array of CalendarEvent sorted by start time.
  */
 function _sleepCollectCommitmentEvents(start, end) {
@@ -72,7 +97,7 @@ function _sleepCollectCommitmentEvents(start, end) {
     var calEvents = cal.getEvents(start, end);
     for (var k = 0; k < calEvents.length; k++) {
       var ev = calEvents[k];
-      if (!ev.isAllDayEvent() && _sleepEventIsBusy(ev)) events.push(ev);
+      if (!ev.isAllDayEvent() && !_sleepIsMultiDayEvent(ev) && _sleepEventIsBusy(ev) && !_sleepIsEventIgnoredForConflicts(ev)) events.push(ev);
     }
   }
   events.sort(function (a, b) {

@@ -19,15 +19,45 @@ const TRAVEL_VIRTUAL_LOCATION_SUBSTRINGS = ["microsoft teams meeting", "teams me
 const TRAVEL_ARRIVE_MINUTES_BEFORE = 15;
 const TRAVEL_MIN_HOME_MINUTES = 30;
 const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
+/** Special case: event with this title and location uses fixed 10 min travel and no arrival buffer. */
+const TRAVEL_GYM_TITLE = "Gym";
+const TRAVEL_GYM_LOCATION_ASHBURTON = "Snap Fitness 24/7 Ashburton";
+const TRAVEL_GYM_DRIVE_MINUTES = 10;
 
 // Rate limiting for Maps API calls (avoid quota issues).
 const TRAVEL_MAPS_SLEEP_MS = 500;
 const TRAVEL_MAPS_SLEEP_EVERY_N = 1;
+/** When Maps API limit is hit, use this duration (minutes) for legs that cannot be realigned from existing drive events. Rechecked on next run when Maps is available. */
+const TRAVEL_FALLBACK_DURATION_MINUTES = 45;
 
 /** Returns true if the error is the Maps "too many times for one day" quota. */
 function _travelIsMapsQuotaError(e) {
   var msg = (e && e.message) ? String(e.message) : "";
   return msg.indexOf("too many times") !== -1 || (msg.indexOf("Service invoked") !== -1 && msg.indexOf("route") !== -1);
+}
+
+/**
+ * When Maps API is unavailable: find an existing [Drive] event with the given title whose start or end time
+ * is nearest to anchorTime. If useEndAnchor is true, match by end time (for outbound); else match by start time (for inbound).
+ * Returns duration in minutes or null if none found.
+ */
+function _travelExistingDriveDurationMinutes(existingDriveEvents, exactTitle, anchorTime, useEndAnchor) {
+  var best = null;
+  var bestDist = Infinity;
+  var anchorMs = anchorTime.getTime();
+  for (var i = 0; i < existingDriveEvents.length; i++) {
+    var ev = existingDriveEvents[i];
+    if ((ev.getTitle() || "") !== exactTitle) continue;
+    var t = useEndAnchor ? ev.getEndTime().getTime() : ev.getStartTime().getTime();
+    var durMs = ev.getEndTime().getTime() - ev.getStartTime().getTime();
+    if (durMs <= 0) continue;
+    var dist = Math.abs(t - anchorMs);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = Math.ceil(durMs / 60000);
+    }
+  }
+  return best;
 }
 
 /**
@@ -105,6 +135,15 @@ function _travelIsCalendarExcluded(cal) {
 }
 
 /**
+ * Returns true if the event is the special-case Gym at Snap Fitness Ashburton (10 min drive, no arrival buffer).
+ */
+function _travelIsGymAshburton(calendarEvent) {
+  var title = (calendarEvent.getTitle() || "").trim();
+  var loc = (calendarEvent.getLocation() || "").trim();
+  return title === TRAVEL_GYM_TITLE && loc === TRAVEL_GYM_LOCATION_ASHBURTON;
+}
+
+/**
  * Returns true if the location string should be treated as empty (video/phone meeting, no physical place).
  */
 function _travelIsVirtualMeetingLocation(loc) {
@@ -146,8 +185,33 @@ function _travelCollectEventsWithLocations(startDate, endDate) {
 }
 
 /**
+ * Returns the index of an event that fully contains the event at innerIdx (start <= inner start, end >= inner end).
+ * Prefers the "innermost" container (smallest containing span). Returns -1 if none.
+ */
+function _travelIndexOfContainingEvent(events, innerIdx) {
+  var innerStart = events[innerIdx].getStartTime().getTime();
+  var innerEnd = events[innerIdx].getEndTime().getTime();
+  var bestIdx = -1;
+  var bestSpan = Infinity;
+  for (var j = 0; j < events.length; j++) {
+    if (j === innerIdx) continue;
+    var js = events[j].getStartTime().getTime();
+    var je = events[j].getEndTime().getTime();
+    if (js <= innerStart && je >= innerEnd) {
+      var span = je - js;
+      if (span < bestSpan) {
+        bestSpan = span;
+        bestIdx = j;
+      }
+    }
+  }
+  return bestIdx;
+}
+
+/**
  * Precomputes all needed durations and returns a cache object: getDuration(originKey, destKey) returns minutes or null.
  * originKey/destKey are either _travelHomeOrigin() or event.getLocation().
+ * Includes legs from containing (parent) events to nested (sub) events so drive to a sub-event is from the parent's location.
  */
 function _travelBuildDurationCache(events, homeStr) {
   var cache = {};
@@ -172,6 +236,12 @@ function _travelBuildDurationCache(events, homeStr) {
   }
   for (var i = 0; i < events.length - 1; i++) {
     get(events[i].getLocation(), events[i + 1].getLocation());
+  }
+  for (var i = 0; i < events.length; i++) {
+    var parentIdx = _travelIndexOfContainingEvent(events, i);
+    if (parentIdx >= 0) {
+      get(events[parentIdx].getLocation(), events[i].getLocation());
+    }
   }
   return cache;
 }
@@ -203,15 +273,54 @@ function updateTravelDriveEvents() {
   }
 
   var homeStr = _travelHomeOrigin();
-  var cache;
+  var cache = {};
+  var usedFallback = false;
   try {
     cache = _travelBuildDurationCache(events, homeStr);
   } catch (e) {
     if (_travelIsMapsQuotaError(e)) {
-      console.warn("Maps daily limit exceeded; skipping travel drive updates. Sleep and other steps will continue.");
-      return;
+      console.warn("Maps daily limit exceeded; using existing drive events to realign or " + TRAVEL_FALLBACK_DURATION_MINUTES + " min fallback. Will recheck on next run when Maps is available.");
+      usedFallback = true;
+      var existingDriveEvents = travelCal.getEvents(startDate, endDate, { search: TRAVEL_DRIVE_EVENT_TAG });
+      var outboundPrefix = TRAVEL_DRIVE_EVENT_TAG + " To: ";
+      for (var e = 0; e < events.length; e++) {
+        var ev = events[e];
+        var evTitle = ev.getTitle() || "Event";
+        var evLoc = ev.getLocation();
+        var arriveAt = new Date(ev.getStartTime().getTime() - TRAVEL_ARRIVE_MINUTES_BEFORE * 60 * 1000);
+        var outboundDur = _travelExistingDriveDurationMinutes(existingDriveEvents, outboundPrefix + evTitle, arriveAt, true);
+        if (outboundDur != null) cache[homeStr + "\n" + evLoc] = outboundDur;
+        var inboundDur = _travelExistingDriveDurationMinutes(existingDriveEvents, TRAVEL_DRIVE_EVENT_TAG + " Home", ev.getEndTime(), false);
+        if (inboundDur != null) cache[evLoc + "\n" + homeStr] = inboundDur;
+        if (e < events.length - 1) {
+          var nextTitle = events[e + 1].getTitle() || "Next";
+          var nextArriveAt = new Date(events[e + 1].getStartTime().getTime() - TRAVEL_ARRIVE_MINUTES_BEFORE * 60 * 1000);
+          var toNextDur = _travelExistingDriveDurationMinutes(existingDriveEvents, outboundPrefix + nextTitle, nextArriveAt, true);
+          if (toNextDur != null) cache[evLoc + "\n" + events[e + 1].getLocation()] = toNextDur;
+        }
+      }
+      // Fill missing with fallback duration so the loop below can proceed
+      for (var e = 0; e < events.length; e++) {
+        var loc = events[e].getLocation();
+        if (cache[homeStr + "\n" + loc] == null) cache[homeStr + "\n" + loc] = TRAVEL_FALLBACK_DURATION_MINUTES;
+        if (cache[loc + "\n" + homeStr] == null) cache[loc + "\n" + homeStr] = TRAVEL_FALLBACK_DURATION_MINUTES;
+      }
+      for (var e = 0; e < events.length - 1; e++) {
+        var from = events[e].getLocation();
+        var to = events[e + 1].getLocation();
+        if (cache[from + "\n" + to] == null) cache[from + "\n" + to] = TRAVEL_FALLBACK_DURATION_MINUTES;
+      }
+      for (var e = 0; e < events.length; e++) {
+        var pIdx = _travelIndexOfContainingEvent(events, e);
+        if (pIdx >= 0) {
+          var from = events[pIdx].getLocation();
+          var to = events[e].getLocation();
+          if (cache[from + "\n" + to] == null) cache[from + "\n" + to] = TRAVEL_FALLBACK_DURATION_MINUTES;
+        }
+      }
+    } else {
+      throw e;
     }
-    throw e;
   }
 
   var cacheGet = function (origin, dest) {
@@ -229,12 +338,17 @@ function updateTravelDriveEvents() {
     var evLoc = ev.getLocation();
     var evTitle = ev.getTitle() || "Event";
     var evIsFree = _travelIsEventFree(ev);
-    var arriveAt = new Date(evStart.getTime() - arriveBeforeMs);
+    var isGymAshburton = _travelIsGymAshburton(ev);
+    var arriveAt = isGymAshburton ? new Date(evStart.getTime()) : new Date(evStart.getTime() - arriveBeforeMs);
 
     // --- Outbound ---
     var outboundOrigin = homeStr;
-    var outboundDurationMin = cacheGet(homeStr, evLoc);
-    if (i > 0) {
+    var outboundDurationMin = isGymAshburton ? TRAVEL_GYM_DRIVE_MINUTES : cacheGet(homeStr, evLoc);
+    var parentIdx = _travelIndexOfContainingEvent(events, i);
+    if (parentIdx >= 0 && !isGymAshburton) {
+      outboundOrigin = events[parentIdx].getLocation();
+      outboundDurationMin = cacheGet(outboundOrigin, evLoc);
+    } else if (i > 0 && !isGymAshburton) {
       var prev = events[i - 1];
       var prevEnd = prev.getEndTime();
       var prevLoc = prev.getLocation();
@@ -250,7 +364,8 @@ function updateTravelDriveEvents() {
       }
     }
 
-    if (outboundOrigin === homeStr && outboundDurationMin != null && outboundDurationMin > 0) {
+    var pushOutbound = (outboundOrigin === homeStr || parentIdx >= 0) && outboundDurationMin != null && outboundDurationMin > 0;
+    if (pushOutbound) {
       var outboundStart = new Date(arriveAt.getTime() - outboundDurationMin * 60 * 1000);
       var outboundTitle = TRAVEL_DRIVE_EVENT_TAG + " To: " + evTitle;
       if (outboundStart.getTime() < arriveAt.getTime()) {
@@ -266,8 +381,8 @@ function updateTravelDriveEvents() {
 
     // --- Inbound ---
     var inboundDest = homeStr;
-    var inboundDurationMin = cacheGet(evLoc, homeStr);
-    if (i < events.length - 1) {
+    var inboundDurationMin = isGymAshburton ? TRAVEL_GYM_DRIVE_MINUTES : cacheGet(evLoc, homeStr);
+    if (i < events.length - 1 && !isGymAshburton) {
       var next = events[i + 1];
       var nextStart = next.getStartTime();
       var nextArriveAt = new Date(nextStart.getTime() - arriveBeforeMs);
