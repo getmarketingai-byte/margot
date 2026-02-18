@@ -135,13 +135,20 @@ function _travelIsCalendarExcluded(cal) {
 }
 
 /**
+ * Returns true if the location string is the Gym at Snap Fitness Ashburton (used to skip Maps API for that leg).
+ */
+function _travelIsGymLocation(loc) {
+  return (loc || "").indexOf(TRAVEL_GYM_LOCATION_SUBSTRING) !== -1;
+}
+
+/**
  * Returns true if the event is the special-case Gym at Snap Fitness Ashburton (10 min drive, no arrival buffer).
  * Location is matched by containing TRAVEL_GYM_LOCATION_SUBSTRING (handles full address e.g. "..., 234 High St, ...").
  */
 function _travelIsGymAshburton(calendarEvent) {
   var title = (calendarEvent.getTitle() || "").trim();
   var loc = (calendarEvent.getLocation() || "").trim();
-  return title === TRAVEL_GYM_TITLE && loc.indexOf(TRAVEL_GYM_LOCATION_SUBSTRING) !== -1;
+  return title === TRAVEL_GYM_TITLE && _travelIsGymLocation(loc);
 }
 
 /**
@@ -213,6 +220,7 @@ function _travelIndexOfContainingEvent(events, innerIdx) {
  * Precomputes all needed durations and returns a cache object: getDuration(originKey, destKey) returns minutes or null.
  * originKey/destKey are either _travelHomeOrigin() or event.getLocation().
  * Includes legs from containing (parent) events to nested (sub) events so drive to a sub-event is from the parent's location.
+ * Gym (Snap Fitness Ashburton) legs use TRAVEL_GYM_DRIVE_MINUTES and do not call the Maps API.
  */
 function _travelBuildDurationCache(events, homeStr) {
   var cache = {};
@@ -232,16 +240,33 @@ function _travelBuildDurationCache(events, homeStr) {
 
   for (var i = 0; i < events.length; i++) {
     var loc = events[i].getLocation();
-    get(homeStr, loc);
-    get(loc, homeStr);
+    if (_travelIsGymLocation(loc)) {
+      cache[key(homeStr, loc)] = TRAVEL_GYM_DRIVE_MINUTES;
+      cache[key(loc, homeStr)] = TRAVEL_GYM_DRIVE_MINUTES;
+    } else {
+      get(homeStr, loc);
+      get(loc, homeStr);
+    }
   }
   for (var i = 0; i < events.length - 1; i++) {
-    get(events[i].getLocation(), events[i + 1].getLocation());
+    var from = events[i].getLocation();
+    var to = events[i + 1].getLocation();
+    if (_travelIsGymLocation(from) || _travelIsGymLocation(to)) {
+      cache[key(from, to)] = TRAVEL_GYM_DRIVE_MINUTES;
+    } else {
+      get(from, to);
+    }
   }
   for (var i = 0; i < events.length; i++) {
     var parentIdx = _travelIndexOfContainingEvent(events, i);
     if (parentIdx >= 0) {
-      get(events[parentIdx].getLocation(), events[i].getLocation());
+      var from = events[parentIdx].getLocation();
+      var to = events[i].getLocation();
+      if (_travelIsGymLocation(from) || _travelIsGymLocation(to)) {
+        cache[key(from, to)] = TRAVEL_GYM_DRIVE_MINUTES;
+      } else {
+        get(from, to);
+      }
     }
   }
   return cache;
