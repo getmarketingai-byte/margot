@@ -12,7 +12,7 @@
 // Replace with your sleep calendar ID (create calendar in Google Calendar, then copy ID from settings).
 const SLEEP_CALENDAR_ID = "496baca0d033db4062ef3acd672aa7ba22cc505bad94b3920b2bd2358c25d610@group.calendar.google.com";
 
-const SLEEP_DURATION_HOURS = 8;
+const SLEEP_DURATION_HOURS = 8.5;
 const SLEEP_BEGIN = 20;   // hour (0-23) start of "normal sleep" window
 const SLEEP_END = 12;     // hour (0-23) end of "normal sleep" window (next day)
 const SLEEP_IDEAL_WAKE_UP_HRS = 6;
@@ -163,10 +163,11 @@ function _sleepFreeGaps(nightStart, nightEnd, events) {
  * Run updateTravelDriveEvents() before this so leave times are available.
  * Creates/updates/deletes events via _syncCalendarEvents() in Code.gs (that function
  * calls calendar.createEvent() for new events and setTime/setTitle for updates).
- * @param {number} [dayOffset=0] - Start day index (0 = today). Used with dayCount for progressive scheduling.
+ * @param {number} [dayOffset=0] - Start day index (0 = today).
  * @param {number} [dayCount] - Number of days to process; default full SCHEDULING_WINDOW when omitted.
+ * @param {{useQuotaBudget?: boolean}} [runOptions] - When true, cap new event creates by calendar daily quota budget.
  */
-async function addEvents_Sleep(dayOffset, dayCount) {
+async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
   if (!sleep_cal) {
     console.warn("Sleep calendar not found. Set SLEEP_CALENDAR_ID in Sleep.gs.");
@@ -187,6 +188,11 @@ async function addEvents_Sleep(dayOffset, dayCount) {
   var ms8 = SLEEP_DURATION_HOURS * msPerHour;
   var ms4 = SLEEP_MIN_BLOCK_HOURS * msPerHour;
   var bufferMs = SLEEP_BUFFER_BEFORE_LEAVE_MINUTES * 60 * 1000;
+  var quotaBudget = null;
+  if (runOptions && runOptions.useQuotaBudget) {
+    quotaBudget = _getQuotaRunBudget(QUOTA_SERVICE_CALENDAR_CREATES);
+    console.log("Sleep quota: limit=" + quotaBudget.limit + ", used=" + quotaBudget.used + ", remaining=" + quotaBudget.remaining + ", budgetThisRun=" + quotaBudget.budget);
+  }
   var desiredSleep = [];
   for (var i = offset; i <= endDay; i++) {
     var dayD = new Date(now.getTime());
@@ -301,7 +307,7 @@ async function addEvents_Sleep(dayOffset, dayCount) {
   var syncEnd = new Date(todayStart.getTime() + endDay * msPerDay);
   syncEnd.setHours(23, 59, 59, 999);
 
-  _syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, syncEnd, desiredSleep, {
+  var syncStats = _syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, syncEnd, desiredSleep, {
     keyFromExistingWithList: function (ev, existingList) {
       var endT = ev.getEndTime();
       var endDateKey = endT.getFullYear() + "-" + endT.getMonth() + "-" + endT.getDate();
@@ -314,8 +320,13 @@ async function addEvents_Sleep(dayOffset, dayCount) {
         if (oKey === endDateKey) idx++;
       }
       return endDateKey + "_" + idx;
-    }
+    },
+    maxCreates: quotaBudget ? quotaBudget.budget : null
   });
+  if (quotaBudget) _commitQuotaUsage(QUOTA_SERVICE_CALENDAR_CREATES, syncStats.created);
+  if (syncStats && syncStats.skippedCreates > 0) {
+    console.warn("addEvents_Sleep: create budget reached, skipped " + syncStats.skippedCreates + " farther-out creates this run.");
+  }
 }
 
 /** Wipes all future events on the Sleep calendar (no tag filter). Uses _wipeCalendarFutureEvents in Code.gs. */

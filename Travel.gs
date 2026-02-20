@@ -29,6 +29,7 @@ const TRAVEL_MAPS_SLEEP_MS = 300;
 const TRAVEL_MAPS_SLEEP_EVERY_N = 2;
 /** When Maps API limit is hit, use this duration (minutes) for legs that cannot be realigned from existing drive events. Rechecked on next run when Maps is available. */
 const TRAVEL_FALLBACK_DURATION_MINUTES = 45;
+const TRAVEL_LEG_STATE_PREFIX = "TRAVEL_LEG_STATE_";
 
 /** Returns true if the error is the Maps "too many times for one day" quota. */
 function _travelIsMapsQuotaError(e) {
@@ -216,59 +217,168 @@ function _travelIndexOfContainingEvent(events, innerIdx) {
   return bestIdx;
 }
 
-/**
- * Precomputes all needed durations and returns a cache object: getDuration(originKey, destKey) returns minutes or null.
- * originKey/destKey are either _travelHomeOrigin() or event.getLocation().
- * Includes legs from containing (parent) events to nested (sub) events so drive to a sub-event is from the parent's location.
- * Gym (Snap Fitness Ashburton) legs use TRAVEL_GYM_DRIVE_MINUTES and do not call the Maps API.
- */
-function _travelBuildDurationCache(events, homeStr) {
-  var cache = {};
-  var key = function (a, b) {
-    return a + "\n" + b;
-  };
-  var get = function (origin, dest) {
-    var k = key(origin, dest);
-    if (cache[k] !== undefined) return cache[k];
-    var mins = _getDriveDurationMinutes(origin, dest);
-    cache[k] = mins;
-    if (TRAVEL_MAPS_SLEEP_EVERY_N > 0) {
-      Utilities.sleep(TRAVEL_MAPS_SLEEP_MS);
+function _travelHashString(s) {
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, s, Utilities.Charset.UTF_8);
+  var out = "";
+  for (var i = 0; i < bytes.length; i++) {
+    var v = (bytes[i] + 256) % 256;
+    var h = v.toString(16);
+    if (h.length < 2) h = "0" + h;
+    out += h;
+  }
+  return out;
+}
+
+function _travelLegPropKey(origin, dest) {
+  return TRAVEL_LEG_STATE_PREFIX + _travelHashString(origin + "\n" + dest);
+}
+
+function _travelGetLegState(origin, dest) {
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty(_travelLegPropKey(origin, dest));
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function _travelSetLegState(origin, dest, state) {
+  try {
+    PropertiesService.getScriptProperties().setProperty(_travelLegPropKey(origin, dest), JSON.stringify(state || {}));
+  } catch (e) {
+    console.warn("_travelSetLegState failed: " + e.message);
+  }
+}
+
+function _travelBuildLegCandidates(events, homeStr) {
+  var byKey = {};
+  function addLeg(origin, dest, priorityTimeMs) {
+    if (!origin || !dest) return;
+    var legKey = origin + "\n" + dest;
+    if (!byKey[legKey] || priorityTimeMs < byKey[legKey].priorityTimeMs) {
+      byKey[legKey] = { key: legKey, origin: origin, dest: dest, priorityTimeMs: priorityTimeMs };
     }
-    return mins;
-  };
+  }
 
   for (var i = 0; i < events.length; i++) {
     var loc = events[i].getLocation();
-    if (_travelIsGymLocation(loc)) {
-      cache[key(homeStr, loc)] = TRAVEL_GYM_DRIVE_MINUTES;
-      cache[key(loc, homeStr)] = TRAVEL_GYM_DRIVE_MINUTES;
-    } else {
-      get(homeStr, loc);
-      get(loc, homeStr);
-    }
+    addLeg(homeStr, loc, events[i].getStartTime().getTime());
+    addLeg(loc, homeStr, events[i].getEndTime().getTime());
   }
   for (var i = 0; i < events.length - 1; i++) {
-    var from = events[i].getLocation();
-    var to = events[i + 1].getLocation();
-    if (_travelIsGymLocation(from) || _travelIsGymLocation(to)) {
-      cache[key(from, to)] = TRAVEL_GYM_DRIVE_MINUTES;
-    } else {
-      get(from, to);
-    }
+    addLeg(events[i].getLocation(), events[i + 1].getLocation(), events[i + 1].getStartTime().getTime());
   }
   for (var i = 0; i < events.length; i++) {
     var parentIdx = _travelIndexOfContainingEvent(events, i);
     if (parentIdx >= 0) {
-      var from = events[parentIdx].getLocation();
-      var to = events[i].getLocation();
-      if (_travelIsGymLocation(from) || _travelIsGymLocation(to)) {
-        cache[key(from, to)] = TRAVEL_GYM_DRIVE_MINUTES;
-      } else {
-        get(from, to);
-      }
+      addLeg(events[parentIdx].getLocation(), events[i].getLocation(), events[i].getStartTime().getTime());
     }
   }
+
+  var out = [];
+  for (var k in byKey) out.push(byKey[k]);
+  out.sort(function (a, b) { return a.priorityTimeMs - b.priorityTimeMs; });
+  return out;
+}
+
+/**
+ * Builds duration cache using quota-aware Maps lookups:
+ * - prioritize soonest stale (>3 days), never-checked, or fallback legs
+ * - spend Maps calls up to per-run budget
+ * - use stored durations/fallback for remaining legs
+ */
+function _travelBuildDurationCache(events, homeStr) {
+  var cache = {};
+  var nowMs = Date.now();
+  var legs = _travelBuildLegCandidates(events, homeStr);
+  var budgetInfo = _getQuotaRunBudget(QUOTA_SERVICE_MAPS_DIRECTION);
+  var mapsBudget = budgetInfo.budget;
+  var mapsCallsUsed = 0;
+  var mapsCallsAttempted = 0;
+  var staleLegs = [];
+
+  for (var i = 0; i < legs.length; i++) {
+    var leg = legs[i];
+    if (_travelIsGymLocation(leg.origin) || _travelIsGymLocation(leg.dest)) {
+      cache[leg.key] = TRAVEL_GYM_DRIVE_MINUTES;
+      continue;
+    }
+    var state = _travelGetLegState(leg.origin, leg.dest);
+    var hasDuration = state && state.durationMin != null && state.durationMin > 0;
+    if (hasDuration) cache[leg.key] = state.durationMin;
+
+    var staleByAge = !state || !state.lastCheckedMs || (nowMs - state.lastCheckedMs) >= TRAVEL_RECHECK_STALE_MS;
+    var needsRefresh = !hasDuration || staleByAge || (state && state.usedFallback === true);
+    if (needsRefresh) staleLegs.push({ leg: leg, state: state });
+  }
+
+  staleLegs.sort(function (a, b) {
+    var aFallback = (a.state && a.state.usedFallback) ? 0 : 1;
+    var bFallback = (b.state && b.state.usedFallback) ? 0 : 1;
+    if (aFallback !== bFallback) return aFallback - bFallback;
+    return a.leg.priorityTimeMs - b.leg.priorityTimeMs;
+  });
+
+  for (var s = 0; s < staleLegs.length; s++) {
+    if (mapsCallsUsed >= mapsBudget) break;
+    var candidate = staleLegs[s].leg;
+    try {
+      var mins = _getDriveDurationMinutes(candidate.origin, candidate.dest);
+      mapsCallsAttempted++;
+      mapsCallsUsed++;
+      if (mins != null && mins > 0) {
+        cache[candidate.key] = mins;
+        _travelSetLegState(candidate.origin, candidate.dest, {
+          durationMin: mins,
+          lastCheckedMs: nowMs,
+          usedFallback: false
+        });
+      } else {
+        var prevState = _travelGetLegState(candidate.origin, candidate.dest) || {};
+        var fbMins = prevState.durationMin != null ? prevState.durationMin : TRAVEL_FALLBACK_DURATION_MINUTES;
+        cache[candidate.key] = fbMins;
+        _travelSetLegState(candidate.origin, candidate.dest, {
+          durationMin: fbMins,
+          lastCheckedMs: prevState.lastCheckedMs || 0,
+          usedFallback: true,
+          lastFallbackMs: nowMs
+        });
+      }
+      if (TRAVEL_MAPS_SLEEP_EVERY_N > 0 && mapsCallsAttempted % TRAVEL_MAPS_SLEEP_EVERY_N === 0) {
+        Utilities.sleep(TRAVEL_MAPS_SLEEP_MS);
+      }
+    } catch (e) {
+      if (_travelIsMapsQuotaError(e)) {
+        console.warn("Maps daily limit reached during prioritized refresh. Remaining legs will use stored/fallback durations.");
+        break;
+      }
+      console.warn("_travelBuildDurationCache leg lookup failed: " + e.message);
+    }
+  }
+
+  _commitQuotaUsage(QUOTA_SERVICE_MAPS_DIRECTION, mapsCallsUsed);
+
+  for (var i = 0; i < legs.length; i++) {
+    var leg = legs[i];
+    if (cache[leg.key] != null) continue;
+    if (_travelIsGymLocation(leg.origin) || _travelIsGymLocation(leg.dest)) {
+      cache[leg.key] = TRAVEL_GYM_DRIVE_MINUTES;
+      continue;
+    }
+    var state = _travelGetLegState(leg.origin, leg.dest) || {};
+    var fallbackMins = state.durationMin != null ? state.durationMin : TRAVEL_FALLBACK_DURATION_MINUTES;
+    cache[leg.key] = fallbackMins;
+    _travelSetLegState(leg.origin, leg.dest, {
+      durationMin: fallbackMins,
+      lastCheckedMs: state.lastCheckedMs || 0,
+      usedFallback: true,
+      lastFallbackMs: nowMs
+    });
+  }
+
+  console.log("Travel quota: limit=" + budgetInfo.limit + ", used=" + budgetInfo.used + ", remaining=" + budgetInfo.remaining + ", budgetThisRun=" + budgetInfo.budget + ", mapsCallsUsed=" + mapsCallsUsed + ", staleLegs=" + staleLegs.length + ", totalLegs=" + legs.length);
   return cache;
 }
 
@@ -305,55 +415,7 @@ function updateTravelDriveEvents(dayOffset, dayCount) {
   }
 
   var homeStr = _travelHomeOrigin();
-  var cache = {};
-  var usedFallback = false;
-  try {
-    cache = _travelBuildDurationCache(events, homeStr);
-  } catch (e) {
-    if (_travelIsMapsQuotaError(e)) {
-      console.warn("Maps daily limit exceeded; using existing drive events to realign or " + TRAVEL_FALLBACK_DURATION_MINUTES + " min fallback. Will recheck on next run when Maps is available.");
-      usedFallback = true;
-      var existingDriveEvents = travelCal.getEvents(startDate, endDate, { search: TRAVEL_DRIVE_EVENT_TAG });
-      var outboundPrefix = TRAVEL_DRIVE_EVENT_TAG + " To: ";
-      for (var e = 0; e < events.length; e++) {
-        var ev = events[e];
-        var evTitle = ev.getTitle() || "Event";
-        var evLoc = ev.getLocation();
-        var arriveAt = new Date(ev.getStartTime().getTime() - TRAVEL_ARRIVE_MINUTES_BEFORE * 60 * 1000);
-        var outboundDur = _travelExistingDriveDurationMinutes(existingDriveEvents, outboundPrefix + evTitle, arriveAt, true);
-        if (outboundDur != null) cache[homeStr + "\n" + evLoc] = outboundDur;
-        var inboundDur = _travelExistingDriveDurationMinutes(existingDriveEvents, TRAVEL_DRIVE_EVENT_TAG + " Home", ev.getEndTime(), false);
-        if (inboundDur != null) cache[evLoc + "\n" + homeStr] = inboundDur;
-        if (e < events.length - 1) {
-          var nextTitle = events[e + 1].getTitle() || "Next";
-          var nextArriveAt = new Date(events[e + 1].getStartTime().getTime() - TRAVEL_ARRIVE_MINUTES_BEFORE * 60 * 1000);
-          var toNextDur = _travelExistingDriveDurationMinutes(existingDriveEvents, outboundPrefix + nextTitle, nextArriveAt, true);
-          if (toNextDur != null) cache[evLoc + "\n" + events[e + 1].getLocation()] = toNextDur;
-        }
-      }
-      // Fill missing with fallback duration so the loop below can proceed
-      for (var e = 0; e < events.length; e++) {
-        var loc = events[e].getLocation();
-        if (cache[homeStr + "\n" + loc] == null) cache[homeStr + "\n" + loc] = TRAVEL_FALLBACK_DURATION_MINUTES;
-        if (cache[loc + "\n" + homeStr] == null) cache[loc + "\n" + homeStr] = TRAVEL_FALLBACK_DURATION_MINUTES;
-      }
-      for (var e = 0; e < events.length - 1; e++) {
-        var from = events[e].getLocation();
-        var to = events[e + 1].getLocation();
-        if (cache[from + "\n" + to] == null) cache[from + "\n" + to] = TRAVEL_FALLBACK_DURATION_MINUTES;
-      }
-      for (var e = 0; e < events.length; e++) {
-        var pIdx = _travelIndexOfContainingEvent(events, e);
-        if (pIdx >= 0) {
-          var from = events[pIdx].getLocation();
-          var to = events[e].getLocation();
-          if (cache[from + "\n" + to] == null) cache[from + "\n" + to] = TRAVEL_FALLBACK_DURATION_MINUTES;
-        }
-      }
-    } else {
-      throw e;
-    }
-  }
+  var cache = _travelBuildDurationCache(events, homeStr);
 
   var cacheGet = function (origin, dest) {
     return cache[origin + "\n" + dest];

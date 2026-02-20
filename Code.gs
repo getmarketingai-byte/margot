@@ -21,6 +21,22 @@ const SYNC_THROTTLE_MS = 200;
 const SUMMARY_EVENT_DURATION_MINUTES = 5;
 const WORK_NONWORK_BUFFER_MINUTES = 60;
 
+// Quota-aware scheduling configuration (aligned with Apps Script quotas docs).
+const IS_WORKSPACE_ACCOUNT = false; // true for Google Workspace (higher quotas), false for consumer/gmail
+const MAPS_DIRECTION_DAILY_LIMIT = IS_WORKSPACE_ACCOUNT ? 10000 : 1000;
+const CALENDAR_EVENTS_CREATED_DAILY_LIMIT = IS_WORKSPACE_ACCOUNT ? 10000 : 5000;
+const SCRIPT_RUNTIME_LIMIT_MINUTES = 6;
+const QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
+const QUOTA_BURST_TARGET_FRACTION = 0.75; // try to reach ~75% early
+const QUOTA_BACKOFF_START_FRACTION = 0.75; // begin backing off once used >= 75%
+const QUOTA_BACKOFF_SOFT_STOP_FRACTION = 0.95; // heavy backoff near cap
+const QUOTA_BACKOFF_MID_REMAINING_FRACTION = 0.25; // use 25% of remaining when in backoff zone
+const QUOTA_BACKOFF_LOW_REMAINING_FRACTION = 0.10; // use 10% of remaining near cap
+const QUOTA_STATE_PREFIX = 'QUOTA_STATE_';
+const QUOTA_SERVICE_MAPS_DIRECTION = 'MAPS_DIRECTION';
+const QUOTA_SERVICE_CALENDAR_CREATES = 'CALENDAR_CREATES';
+const TRAVEL_RECHECK_STALE_MS = 3 * 24 * 60 * 60 * 1000; // refresh Maps checks older than 3 days
+
 // Open-Meteo cache: avoid exceeding daily API limit (429). Cache key prefix and max chunk size for Script Properties (9KB limit).
 const OPENMETEO_CACHE_DATE_KEY = 'OPENMETEO_LAST_FETCH_DATE';
 const OPENMETEO_CACHE_PREFIX = 'OPENMETEO_RAW_';
@@ -44,7 +60,7 @@ const LOCATION_LAT = -37.910156;
 const LOCATION_LONG = 145.107420;
 
 // Calendars to exclude when scanning (Sleep commitments, Travel locations, etc.). Use names (e.g. "Travel", "Timemap") or full IDs. Each module also excludes its own calendar by ID.
-const CALENDARS_TO_EXCLUDE = ["Travel", "Travel Time", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
+const CALENDARS_TO_EXCLUDE = ["Travel", "WV SCOUTS", "Travel Time", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
 
 async function Update_InsideTimemap() //rolls daylight and nice weather into one timemap.
 {
@@ -173,114 +189,94 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
 }
 
 /**
- * Master TimeMap: updates Travel drive events then Sleep blocks.
- * If USE_PROGRESSIVE_SCHEDULE is true, only day-ranges that are due (by interval) are updated, reducing runtime.
- * Otherwise runs full window; for long windows consider separate triggers or chunked runs.
+ * Reads rolling 24h quota state for a service and resets window when expired.
+ * Stored shape: { startMs: number, used: number }.
+ */
+function _getQuotaState(serviceName) {
+  var props = PropertiesService.getScriptProperties();
+  var key = QUOTA_STATE_PREFIX + serviceName;
+  var now = Date.now();
+  var state = { startMs: now, used: 0 };
+  var raw = props.getProperty(key);
+  if (raw) {
+    try {
+      var parsed = JSON.parse(raw);
+      if (parsed && parsed.startMs && parsed.used != null) state = parsed;
+    } catch (e) {
+      state = { startMs: now, used: 0 };
+    }
+  }
+  if (now - state.startMs >= QUOTA_WINDOW_MS || state.used < 0) {
+    state = { startMs: now, used: 0 };
+    props.setProperty(key, JSON.stringify(state));
+  }
+  return state;
+}
+
+function _getQuotaDailyLimit(serviceName) {
+  if (serviceName === QUOTA_SERVICE_MAPS_DIRECTION) return MAPS_DIRECTION_DAILY_LIMIT;
+  if (serviceName === QUOTA_SERVICE_CALENDAR_CREATES) return CALENDAR_EVENTS_CREATED_DAILY_LIMIT;
+  return 0;
+}
+
+/**
+ * Returns per-run budget for a quota service using burst-then-backoff strategy.
+ * - while usage < 75%, budget tries to jump to 75% quickly
+ * - after 75%, budget scales down with remaining quota
+ */
+function _getQuotaRunBudget(serviceName) {
+  var limit = _getQuotaDailyLimit(serviceName);
+  var state = _getQuotaState(serviceName);
+  var used = Math.min(state.used || 0, limit);
+  var remaining = Math.max(0, limit - used);
+  if (remaining <= 0) return { limit: limit, used: used, remaining: 0, budget: 0 };
+
+  var usedFrac = limit > 0 ? used / limit : 1;
+  var targetUsed = Math.floor(limit * QUOTA_BURST_TARGET_FRACTION);
+  var budget;
+  if (used < targetUsed) {
+    budget = Math.max(1, targetUsed - used);
+  } else if (usedFrac >= QUOTA_BACKOFF_SOFT_STOP_FRACTION) {
+    budget = Math.max(1, Math.ceil(remaining * QUOTA_BACKOFF_LOW_REMAINING_FRACTION));
+  } else if (usedFrac >= QUOTA_BACKOFF_START_FRACTION) {
+    budget = Math.max(1, Math.ceil(remaining * QUOTA_BACKOFF_MID_REMAINING_FRACTION));
+  } else {
+    budget = remaining;
+  }
+  if (budget > remaining) budget = remaining;
+  return { limit: limit, used: used, remaining: remaining, budget: budget };
+}
+
+function _commitQuotaUsage(serviceName, amountUsed) {
+  if (!amountUsed || amountUsed <= 0) return;
+  var props = PropertiesService.getScriptProperties();
+  var key = QUOTA_STATE_PREFIX + serviceName;
+  var state = _getQuotaState(serviceName);
+  var limit = _getQuotaDailyLimit(serviceName);
+  state.used = Math.min(limit, (state.used || 0) + amountUsed);
+  props.setProperty(key, JSON.stringify(state));
+}
+
+/**
+ * Master TimeMap: updates Travel drive events then Sleep blocks using quota-aware budgeting.
  */
 async function update_Master_TimeMap() {
-  var result = USE_PROGRESSIVE_SCHEDULE ? _getProgressiveDayRangesToUpdate() : _getFullWindowRanges();
-  var ranges = result.ranges;
-  for (var r = 0; r < ranges.length; r++) {
-    updateTravelDriveEvents(ranges[r].offset, ranges[r].count);
-    await addEvents_Sleep(ranges[r].offset, ranges[r].count);
-  }
-  if (result.bandKeys && result.bandKeys.length > 0) _markProgressiveRangesUpdated(result.bandKeys);
+  updateTravelDriveEvents(0, SCHEDULING_WINDOW);
+  await addEvents_Sleep(0, SCHEDULING_WINDOW, { useQuotaBudget: true });
 }
 
-/** Runs only Travel drive events update. Uses progressive schedule when USE_PROGRESSIVE_SCHEDULE is true. Does not mark bands updated (Sleep or combined run does that). */
+/** Runs only Travel drive events update (quota-aware in Travel.gs). */
 function update_Master_TimeMap_Travel() {
-  var result = USE_PROGRESSIVE_SCHEDULE ? _getProgressiveDayRangesToUpdate() : _getFullWindowRanges();
-  var ranges = result.ranges;
-  for (var r = 0; r < ranges.length; r++) {
-    updateTravelDriveEvents(ranges[r].offset, ranges[r].count);
-  }
+  updateTravelDriveEvents(0, SCHEDULING_WINDOW);
 }
 
-/** Runs only Sleep block updates. Uses progressive schedule when USE_PROGRESSIVE_SCHEDULE is true. Marks bands updated so next run knows they are done. Run after Travel when splitting. */
+/** Runs only Sleep block updates with calendar-create quota budgeting. */
 async function update_Master_TimeMap_Sleep() {
-  var result = USE_PROGRESSIVE_SCHEDULE ? _getProgressiveDayRangesToUpdate() : _getFullWindowRanges();
-  var ranges = result.ranges;
-  for (var r = 0; r < ranges.length; r++) {
-    await addEvents_Sleep(ranges[r].offset, ranges[r].count);
-  }
-  if (result.bandKeys && result.bandKeys.length > 0) _markProgressiveRangesUpdated(result.bandKeys);
+  await addEvents_Sleep(0, SCHEDULING_WINDOW, { useQuotaBudget: true });
 }
 
 /** Number of days per Travel chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
 const TRAVEL_DAYS_PER_CHUNK = 30;
-
-/**
- * Progressive scheduling: only update day-ranges that are "due" by minimum interval, to cut runtime per execution.
- * Set USE_PROGRESSIVE_SCHEDULE = true and run one trigger (e.g. every 30–60 min); no need for multiple triggers.
- * Each band: { startDay, endDay, minIntervalMinutes }. A band is included this run if (now - lastUpdate) >= minIntervalMinutes.
- * Last update time per band is stored in Script Properties (key PROG_LAST_<startDay>_<endDay>).
- */
-const USE_PROGRESSIVE_SCHEDULE = true;
-const PROGRESSIVE_SCHEDULE = [
-  { startDay: 0,  endDay: 3,  minIntervalMinutes: 0 },     // next 3 days: every run
-  { startDay: 3,  endDay: 7,  minIntervalMinutes: 60 },    // 3–7 days: ~every second run (if trigger hourly)
-  { startDay: 7,  endDay: 14, minIntervalMinutes: 720 },   // 1–2 weeks: twice a day (12 h)
-  { startDay: 14, endDay: 28, minIntervalMinutes: 1440 },   // 2–4 weeks: once a day (24 h)
-  { startDay: 28, endDay: 60, minIntervalMinutes: 4320 },   // beyond 4 weeks: every 3 days (4320 min)
-];
-const PROG_LAST_PREFIX = "PROG_LAST_";
-
-/**
- * Returns which day-ranges to update this run based on PROGRESSIVE_SCHEDULE and last-update timestamps.
- * Does not write Script Properties; caller must call _markProgressiveRangesUpdated(bandKeys) after updating (so split Travel/Sleep triggers work).
- * @returns {{ ranges: Array<{offset: number, count: number}>, bandKeys: Array<string> }}
- */
-function _getProgressiveDayRangesToUpdate() {
-  var props = PropertiesService.getScriptProperties();
-  var now = Date.now();
-  var due = [];
-  var bandKeys = [];
-  for (var b = 0; b < PROGRESSIVE_SCHEDULE.length; b++) {
-    var band = PROGRESSIVE_SCHEDULE[b];
-    var key = PROG_LAST_PREFIX + band.startDay + "_" + band.endDay;
-    var lastStr = props.getProperty(key);
-    var last = lastStr ? parseInt(lastStr, 10) : 0;
-    var intervalMs = band.minIntervalMinutes * 60 * 1000;
-    if (intervalMs === 0 || (now - last) >= intervalMs) {
-      due.push({ offset: band.startDay, count: band.endDay - band.startDay });
-      bandKeys.push(key);
-    }
-  }
-  if (due.length === 0) return { ranges: [], bandKeys: [] };
-  due.sort(function (a, b) { return a.offset - b.offset; });
-  var merged = [];
-  var cur = { offset: due[0].offset, count: due[0].count };
-  for (var i = 1; i < due.length; i++) {
-    if (due[i].offset === cur.offset + cur.count) {
-      cur.count += due[i].count;
-    } else {
-      merged.push(cur);
-      cur = { offset: due[i].offset, count: due[i].count };
-    }
-  }
-  merged.push(cur);
-  return { ranges: merged, bandKeys: bandKeys };
-}
-
-/**
- * Marks the given progressive bands as updated (sets last-update timestamp). Call after Travel+Sleep for those ranges.
- * @param {Array<string>} bandKeys - Keys from _getProgressiveDayRangesToUpdate().bandKeys
- */
-function _markProgressiveRangesUpdated(bandKeys) {
-  if (!bandKeys || bandKeys.length === 0) return;
-  var props = PropertiesService.getScriptProperties();
-  var now = String(Date.now());
-  for (var k = 0; k < bandKeys.length; k++) {
-    props.setProperty(bandKeys[k], now);
-  }
-}
-
-/**
- * When progressive scheduling is off, returns a single range covering the full window (same shape as _getProgressiveDayRangesToUpdate).
- */
-function _getFullWindowRanges() {
-  return { ranges: [{ offset: 0, count: SCHEDULING_WINDOW }], bandKeys: [] };
-}
 
 /**
  * Runs Travel drive events for one chunk of the scheduling window. Use to stay under execution time limit:
@@ -633,14 +629,17 @@ function _clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
  * @param {Date} startDate - Range start.
  * @param {Date} endDate - Range end.
  * @param {Array<{title: string, start: Date, end: Date, key: string, free?: boolean}>} desiredEvents - Desired events; each must have key for matching.
- * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep).
+ * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void, maxCreates?: number }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep).
+ * @returns {{created: number, updated: number, deleted: number, skippedCreates: number}}
  */
 function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvents, options) {
   var keyFromExisting = options.keyFromExisting;
   var keyFromExistingWithList = options.keyFromExistingWithList;
   var setFree = options.setFree;
+  var maxCreates = options.maxCreates;
   var existingList = calendar.getEvents(startDate, endDate, { search: eventTag });
   var existingByKey = {};
+  var stats = { created: 0, updated: 0, deleted: 0, skippedCreates: 0 };
   for (var i = 0; i < existingList.length; i++) {
     var ev = existingList[i];
     var k = keyFromExistingWithList ? keyFromExistingWithList(ev, existingList) : keyFromExisting(ev);
@@ -660,6 +659,7 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
   for (var key in existingByKey) {
     if (!desiredByKey[key]) {
       existingByKey[key].deleteEvent();
+      stats.deleted++;
       throttle();
     }
   }
@@ -680,13 +680,20 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
       existing.setTime(startTime, endTime);
       if (desired.title != null) existing.setTitle(desired.title);
       if (setFree && desired.free) setFree(calendar, existing);
+      stats.updated++;
       throttle();
     } else {
+      if (maxCreates != null && stats.created >= maxCreates) {
+        stats.skippedCreates++;
+        continue;
+      }
       var newEv = calendar.createEvent(desired.title || eventTag, startTime, endTime);
       if (setFree && desired.free) setFree(calendar, newEv);
+      stats.created++;
       throttle();
     }
   }
+  return stats;
 }
 
 function _Add_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTitle) {
