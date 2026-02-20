@@ -37,11 +37,15 @@ const QUOTA_SERVICE_MAPS_DIRECTION = 'MAPS_DIRECTION';
 const QUOTA_SERVICE_CALENDAR_CREATES = 'CALENDAR_CREATES';
 const TRAVEL_RECHECK_STALE_MS = 3 * 24 * 60 * 60 * 1000; // refresh Maps checks older than 3 days
 
-// Open-Meteo cache: avoid exceeding daily API limit (429). Cache key prefix and max chunk size for Script Properties (9KB limit).
+// Open-Meteo cache: avoid exceeding daily API limit (429). Limits are per IP; GAS shares IPs.
+// Cache key prefix and max chunk size for Script Properties (9KB limit).
+// OPENMETEO_CACHE_MAX_AGE_DAYS: use cached data up to N days old without fetching (reduces API calls).
 const OPENMETEO_CACHE_DATE_KEY = 'OPENMETEO_LAST_FETCH_DATE';
 const OPENMETEO_CACHE_PREFIX = 'OPENMETEO_RAW_';
 const OPENMETEO_CACHE_CHUNK_SIZE = 8000;
 const OPENMETEO_CACHE_TIMEZONE = 'Australia/Melbourne';
+const OPENMETEO_CACHE_MAX_AGE_DAYS = 2;  // Use cache for 2 days; only fetch when stale (1 call per 2 days max)
+const OPENMETEO_429_RETRY_DELAY_MS = 90000;  // Wait 90s before retry on 429 (may cross hourly boundary)
 
 // Pay Period variables
 const REFERENCE_PAY_PERIOD_START = new Date('2023-11-16T00:00:00');
@@ -60,7 +64,7 @@ const LOCATION_LAT = -37.910156;
 const LOCATION_LONG = 145.107420;
 
 // Calendars to exclude when scanning (Sleep commitments, Travel locations, etc.). Use names (e.g. "Travel", "Timemap") or full IDs. Each module also excludes its own calendar by ID.
-const CALENDARS_TO_EXCLUDE = ["Travel", "WV SCOUTS", "Travel Time", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
+const CALENDARS_TO_EXCLUDE = ["Travel", "Waverley Valley Scout Group - Shared Calendar","WV SCOUTS", "Travel Time", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
 
 async function Update_InsideTimemap() //rolls daylight and nice weather into one timemap.
 {
@@ -772,6 +776,28 @@ function _getTodayDateString() {
 }
 
 /**
+ * Returns date string for N days ago (YYYY-MM-DD) in OPENMETEO_CACHE_TIMEZONE.
+ */
+function _getDateStringDaysAgo(daysAgo) {
+  var d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return Utilities.formatDate(d, OPENMETEO_CACHE_TIMEZONE, 'yyyy-MM-dd');
+}
+
+/**
+ * Returns true if cacheDateStr (YYYY-MM-DD) is within OPENMETEO_CACHE_MAX_AGE_DAYS.
+ */
+function _isCacheFresh(cacheDateStr) {
+  if (!cacheDateStr) return false;
+  var today = _getTodayDateString();
+  if (cacheDateStr === today) return true;
+  for (var d = 1; d <= OPENMETEO_CACHE_MAX_AGE_DAYS; d++) {
+    if (cacheDateStr === _getDateStringDaysAgo(d)) return true;
+  }
+  return false;
+}
+
+/**
  * Saves a long string to Script Properties in chunks (9KB limit per value).
  */
 function _setOpenMeteoCache(dateStr, rawJson) {
@@ -828,10 +854,40 @@ function _processWeatherRawToNewData(data) {
 }
 
 /**
+ * Fetches Open-Meteo API URL; on 429 retries once after OPENMETEO_429_RETRY_DELAY_MS.
+ * @returns {{code: number, json: string}}
+ */
+function _fetchOpenMeteoWithRetry(apiUrl) {
+  var options = { muteHttpExceptions: true };
+  var response;
+  try {
+    response = UrlFetchApp.fetch(apiUrl, options);
+  } catch (e) {
+    console.error('get_WeatherData fetch error: ' + e.message);
+    return { code: -1, json: e.message };
+  }
+  var code = response.getResponseCode();
+  var json = response.getContentText();
+  if (code === 429) {
+    console.warn('Open-Meteo 429 received. Retrying once after ' + (OPENMETEO_429_RETRY_DELAY_MS / 1000) + 's.');
+    Utilities.sleep(OPENMETEO_429_RETRY_DELAY_MS);
+    try {
+      response = UrlFetchApp.fetch(apiUrl, options);
+    } catch (e2) {
+      return { code: 429, json: json };
+    }
+    code = response.getResponseCode();
+    json = response.getContentText();
+  }
+  return { code: code, json: json };
+}
+
+/**
  * Fetches hourly weather from Open-Meteo and returns array of { time, ...hourly, NiceWeather }.
- * Uses Script Properties cache so the API is called at most once per calendar day (Melbourne);
- * on 429 (daily limit exceeded) falls back to last cached response if available.
+ * Uses Script Properties cache: API called at most once per OPENMETEO_CACHE_MAX_AGE_DAYS (default 2).
+ * On 429 (shared-IP limit exceeded) uses last cached response; retries once after delay if no cache.
  * Source: https://open-meteo.com/en/docs
+ * Limits: 10k/day, 5k/hour, 600/min per IP; GAS shares IPs with other scripts.
  */
 function get_WeatherData() {
   var apiUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + LOCATION_LAT + "&longitude=" + LOCATION_LONG + "&hourly=temperature_2m,relativehumidity_2m,precipitation_probability,windspeed_10m,uv_index,is_day&timezone=Australia%2FSydney&forecast_days=10";
@@ -839,49 +895,35 @@ function get_WeatherData() {
   var props = PropertiesService.getScriptProperties();
   var lastFetchDate = props.getProperty(OPENMETEO_CACHE_DATE_KEY);
 
-  // If we already have a successful fetch for today, use cache only (no API call).
-  if (lastFetchDate === today) {
+  // Use cache when fresh (within OPENMETEO_CACHE_MAX_AGE_DAYS) to avoid API calls.
+  if (_isCacheFresh(lastFetchDate)) {
     var cached = _getOpenMeteoCache();
     if (cached) {
       return _processWeatherRawToNewData(cached);
     }
   }
 
-  // Fetch with muteHttpExceptions so we can handle 429 without throwing.
-  var options = { muteHttpExceptions: true };
-  var response;
-  try {
-    response = UrlFetchApp.fetch(apiUrl, options);
-  } catch (e) {
-    console.error('get_WeatherData fetch error: ' + e.message);
-    var fallback = _getOpenMeteoCache();
-    if (fallback) {
-      console.warn('Using last cached Open-Meteo data due to fetch error.');
-      return _processWeatherRawToNewData(fallback);
-    }
-    throw e;
-  }
-
-  var code = response.getResponseCode();
-  var json = response.getContentText();
+  var result = _fetchOpenMeteoWithRetry(apiUrl);
+  var code = result.code;
+  var json = result.json;
 
   if (code === 429) {
     console.warn('Open-Meteo daily API limit exceeded (429). Using last cached forecast if available.');
-    var fallback = _getOpenMeteoCache();
-    if (fallback) {
-      return _processWeatherRawToNewData(fallback);
+    var fallback429 = _getOpenMeteoCache();
+    if (fallback429) {
+      return _processWeatherRawToNewData(fallback429);
     }
     throw new Error('Open-Meteo daily API limit exceeded and no cached forecast available. Try again tomorrow or reduce run frequency.');
   }
 
-  if (code !== 200) {
-    console.error('get_WeatherData failed: HTTP ' + code + ' ' + json);
+  if (code === -1 || code !== 200) {
+    console.error('get_WeatherData failed: ' + (code === -1 ? 'fetch error: ' + json : 'HTTP ' + code + ' ' + json));
     var fallback = _getOpenMeteoCache();
     if (fallback) {
       console.warn('Using last cached Open-Meteo data.');
       return _processWeatherRawToNewData(fallback);
     }
-    throw new Error('Open-Meteo request failed with HTTP ' + code);
+    throw new Error('Open-Meteo request failed' + (code === -1 ? ': ' + json : ' with HTTP ' + code));
   }
 
   var data;
