@@ -23,6 +23,14 @@ const SLEEP_EVENT_TAG = "[SLEEP]";
 
 /** Prefix for outbound-from-home drive events on the Travel calendar (leave time = event start). */
 const SLEEP_DRIVE_OUTBOUND_PREFIX = "[Drive] To:";
+/** Title for inbound-to-home drive events; sleep cannot start until this event ends (arrive home). */
+const SLEEP_DRIVE_HOME_TITLE = "[Drive] Home";
+
+/** Returns true if the event title is travel/drive-related (excluded from "last main conflict" display). */
+function _sleepIsTravelConflict(title) {
+  var t = (title || "").trim();
+  return t.indexOf("[Drive]") === 0 || t.indexOf("->") !== -1;
+}
 
 /**
  * Returns true if the calendar should be excluded when collecting commitment events.
@@ -85,6 +93,7 @@ function _sleepIsMultiDayEvent(calendarEvent) {
  * Collects timed (non-all-day) events in the given range from all calendars except
  * those excluded by _sleepIsCalendarExcluded. Only includes events that are "busy"
  * (transparency !== "transparent"). Events with status "free" do not affect sleep scheduling; all-day and multi-day events are also excluded.
+ * Also includes [Drive] Home from Travel calendar so sleep cannot start until you've arrived home.
  * Returns array of CalendarEvent sorted by start time.
  */
 function _sleepCollectCommitmentEvents(start, end) {
@@ -98,6 +107,17 @@ function _sleepCollectCommitmentEvents(start, end) {
     for (var k = 0; k < calEvents.length; k++) {
       var ev = calEvents[k];
       if (!ev.isAllDayEvent() && !_sleepIsMultiDayEvent(ev) && _sleepEventIsBusy(ev) && !_sleepIsEventIgnoredForConflicts(ev)) events.push(ev);
+    }
+  }
+  // Include [Drive] Home from Travel so sleep starts only after arriving home (not when prior event ends).
+  var travelCal = CalendarApp.getCalendarById(TRAVEL_CALENDAR_ID);
+  if (travelCal) {
+    var driveEvents = travelCal.getEvents(start, end, { search: "[Drive]" });
+    for (var d = 0; d < driveEvents.length; d++) {
+      var dev = driveEvents[d];
+      if ((dev.getTitle() || "").trim() === SLEEP_DRIVE_HOME_TITLE) {
+        if (!dev.isAllDayEvent() && !_sleepIsMultiDayEvent(dev)) events.push(dev);
+      }
     }
   }
   events.sort(function (a, b) {
@@ -229,6 +249,7 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
 
     var commitments = _sleepCollectCommitmentEvents(nightStart, nightEnd);
     var conflictTitles = [];
+    var lastMainConflict = null;  // Last non-travel overlapping event (by end time) for concise title
     var hasOverlap = false;
     for (var c = 0; c < commitments.length; c++) {
       var evStart = commitments[c].getStartTime().getTime();
@@ -238,33 +259,50 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
         var t = (commitments[c].getTitle() || "").trim();
         if (!t) t = "(" + (commitments[c].getCalendar().getName() || "no title") + ")";
         if (conflictTitles.indexOf(t) === -1) conflictTitles.push(t);
+        if (!_sleepIsTravelConflict(t) && (lastMainConflict === null || evEnd > lastMainConflict.endMs)) {
+          lastMainConflict = { title: t, endMs: evEnd };
+        }
       }
     }
     var overlapsTarget = hasOverlap;
 
+    var lastMainTitle = lastMainConflict ? lastMainConflict.title : null;
     var blocksToCreate = [];
     if (!overlapsTarget) {
-      blocksToCreate.push({ start: targetStart, end: targetEnd, conflictTitles: [] });
+      blocksToCreate.push({ start: targetStart, end: targetEnd, conflictTitles: [], lastMainConflictTitle: null });
     } else {
       // Prefer placing sleep at the start of a gap so it begins right after the conflict (e.g. after reception ends), not at the end of the night.
       var gaps = _sleepFreeGaps(nightStart, nightEnd, commitments);
       var found8 = false;
       for (var g = 0; g < gaps.length; g++) {
         if (gaps[g].end - gaps[g].start >= ms8) {
-          blocksToCreate.push({ start: gaps[g].start, end: gaps[g].start + ms8, conflictTitles: conflictTitles });
+          blocksToCreate.push({ start: gaps[g].start, end: gaps[g].start + ms8, conflictTitles: conflictTitles, lastMainConflictTitle: lastMainTitle });
           found8 = true;
           break;
         }
       }
       if (!found8) {
         for (var g = 0; g < gaps.length && blocksToCreate.length < 2; g++) {
-          if (gaps[g].end - gaps[g].start >= ms4) {
-            blocksToCreate.push({ start: gaps[g].start, end: gaps[g].start + ms4, conflictTitles: conflictTitles });
+          var gapDur = gaps[g].end - gaps[g].start;
+          if (gapDur >= ms4) {
+            var blockEnd = gaps[g].start + Math.min(gapDur, ms8);
+            blocksToCreate.push({ start: gaps[g].start, end: blockEnd, conflictTitles: conflictTitles, lastMainConflictTitle: lastMainTitle });
           }
         }
       }
       if (blocksToCreate.length === 0) {
-        blocksToCreate.push({ start: targetStart, end: targetEnd, conflictTitles: conflictTitles });
+        // No 8.5h or 4h block fits: use the largest achievable gap and note reduced sleep.
+        var best = null;
+        for (var g = 0; g < gaps.length; g++) {
+          var dur = gaps[g].end - gaps[g].start;
+          if (dur > 0 && (best === null || dur > best.end - best.start)) best = gaps[g];
+        }
+        if (best && best.end > best.start) {
+          var hrs = Math.round((best.end - best.start) / msPerHour * 10) / 10;
+          blocksToCreate.push({ start: best.start, end: best.end, conflictTitles: conflictTitles, lastMainConflictTitle: lastMainTitle, lessThanIdealHours: hrs });
+        } else {
+          blocksToCreate.push({ start: targetStart, end: targetEnd, conflictTitles: conflictTitles, lastMainConflictTitle: lastMainTitle });
+        }
       }
     }
 
@@ -275,11 +313,18 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
       // Always start from clean tag so title is cleared when conflict is no longer there (sync overwrites existing title).
       // Any modified-time block must show the reason (conflicts or "before [Drive]...").
       var title = SLEEP_EVENT_TAG;
+      var blHrs = bl.lessThanIdealHours != null ? bl.lessThanIdealHours : Math.round((bl.end - bl.start) / msPerHour * 10) / 10;
+      var isLessThanIdeal = blHrs < SLEEP_DURATION_HOURS;
+      var parts = [];
+      if (isLessThanIdeal) parts.push("less than ideal sleep " + blHrs + "hrs");
       if (bl.conflictTitles && bl.conflictTitles.length > 0) {
-        var conflictStr = bl.conflictTitles.join(", ");
+        var conflictStr = (bl.lastMainConflictTitle != null) ? bl.lastMainConflictTitle : bl.conflictTitles.join(", ");
         if (conflictStr.length > maxConflictLen) conflictStr = conflictStr.slice(0, maxConflictLen - 3) + "...";
-        title = title + " (conflicts: " + conflictStr + ")";
-      } else if (usedLeaveForWake && leaveTitleForDay && bl.endMs === targetEnd && !overlapsTarget) {
+        parts.push("conflicts: " + conflictStr);
+      }
+      if (parts.length > 0) {
+        title = title + " (" + parts.join(", ") + ")";
+      } else if (usedLeaveForWake && leaveTitleForDay && bl.end === targetEnd && !overlapsTarget) {
         var leaveStr = leaveTitleForDay.length > maxConflictLen ? leaveTitleForDay.slice(0, maxConflictLen - 3) + "..." : leaveTitleForDay;
         title = title + " (before " + leaveStr + ")";
       } else if (overlapsTarget && bl.conflictTitles && bl.conflictTitles.length === 0) {
