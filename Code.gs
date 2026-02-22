@@ -633,7 +633,7 @@ function _clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
  * @param {Date} startDate - Range start.
  * @param {Date} endDate - Range end.
  * @param {Array<{title: string, start: Date, end: Date, key: string, free?: boolean}>} desiredEvents - Desired events; each must have key for matching.
- * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void, maxCreates?: number }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep).
+ * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void, maxCreates?: number, onEventSynced?: (Calendar, CalendarEvent, Object, boolean) => void }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep). onEventSynced is called after create/update with (calendar, event, desired, wasCreated).
  * @returns {{created: number, updated: number, deleted: number, skippedCreates: number}}
  */
 function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvents, options) {
@@ -641,6 +641,7 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
   var keyFromExistingWithList = options.keyFromExistingWithList;
   var setFree = options.setFree;
   var maxCreates = options.maxCreates;
+  var onEventSynced = options.onEventSynced;
   var existingList = calendar.getEvents(startDate, endDate, { search: eventTag });
   var existingByKey = {};
   var stats = { created: 0, updated: 0, deleted: 0, skippedCreates: 0 };
@@ -684,6 +685,7 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
       existing.setTime(startTime, endTime);
       if (desired.title != null) existing.setTitle(desired.title);
       if (setFree && desired.free) setFree(calendar, existing);
+      if (onEventSynced) onEventSynced(calendar, existing, desired, false);
       stats.updated++;
       throttle();
     } else {
@@ -693,6 +695,7 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
       }
       var newEv = calendar.createEvent(desired.title || eventTag, startTime, endTime);
       if (setFree && desired.free) setFree(calendar, newEv);
+      if (onEventSynced) onEventSynced(calendar, newEv, desired, true);
       stats.created++;
       throttle();
     }

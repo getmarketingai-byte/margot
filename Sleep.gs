@@ -20,6 +20,9 @@ const SLEEP_IDEAL_WAKE_UP_MIN = 0;
 const SLEEP_BUFFER_BEFORE_LEAVE_MINUTES = 60;
 const SLEEP_MIN_BLOCK_HOURS = 4;
 const SLEEP_EVENT_TAG = "[SLEEP]";
+const SLEEP_OVERRIDE_TAG = "[OVERRIDE]";
+const SLEEP_EXTPROP_AUTO_START = "sleepAutoStart";
+const SLEEP_EXTPROP_AUTO_END = "sleepAutoEnd";
 
 /** Prefix for outbound-from-home drive events on the Travel calendar (leave time = event start). */
 const SLEEP_DRIVE_OUTBOUND_PREFIX = "[Drive] To:";
@@ -30,6 +33,60 @@ const SLEEP_DRIVE_HOME_TITLE = "[Drive] Home";
 function _sleepIsTravelConflict(title) {
   var t = (title || "").trim();
   return t.indexOf("[Drive]") === 0 || t.indexOf("->") !== -1;
+}
+
+/** Returns Calendar API eventId from CalendarApp event id (strips @google.com suffix if present). */
+function _sleepGetApiEventId(calendarEventId) {
+  if (!calendarEventId) return calendarEventId;
+  return calendarEventId.slice(-11) === "@google.com" ? calendarEventId.slice(0, -11) : calendarEventId;
+}
+
+/** Adds [OVERRIDE] after [SLEEP] tag if missing, preserving existing suffix text. */
+function _sleepEnsureOverrideTag(title) {
+  var t = (title || "").trim();
+  if (!t) return SLEEP_EVENT_TAG + " " + SLEEP_OVERRIDE_TAG;
+  if (t.indexOf(SLEEP_OVERRIDE_TAG) !== -1) return t;
+  if (t.indexOf(SLEEP_EVENT_TAG) !== -1) return t.replace(SLEEP_EVENT_TAG, SLEEP_EVENT_TAG + " " + SLEEP_OVERRIDE_TAG);
+  return SLEEP_EVENT_TAG + " " + SLEEP_OVERRIDE_TAG + " " + t;
+}
+
+/**
+ * Reads private extended properties for a sleep event.
+ * @returns {{startMs:number,endMs:number}|null}
+ */
+function _sleepGetExtendedProps(calendarEvent) {
+  try {
+    var calId = calendarEvent.getCalendar().getId();
+    var apiId = _sleepGetApiEventId(calendarEvent.getId());
+    var resource = Calendar.Events.get(calId, apiId);
+    var p = resource && resource.extendedProperties && resource.extendedProperties.private;
+    if (!p) return null;
+    var s = parseInt(p[SLEEP_EXTPROP_AUTO_START], 10);
+    var e = parseInt(p[SLEEP_EXTPROP_AUTO_END], 10);
+    if (isNaN(s) || isNaN(e)) return null;
+    return { startMs: s, endMs: e };
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Persists automation-set start/end times into event private extended properties. */
+function _sleepSetExtendedProps(calendar, calendarEvent, startMs, endMs) {
+  try {
+    var apiId = _sleepGetApiEventId(calendarEvent.getId());
+    Calendar.Events.patch({
+      extendedProperties: {
+        private: (function () {
+          var obj = {};
+          obj[SLEEP_EXTPROP_AUTO_START] = String(startMs);
+          obj[SLEEP_EXTPROP_AUTO_END] = String(endMs);
+          return obj;
+        })()
+      }
+    }, calendar.getId(), apiId);
+  } catch (e) {
+    console.warn("_sleepSetExtendedProps failed: " + e.message);
+  }
 }
 
 /**
@@ -339,11 +396,6 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
     }
   }
 
-  if (desiredSleep.length === 0) {
-    console.warn("addEvents_Sleep: no [SLEEP] blocks computed for the window; no events will be written.");
-    return;
-  }
-
   var todayStart = new Date(now.getTime());
   todayStart.setHours(0, 0, 0, 0);
   var syncStart = new Date(todayStart.getTime() + offset * msPerDay);
@@ -352,21 +404,76 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var syncEnd = new Date(todayStart.getTime() + endDay * msPerDay);
   syncEnd.setHours(23, 59, 59, 999);
 
-  var syncStats = _syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, syncEnd, desiredSleep, {
-    keyFromExistingWithList: function (ev, existingList) {
-      var endT = ev.getEndTime();
-      var endDateKey = endT.getFullYear() + "-" + endT.getMonth() + "-" + endT.getDate();
-      var sorted = existingList.slice().sort(function (a, b) { return a.getStartTime().getTime() - b.getStartTime().getTime(); });
-      var idx = 0;
-      for (var s = 0; s < sorted.length; s++) {
-        if (sorted[s].getId() === ev.getId()) return endDateKey + "_" + idx;
-        var oEnd = sorted[s].getEndTime();
-        var oKey = oEnd.getFullYear() + "-" + oEnd.getMonth() + "-" + oEnd.getDate();
-        if (oKey === endDateKey) idx++;
+  var keyFromExistingWithList = function (ev, existingList) {
+    var endT = ev.getEndTime();
+    var endDateKey = endT.getFullYear() + "-" + endT.getMonth() + "-" + endT.getDate();
+    var sorted = existingList.slice().sort(function (a, b) { return a.getStartTime().getTime() - b.getStartTime().getTime(); });
+    var idx = 0;
+    for (var s = 0; s < sorted.length; s++) {
+      if (sorted[s].getId() === ev.getId()) return endDateKey + "_" + idx;
+      var oEnd = sorted[s].getEndTime();
+      var oKey = oEnd.getFullYear() + "-" + oEnd.getMonth() + "-" + oEnd.getDate();
+      if (oKey === endDateKey) idx++;
+    }
+    return endDateKey + "_" + idx;
+  };
+
+  // Preserve manually overridden sleep events. Detection is metadata-based (moved times) or explicit [OVERRIDE] tag.
+  var desiredByKey = {};
+  for (var q = 0; q < desiredSleep.length; q++) {
+    var d = desiredSleep[q];
+    if (d.key != null && d.key !== "") desiredByKey[d.key] = d;
+  }
+  var existingSleep = sleep_cal.getEvents(syncStart, syncEnd, { search: SLEEP_EVENT_TAG });
+  for (var r = 0; r < existingSleep.length; r++) {
+    var existing = existingSleep[r];
+    var existingKey = keyFromExistingWithList(existing, existingSleep);
+    if (existingKey == null || existingKey === "") continue;
+
+    var existingTitle = existing.getTitle() || SLEEP_EVENT_TAG;
+    var existingStartMs = existing.getStartTime().getTime();
+    var existingEndMs = existing.getEndTime().getTime();
+    var hasOverrideTag = existingTitle.indexOf(SLEEP_OVERRIDE_TAG) !== -1;
+    var shouldPreserveAsOverride = hasOverrideTag;
+
+    if (!shouldPreserveAsOverride) {
+      var meta = _sleepGetExtendedProps(existing);
+      if (meta && (meta.startMs !== existingStartMs || meta.endMs !== existingEndMs)) {
+        shouldPreserveAsOverride = true;
+        existingTitle = _sleepEnsureOverrideTag(existingTitle);
       }
-      return endDateKey + "_" + idx;
-    },
-    maxCreates: quotaBudget ? quotaBudget.budget : null
+    }
+
+    if (shouldPreserveAsOverride) {
+      desiredByKey[existingKey] = {
+        key: existingKey,
+        title: existingTitle,
+        startMs: existingStartMs,
+        endMs: existingEndMs,
+        isOverride: true
+      };
+    }
+  }
+  desiredSleep = [];
+  for (var dk in desiredByKey) {
+    desiredSleep.push(desiredByKey[dk]);
+  }
+
+  if (desiredSleep.length === 0) {
+    console.warn("addEvents_Sleep: no [SLEEP] blocks computed for the window; no events will be written.");
+    return;
+  }
+
+  var syncStats = _syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, syncEnd, desiredSleep, {
+    keyFromExistingWithList: keyFromExistingWithList,
+    maxCreates: quotaBudget ? quotaBudget.budget : null,
+    onEventSynced: function (calendar, event, desired) {
+      if (desired && desired.isOverride) return;
+      var startTime = desired.start instanceof Date ? desired.start : (desired.startMs != null ? new Date(desired.startMs) : null);
+      var endTime = desired.end instanceof Date ? desired.end : (desired.endMs != null ? new Date(desired.endMs) : null);
+      if (!startTime || !endTime) return;
+      _sleepSetExtendedProps(calendar, event, startTime.getTime(), endTime.getTime());
+    }
   });
   if (quotaBudget) _commitQuotaUsage(QUOTA_SERVICE_CALENDAR_CREATES, syncStats.created);
   if (syncStats && syncStats.skippedCreates > 0) {
