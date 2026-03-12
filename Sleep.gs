@@ -151,7 +151,7 @@ function _sleepIsMultiDayEvent(calendarEvent) {
  * those excluded by _sleepIsCalendarExcluded. Only includes events that are "busy"
  * (transparency !== "transparent"). Events with status "free" do not affect sleep scheduling; all-day and multi-day events are also excluded.
  * Also includes [Drive] Home from Travel calendar so sleep cannot start until you've arrived home.
- * Returns array of CalendarEvent sorted by start time.
+ * Returns array of lightweight commitment records sorted by start time.
  */
 function _sleepCollectCommitmentEvents(start, end) {
   if (start.getTime() >= end.getTime()) return [];
@@ -163,7 +163,14 @@ function _sleepCollectCommitmentEvents(start, end) {
     var calEvents = cal.getEvents(start, end);
     for (var k = 0; k < calEvents.length; k++) {
       var ev = calEvents[k];
-      if (!ev.isAllDayEvent() && !_sleepIsMultiDayEvent(ev) && _sleepEventIsBusy(ev) && !_sleepIsEventIgnoredForConflicts(ev)) events.push(ev);
+      if (!ev.isAllDayEvent() && !_sleepIsMultiDayEvent(ev) && _sleepEventIsBusy(ev) && !_sleepIsEventIgnoredForConflicts(ev)) {
+        events.push({
+          startMs: ev.getStartTime().getTime(),
+          endMs: ev.getEndTime().getTime(),
+          title: ev.getTitle() || "",
+          calendarName: cal.getName() || ""
+        });
+      }
     }
   }
   // Include [Drive] Home from Travel so sleep starts only after arriving home (not when prior event ends).
@@ -173,14 +180,32 @@ function _sleepCollectCommitmentEvents(start, end) {
     for (var d = 0; d < driveEvents.length; d++) {
       var dev = driveEvents[d];
       if ((dev.getTitle() || "").trim() === SLEEP_DRIVE_HOME_TITLE) {
-        if (!dev.isAllDayEvent() && !_sleepIsMultiDayEvent(dev)) events.push(dev);
+        if (!dev.isAllDayEvent() && !_sleepIsMultiDayEvent(dev)) {
+          events.push({
+            startMs: dev.getStartTime().getTime(),
+            endMs: dev.getEndTime().getTime(),
+            title: dev.getTitle() || "",
+            calendarName: travelCal.getName() || ""
+          });
+        }
       }
     }
   }
   events.sort(function (a, b) {
-    return a.getStartTime().getTime() - b.getStartTime().getTime();
+    return a.startMs - b.startMs;
   });
   return events;
+}
+
+/** Returns commitment records from prefetched list that overlap [windowStartMs, windowEndMs). */
+function _sleepGetCommitmentsForWindow(prefetchedCommitments, windowStartMs, windowEndMs) {
+  if (!prefetchedCommitments || prefetchedCommitments.length === 0) return [];
+  var out = [];
+  for (var i = 0; i < prefetchedCommitments.length; i++) {
+    var ev = prefetchedCommitments[i];
+    if (_sleepOverlaps(windowStartMs, windowEndMs, ev.startMs, ev.endMs)) out.push(ev);
+  }
+  return out;
 }
 
 /**
@@ -223,14 +248,14 @@ function _sleepFreeGaps(nightStart, nightEnd, events) {
     if (t1 > t0) gaps.push({ start: t0, end: t1 });
     return gaps;
   }
-  var firstStart = events[0].getStartTime().getTime();
+  var firstStart = events[0].startMs;
   if (firstStart > t0) gaps.push({ start: t0, end: Math.min(t1, firstStart) });
   for (var i = 0; i < events.length - 1; i++) {
-    var a = events[i].getEndTime().getTime();
-    var b = events[i + 1].getStartTime().getTime();
+    var a = events[i].endMs;
+    var b = events[i + 1].startMs;
     if (b > a && a >= t0 && b <= t1) gaps.push({ start: a, end: b });
   }
-  var lastEnd = events[events.length - 1].getEndTime().getTime();
+  var lastEnd = events[events.length - 1].endMs;
   if (t1 > lastEnd) gaps.push({ start: Math.max(t0, lastEnd), end: t1 });
   return gaps;
 }
@@ -242,7 +267,7 @@ function _sleepFreeGaps(nightStart, nightEnd, events) {
  * calls calendar.createEvent() for new events and setTime/setTitle for updates).
  * @param {number} [dayOffset=0] - Start day index (0 = today).
  * @param {number} [dayCount] - Number of days to process; default full SCHEDULING_WINDOW when omitted.
- * @param {{useQuotaBudget?: boolean}} [runOptions] - When true, cap new event creates by calendar daily quota budget.
+ * @param {{useQuotaBudget?: boolean, maxRuntimeMs?: number}} [runOptions] - useQuotaBudget caps daily creates; maxRuntimeMs applies a soft run-time guard.
  */
 async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
@@ -256,10 +281,18 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var offset = (dayOffset != null && dayOffset >= 0) ? dayOffset : 0;
   var count = (dayCount != null && dayCount > 0) ? dayCount : SCHEDULING_WINDOW;
   var endDay = Math.min(offset + count, SCHEDULING_WINDOW);
+  var todayStart = new Date(now.getTime());
+  todayStart.setHours(0, 0, 0, 0);
 
   var rangeEndDate = new Date(now.getTime() + SCHEDULING_WINDOW * msPerDay);
   rangeEndDate.setHours(23, 59, 59, 999);
   var leaveByDay = _sleepGetLeaveTimesByDay(now, rangeEndDate);
+  // Batch-read commitment events once for the run range, then filter in memory per night.
+  var commitmentsRangeStart = new Date(todayStart.getTime() + (offset - 1) * msPerDay);
+  commitmentsRangeStart.setHours(0, 0, 0, 0);
+  var commitmentsRangeEnd = new Date(todayStart.getTime() + endDay * msPerDay);
+  commitmentsRangeEnd.setHours(23, 59, 59, 999);
+  var prefetchedCommitments = _sleepCollectCommitmentEvents(commitmentsRangeStart, commitmentsRangeEnd);
 
   var msPerHour = 60 * 60 * 1000;
   var ms8 = SLEEP_DURATION_HOURS * msPerHour;
@@ -270,8 +303,17 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
     quotaBudget = _getQuotaRunBudget(QUOTA_SERVICE_CALENDAR_CREATES);
     console.log("Sleep quota: limit=" + quotaBudget.limit + ", used=" + quotaBudget.used + ", remaining=" + quotaBudget.remaining + ", budgetThisRun=" + quotaBudget.budget);
   }
+  var maxRuntimeMs = runOptions && runOptions.maxRuntimeMs ? runOptions.maxRuntimeMs : null;
+  var runStartMs = Date.now();
+  var timedOut = false;
+  var lastProcessedDay = offset - 1;
   var desiredSleep = [];
   for (var i = offset; i <= endDay; i++) {
+    if (maxRuntimeMs != null && (Date.now() - runStartMs) >= maxRuntimeMs) {
+      timedOut = true;
+      break;
+    }
+    lastProcessedDay = i;
     var dayD = new Date(now.getTime());
     dayD.setHours(0, 0, 0, 0);
     dayD = new Date(dayD.getTime() + i * msPerDay);
@@ -304,17 +346,17 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
     if (targetWake.getTime() > nightEnd.getTime()) nightEnd = new Date(targetWake.getTime());
     if (nightStart.getTime() >= nightEnd.getTime()) continue;
 
-    var commitments = _sleepCollectCommitmentEvents(nightStart, nightEnd);
+    var commitments = _sleepGetCommitmentsForWindow(prefetchedCommitments, nightStart.getTime(), nightEnd.getTime());
     var conflictTitles = [];
     var lastMainConflict = null;  // Last non-travel overlapping event (by end time) for concise title
     var hasOverlap = false;
     for (var c = 0; c < commitments.length; c++) {
-      var evStart = commitments[c].getStartTime().getTime();
-      var evEnd = commitments[c].getEndTime().getTime();
+      var evStart = commitments[c].startMs;
+      var evEnd = commitments[c].endMs;
       if (_sleepOverlaps(targetStart, targetEnd, evStart, evEnd)) {
         hasOverlap = true;
-        var t = (commitments[c].getTitle() || "").trim();
-        if (!t) t = "(" + (commitments[c].getCalendar().getName() || "no title") + ")";
+        var t = (commitments[c].title || "").trim();
+        if (!t) t = "(" + (commitments[c].calendarName || "no title") + ")";
         if (conflictTitles.indexOf(t) === -1) conflictTitles.push(t);
         if (!_sleepIsTravelConflict(t) && (lastMainConflict === null || evEnd > lastMainConflict.endMs)) {
           lastMainConflict = { title: t, endMs: evEnd };
@@ -395,13 +437,18 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
       });
     }
   }
+  if (timedOut) {
+    console.warn("addEvents_Sleep: runtime guard reached; synced up to day index " + lastProcessedDay + " this run.");
+  }
+  if (lastProcessedDay < offset) {
+    console.warn("addEvents_Sleep: runtime guard reached before processing any day; skipping writes this run.");
+    return;
+  }
 
-  var todayStart = new Date(now.getTime());
-  todayStart.setHours(0, 0, 0, 0);
   var syncStart = new Date(todayStart.getTime() + offset * msPerDay);
   syncStart.setHours(0, 0, 0, 0);
   if (offset === 0) syncStart = new Date(todayStart.getTime() - msPerDay);
-  var syncEnd = new Date(todayStart.getTime() + endDay * msPerDay);
+  var syncEnd = new Date(todayStart.getTime() + lastProcessedDay * msPerDay);
   syncEnd.setHours(23, 59, 59, 999);
 
   var keyFromExistingWithList = function (ev, existingList) {
@@ -481,7 +528,3 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   }
 }
 
-/** Wipes all future events on the Sleep calendar (no tag filter). Uses _wipeCalendarFutureEvents in Code.gs. */
-function wipeSleepCalendar() {
-  _wipeCalendarFutureEvents(SLEEP_CALENDAR_ID);
-}

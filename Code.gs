@@ -262,61 +262,6 @@ function _commitQuotaUsage(serviceName, amountUsed) {
 }
 
 /**
- * Master TimeMap: updates Travel drive events then Sleep blocks using quota-aware budgeting.
- */
-async function update_Master_TimeMap() {
-  updateTravelDriveEvents(0, SCHEDULING_WINDOW);
-  await addEvents_Sleep(0, SCHEDULING_WINDOW, { useQuotaBudget: true });
-}
-
-/** Runs only Travel drive events update (quota-aware in Travel.gs). */
-function update_Master_TimeMap_Travel() {
-  updateTravelDriveEvents(0, SCHEDULING_WINDOW);
-}
-
-/** Runs only Sleep block updates with calendar-create quota budgeting. */
-async function update_Master_TimeMap_Sleep() {
-  await addEvents_Sleep(0, SCHEDULING_WINDOW, { useQuotaBudget: true });
-}
-
-/** Number of days per Travel chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
-const TRAVEL_DAYS_PER_CHUNK = 30;
-
-/**
- * Runs Travel drive events for one chunk of the scheduling window. Use to stay under execution time limit:
- * e.g. trigger update_Master_TimeMap_Travel_Chunk(0) and update_Master_TimeMap_Travel_Chunk(1) 5 min apart.
- * @param {number} chunkIndex - 0 = first TRAVEL_DAYS_PER_CHUNK days, 1 = next TRAVEL_DAYS_PER_CHUNK, etc.
- */
-function update_Master_TimeMap_Travel_Chunk(chunkIndex) {
-  var offset = (chunkIndex || 0) * TRAVEL_DAYS_PER_CHUNK;
-  var count = Math.min(TRAVEL_DAYS_PER_CHUNK, SCHEDULING_WINDOW - offset);
-  if (count <= 0) return;
-  updateTravelDriveEvents(offset, count);
-}
-
-
-function updateWorkEventTask() {
-
-  updateWorkEvents();
-  addEvents_WorkingHoursTotals();
-  
-  return;
-}
-
-async function wipeAllCalendars() {
-  wipeWorkCalendar();
-  wipeTimeMapCalendar();
-}
-
-async function wipeWorkCalendar() {
-  _wipeCalendar(WORK_CALENDAR_ID);
-}
-
-async function wipeTimeMapCalendar() {
-  _wipeCalendar(TIMEMAP_CALENDAR_ID);
-}
-
-/**
  * Deletes all events in the given calendar that start on or after 'now'.
  * Does not filter by tag - every future event in the calendar is removed.
  * @param {string} calendarId - Full calendar ID (from Calendar settings).
@@ -599,16 +544,6 @@ function _dateDifference(firstDate, secondDate, unit) {
   return differenceMilliSec;
 }
 
-function clean_used_timeMapCal() {
-  var now = new Date();
-  var endDate = new Date();
-  endDate.setDate(now.getDate() + SCHEDULING_WINDOW);
-  var timemap_calendar = CalendarApp.getCalendarById(TIMEMAP_CALENDAR_ID);
-  var arr = ['[Outside]', '[Inside]', '[NiceWeather]', '[Daylight]', '[Not@work]', '[SLEEP]'];
-  return _clean_timeMapCal(timemap_calendar, arr, now, endDate);
-
-}
-
 function _clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
   if (!Array.isArray(arrEventNames)) {
     arrEventNames = [arrEventNames];
@@ -723,31 +658,6 @@ function _BlindAdd_TimeMapEvents_from_EventArr(timemapCal, EventsArr, timeMapTit
 
 
 
-
-
-/**
- * Fetches flight data from Aviation Stack API.
- * Set script property AVIATION_STACK_API_KEY in File > Project properties > Script properties.
- */
-function getFlightData() {
-  var props = PropertiesService.getScriptProperties();
-  var flightAPIkey = props.getProperty('AVIATION_STACK_API_KEY');
-  if (!flightAPIkey) {
-    console.warn('AVIATION_STACK_API_KEY not set in Script properties. Skipping getFlightData.');
-    return null;
-  }
-  var url = 'https://api.aviationstack.com/v1/flights?access_key=' + flightAPIkey;
-  try {
-    var response = UrlFetchApp.fetch(url);
-    var json = response.getContentText();
-    var data = JSON.parse(json);
-    console.log(data);
-    return data;
-  } catch (e) {
-    console.error('getFlightData failed: ' + e.message);
-    return null;
-  }
-}
 
 
 var URL_FETCH_MAX_RETRIES = 3;

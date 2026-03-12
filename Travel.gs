@@ -288,8 +288,9 @@ function _travelBuildLegCandidates(events, homeStr) {
  * - prioritize soonest stale (>3 days), never-checked, or fallback legs
  * - spend Maps calls up to per-run budget
  * - use stored durations/fallback for remaining legs
+ * @param {{maxRuntimeMs?: number}} [runOptions] - Optional runtime guard for stale-leg refresh loop.
  */
-function _travelBuildDurationCache(events, homeStr) {
+function _travelBuildDurationCache(events, homeStr, runOptions) {
   var cache = {};
   var nowMs = Date.now();
   var legs = _travelBuildLegCandidates(events, homeStr);
@@ -298,6 +299,8 @@ function _travelBuildDurationCache(events, homeStr) {
   var mapsCallsUsed = 0;
   var mapsCallsAttempted = 0;
   var staleLegs = [];
+  var runStartMs = Date.now();
+  var maxRuntimeMs = runOptions && runOptions.maxRuntimeMs ? runOptions.maxRuntimeMs : null;
 
   for (var i = 0; i < legs.length; i++) {
     var leg = legs[i];
@@ -322,6 +325,10 @@ function _travelBuildDurationCache(events, homeStr) {
   });
 
   for (var s = 0; s < staleLegs.length; s++) {
+    if (maxRuntimeMs != null && (Date.now() - runStartMs) >= maxRuntimeMs) {
+      console.warn("Travel runtime guard reached while refreshing stale leg durations. Remaining legs will use stored/fallback durations.");
+      break;
+    }
     if (mapsCallsUsed >= mapsBudget) break;
     var candidate = staleLegs[s].leg;
     try {
@@ -387,8 +394,9 @@ function _travelBuildDurationCache(events, homeStr) {
  * Syncs [Drive] events: only deletes orphans, creates missing, updates in place (avoids API rate limit).
  * @param {number} [dayOffset=0] - Start this many days from today (for chunked runs).
  * @param {number} [dayCount] - Number of days to process; default SCHEDULING_WINDOW. Use with dayOffset to run in chunks.
+ * @param {{maxRuntimeMs?: number}} [runOptions] - Optional runtime guard for Maps stale-leg refresh.
  */
-function updateTravelDriveEvents(dayOffset, dayCount) {
+function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
   var travelCal = CalendarApp.getCalendarById(TRAVEL_CALENDAR_ID);
   if (!travelCal) {
     console.warn("Travel calendar not found. Set TRAVEL_CALENDAR_ID in Travel.gs.");
@@ -415,7 +423,7 @@ function updateTravelDriveEvents(dayOffset, dayCount) {
   }
 
   var homeStr = _travelHomeOrigin();
-  var cache = _travelBuildDurationCache(events, homeStr);
+  var cache = _travelBuildDurationCache(events, homeStr, runOptions);
 
   var cacheGet = function (origin, dest) {
     return cache[origin + "\n" + dest];
@@ -525,74 +533,3 @@ function updateTravelDriveEvents(dayOffset, dayCount) {
   });
 }
 
-/** Wipes all future events on the Travel calendar (no tag filter). Uses _wipeCalendarFutureEvents in Code.gs. */
-function wipeTravelCalendar() {
-  _wipeCalendarFutureEvents(TRAVEL_CALENDAR_ID);
-}
-
-/**
- * DIAGNOSTIC: Run this from the Apps Script editor to log any gym-like events in the next 14 days.
- * Use the output to tune TRAVEL_GYM_* / SLEEP_IGNORE_* criteria. View log: Executions > (run) > Logs.
- * Copy the "--- EVENT DATA (paste this for tuning) ---" block and paste it back so we can fix matching.
- */
-function logGymCandidatesForTuning() {
-  var now = new Date();
-  var startDate = new Date(now.getTime());
-  startDate.setHours(0, 0, 0, 0);
-  var endDate = new Date(startDate.getTime());
-  endDate.setDate(endDate.getDate() + 14);
-  endDate.setHours(23, 59, 59, 999);
-
-  var keywords = ["gym", "snap", "fitness", "ashburton"];
-  var allCalendars = CalendarApp.getAllCalendars();
-  var found = [];
-
-  for (var i = 0; i < allCalendars.length; i++) {
-    var cal = allCalendars[i];
-    if (_travelIsCalendarExcluded(cal)) continue;
-    var calEvents = cal.getEvents(startDate, endDate);
-    for (var k = 0; k < calEvents.length; k++) {
-      var ev = calEvents[k];
-      if (ev.isAllDayEvent()) continue;
-      var title = (ev.getTitle() || "");
-      var loc = (ev.getLocation() || "");
-      var titleLower = title.toLowerCase();
-      var locLower = loc.toLowerCase();
-      var match = false;
-      for (var w = 0; w < keywords.length; w++) {
-        if (titleLower.indexOf(keywords[w]) !== -1 || locLower.indexOf(keywords[w]) !== -1) {
-          match = true;
-          break;
-        }
-      }
-      if (!match) continue;
-      var isMatch = _travelIsGymAshburton(ev);
-      found.push({
-        title: title,
-        location: loc,
-        start: ev.getStartTime(),
-        end: ev.getEndTime(),
-        calendar: cal.getName(),
-        currentMatch: isMatch
-      });
-    }
-  }
-
-  Logger.log("=== Gym candidate events (next 14 days) ===");
-  if (found.length === 0) {
-    Logger.log("No events found containing gym/snap/fitness/ashburton. Try widening the date range or keywords.");
-    return;
-  }
-  for (var f = 0; f < found.length; f++) {
-    var o = found[f];
-    Logger.log("--- EVENT DATA (paste this for tuning) ---");
-    Logger.log("title: " + JSON.stringify(o.title));
-    Logger.log("location: " + JSON.stringify(o.location));
-    Logger.log("title.length: " + o.title.length + ", location.length: " + o.location.length);
-    Logger.log("start: " + o.start.toISOString ? o.start.toISOString() : String(o.start));
-    Logger.log("end: " + o.end.toISOString ? o.end.toISOString() : String(o.end));
-    Logger.log("calendar: " + o.calendar);
-    Logger.log("currentMatch (is Gym Ashburton?): " + o.currentMatch);
-    Logger.log("--- END EVENT ---");
-  }
-}
