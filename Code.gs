@@ -63,6 +63,13 @@ const PAY_PERIOD = 14; // days
 const LOCATION_LAT = -37.910156;
 const LOCATION_LONG = 145.107420;
 
+// Shared Gym constants used by Travel and TimeMapBlocks modules.
+const GYM_TITLE = "Gym";
+const GYM_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
+const GYM_DRIVE_MINUTES = 10;
+// Create/use a calendar for generated Gym sessions (must NOT be in CALENDARS_TO_EXCLUDE).
+const GYM_EVENT_CALENDAR_ID = "1a1a44068207e09221d980c6c0ee587bc86587f680f862e56ba0bf6a8e47e020@group.calendar.google.com";
+
 // Calendars to exclude when scanning (Sleep commitments, Travel locations, etc.). Use names (e.g. "Travel", "Timemap") or full IDs. Each module also excludes its own calendar by ID.
 const CALENDARS_TO_EXCLUDE = ["Travel", "Waverley Valley Scout Group - Shared Calendar","WV SCOUTS", "Travel Time", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
 

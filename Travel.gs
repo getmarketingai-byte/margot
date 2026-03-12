@@ -19,10 +19,6 @@ const TRAVEL_VIRTUAL_LOCATION_SUBSTRINGS = ["microsoft teams meeting", "teams me
 const TRAVEL_ARRIVE_MINUTES_BEFORE = 15;
 const TRAVEL_MIN_HOME_MINUTES = 30;
 const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
-/** Special case: event with this title and location (substring match) uses fixed 10 min travel and no arrival buffer. */
-const TRAVEL_GYM_TITLE = "Gym";
-const TRAVEL_GYM_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
-const TRAVEL_GYM_DRIVE_MINUTES = 10;
 
 // Rate limiting for Maps API calls (avoid quota issues). Sleep every N calls to balance runtime vs quota.
 const TRAVEL_MAPS_SLEEP_MS = 300;
@@ -136,20 +132,20 @@ function _travelIsCalendarExcluded(cal) {
 }
 
 /**
- * Returns true if the location string is the Gym at Snap Fitness Ashburton (used to skip Maps API for that leg).
+ * Returns true if the location string is the configured Gym location (used to skip Maps API for that leg).
  */
 function _travelIsGymLocation(loc) {
-  return (loc || "").indexOf(TRAVEL_GYM_LOCATION_SUBSTRING) !== -1;
+  return (loc || "").indexOf(GYM_LOCATION_SUBSTRING) !== -1;
 }
 
 /**
- * Returns true if the event is the special-case Gym at Snap Fitness Ashburton (10 min drive, no arrival buffer).
- * Location is matched by containing TRAVEL_GYM_LOCATION_SUBSTRING (handles full address e.g. "..., 234 High St, ...").
+ * Returns true if the event is the special-case Gym (fixed drive minutes, no arrival buffer).
+ * Location is matched by containing GYM_LOCATION_SUBSTRING (handles full address e.g. "..., 234 High St, ...").
  */
 function _travelIsGymAshburton(calendarEvent) {
   var title = (calendarEvent.getTitle() || "").trim();
   var loc = (calendarEvent.getLocation() || "").trim();
-  return title === TRAVEL_GYM_TITLE && _travelIsGymLocation(loc);
+  return title === GYM_TITLE && _travelIsGymLocation(loc);
 }
 
 /**
@@ -305,7 +301,7 @@ function _travelBuildDurationCache(events, homeStr, runOptions) {
   for (var i = 0; i < legs.length; i++) {
     var leg = legs[i];
     if (_travelIsGymLocation(leg.origin) || _travelIsGymLocation(leg.dest)) {
-      cache[leg.key] = TRAVEL_GYM_DRIVE_MINUTES;
+      cache[leg.key] = GYM_DRIVE_MINUTES;
       continue;
     }
     var state = _travelGetLegState(leg.origin, leg.dest);
@@ -371,7 +367,7 @@ function _travelBuildDurationCache(events, homeStr, runOptions) {
     var leg = legs[i];
     if (cache[leg.key] != null) continue;
     if (_travelIsGymLocation(leg.origin) || _travelIsGymLocation(leg.dest)) {
-      cache[leg.key] = TRAVEL_GYM_DRIVE_MINUTES;
+      cache[leg.key] = GYM_DRIVE_MINUTES;
       continue;
     }
     var state = _travelGetLegState(leg.origin, leg.dest) || {};
@@ -445,7 +441,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
 
     // --- Outbound ---
     var outboundOrigin = homeStr;
-    var outboundDurationMin = isGymAshburton ? TRAVEL_GYM_DRIVE_MINUTES : cacheGet(homeStr, evLoc);
+    var outboundDurationMin = isGymAshburton ? GYM_DRIVE_MINUTES : cacheGet(homeStr, evLoc);
     var parentIdx = _travelIndexOfContainingEvent(events, i);
     if (parentIdx >= 0 && !isGymAshburton) {
       outboundOrigin = events[parentIdx].getLocation();
@@ -483,7 +479,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
 
     // --- Inbound ---
     var inboundDest = homeStr;
-    var inboundDurationMin = isGymAshburton ? TRAVEL_GYM_DRIVE_MINUTES : cacheGet(evLoc, homeStr);
+    var inboundDurationMin = isGymAshburton ? GYM_DRIVE_MINUTES : cacheGet(evLoc, homeStr);
     if (i < events.length - 1 && !isGymAshburton) {
       var next = events[i + 1];
       var nextStart = next.getStartTime();

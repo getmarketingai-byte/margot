@@ -5,7 +5,7 @@
 
 // Keep individual trigger runs under the 6-minute Apps Script hard limit.
 const MAX_RUNTIME_PER_RUN_MS = 5 * 60 * 1000;
-// update_Master_TimeMap runs Travel + Sleep in one execution, so each phase gets a smaller cap.
+// update_Master_TimeMap runs Travel + Sleep + TimeMap blocks in one execution, so each phase gets a smaller cap.
 const MAX_RUNTIME_COMBINED_PHASE_MS = 2 * 60 * 1000;
 
 /** Number of days per Travel chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
@@ -14,11 +14,12 @@ const TRAVEL_DAYS_PER_CHUNK = 30;
 const SLEEP_DAYS_PER_CHUNK = 30;
 
 /**
- * Master TimeMap: updates Travel drive events then Sleep blocks using quota-aware budgeting.
+ * Master TimeMap: updates Travel drive events, Sleep blocks, then TimeMap/Gym blocks.
  */
 async function update_Master_TimeMap() {
   updateTravelDriveEvents(0, SCHEDULING_WINDOW, { maxRuntimeMs: MAX_RUNTIME_COMBINED_PHASE_MS });
   await addEvents_Sleep(0, SCHEDULING_WINDOW, { useQuotaBudget: true, maxRuntimeMs: MAX_RUNTIME_COMBINED_PHASE_MS });
+  addEvents_TimeMapBlocks(0, SCHEDULING_WINDOW, { maxRuntimeMs: MAX_RUNTIME_COMBINED_PHASE_MS });
 }
 
 /** Runs only Travel drive events update (quota-aware in Travel.gs). */
@@ -64,6 +65,7 @@ function setup_MasterTimeMap_SplitTriggers() {
     update_Master_TimeMap: true,
     update_Master_TimeMap_Travel: true,
     update_Master_TimeMap_Sleep: true,
+    update_Master_TimeMap_TimeMapBlocks: true,
     update_Master_TimeMap_Travel_Chunk: true,
     update_Master_TimeMap_Sleep_Chunk: true
   };
@@ -75,6 +77,7 @@ function setup_MasterTimeMap_SplitTriggers() {
   // Apps Script does not expose exact minute offsets for everyHours triggers; creation time sets natural staggering.
   ScriptApp.newTrigger("update_Master_TimeMap_Travel").timeBased().everyHours(2).create();
   ScriptApp.newTrigger("update_Master_TimeMap_Sleep").timeBased().everyHours(2).create();
+  ScriptApp.newTrigger("update_Master_TimeMap_TimeMapBlocks").timeBased().everyHours(2).create();
 }
 
 /** Manual runner: updates work overlays and pay-cycle summary events. */
@@ -105,7 +108,7 @@ function clean_used_timeMapCal() {
   var endDate = new Date();
   endDate.setDate(now.getDate() + SCHEDULING_WINDOW);
   var timemap_calendar = CalendarApp.getCalendarById(TIMEMAP_CALENDAR_ID);
-  var arr = ['[Outside]', '[Inside]', '[NiceWeather]', '[Daylight]', '[Not@work]', '[SLEEP]'];
+  var arr = ['[Outside]', '[Inside]', '[NiceWeather]', '[Daylight]', '[Not@work]', '[SLEEP]', TIMEMAP_1_TITLE, TIMEMAP_2_TITLE, TIMEMAP_3_TITLE, TIMEMAP_4_TITLE, TIMEMAP_ERRANDS_TITLE, TIMEMAP_SCOUTHALL_TITLE];
   return _clean_timeMapCal(timemap_calendar, arr, now, endDate);
 }
 
