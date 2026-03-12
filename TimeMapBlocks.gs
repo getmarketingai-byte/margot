@@ -11,6 +11,10 @@ const TIMEMAP_3_TITLE = "[3-Ops/Future]";
 const TIMEMAP_4_TITLE = "[4-Play]";
 const TIMEMAP_ERRANDS_TITLE = "[Errands]";
 const TIMEMAP_SCOUTHALL_TITLE = "[@scouthall]";
+const GYM_RUN_TO_TITLE = "[Run] to Gym";
+const GYM_RUN_HOME_TITLE = "[Run] Home";
+const GYM_DRIVE_TO_TITLE = "[Drive] To: Gym";
+const GYM_DRIVE_HOME_TITLE = "[Drive] Home";
 
 // Full-day target durations.
 const TIMEMAP_1_HOURS = 4;
@@ -59,15 +63,25 @@ function _timeMapIsScoutHallLocation(locationText) {
 }
 
 /**
+ * True if this calendar looks like a SkedPal calendar (name or ID).
+ */
+function _timeMapIsSkedpalCalendar(cal) {
+  var id = String(cal.getId() || "").toLowerCase();
+  var name = String(cal.getName() || "").toLowerCase();
+  return id.indexOf("skedpal") !== -1 || name.indexOf("skedpal") !== -1;
+}
+
+/**
  * Returns true if this calendar should be ignored for TimeMap busy collection.
  */
 function _timeMapIsCalendarExcluded(cal, extraExcludedById) {
   var id = cal.getId();
   var name = cal.getName();
   if (extraExcludedById && extraExcludedById[id]) return true;
-  // Explicitly include Travel/Sleep as busy inputs even if their names are in CALENDARS_TO_EXCLUDE.
+  // Explicitly include Travel/Sleep and SkedPal as busy inputs even if their names are in CALENDARS_TO_EXCLUDE.
   if (typeof TRAVEL_CALENDAR_ID !== "undefined" && id === TRAVEL_CALENDAR_ID) return false;
   if (typeof SLEEP_CALENDAR_ID !== "undefined" && id === SLEEP_CALENDAR_ID) return false;
+  if (_timeMapIsSkedpalCalendar(cal)) return false;
   for (var i = 0; i < CALENDARS_TO_EXCLUDE.length; i++) {
     var ex = CALENDARS_TO_EXCLUDE[i];
     if (ex === id || ex === name) return true;
@@ -153,10 +167,26 @@ function _timeMapFindSlotInWindow(gaps, windowStartMs, windowEndMs, durationMs) 
 }
 
 /**
+ * Finds a slot only if it can start at exactStartMs.
+ */
+function _timeMapFindSlotAtExactStart(gaps, exactStartMs, durationMs) {
+  var exactEndMs = exactStartMs + durationMs;
+  for (var i = 0; i < gaps.length; i++) {
+    if (gaps[i].startMs <= exactStartMs && gaps[i].endMs >= exactEndMs) {
+      return { startMs: exactStartMs, endMs: exactEndMs };
+    }
+  }
+  return null;
+}
+
+/**
  * Picks one Gym slot for the day according to window and duration preferences.
  */
 function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
   var msPerMinute = 60 * 1000;
+  var preferredExactStarts = [
+    new Date(dayStartMs).setHours(11, 30, 0, 0)
+  ];
   var windows = [
     {
       startMs: new Date(dayStartMs).setHours(11, 0, 0, 0),
@@ -172,20 +202,56 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
     }
   ];
   var options = [
-    { minutes: 90, useLocation: false },
-    { minutes: 45 + 2 * GYM_DRIVE_MINUTES, useLocation: true },
-    { minutes: 30 + 2 * GYM_DRIVE_MINUTES, useLocation: true }
+    { gymMinutes: 90, travelEachMinutes: 0, travelMode: "none" },
+    // Prefer run legs first (long then short), then fallback to drive legs.
+    { gymMinutes: 45, travelEachMinutes: GYM_RUN_MINUTES, travelMode: "run" },
+    { gymMinutes: 30, travelEachMinutes: GYM_RUN_MINUTES, travelMode: "run" },
+    { gymMinutes: 45, travelEachMinutes: GYM_DRIVE_MINUTES, travelMode: "drive" },
+    { gymMinutes: 30, travelEachMinutes: GYM_DRIVE_MINUTES, travelMode: "drive" }
   ];
-  for (var w = 0; w < windows.length; w++) {
-    for (var o = 0; o < options.length; o++) {
-      var durationMs = options[o].minutes * msPerMinute;
-      var slot = _timeMapFindSlotInWindow(freeGaps, windows[w].startMs, windows[w].endMs, durationMs);
+  for (var o = 0; o < options.length; o++) {
+    var totalMinutes = options[o].gymMinutes + (2 * options[o].travelEachMinutes);
+    var durationMs = totalMinutes * msPerMinute;
+
+    for (var p = 0; p < preferredExactStarts.length; p++) {
+      var exactStartMs = preferredExactStarts[p];
+      var slot = _timeMapFindSlotAtExactStart(freeGaps, exactStartMs, durationMs);
       if (slot) {
+        var travelMs = options[o].travelEachMinutes * msPerMinute;
+        var gymDurationMs = options[o].gymMinutes * msPerMinute;
+        var gymStartMs = slot.startMs + travelMs;
+        var gymEndMs = gymStartMs + gymDurationMs;
         return {
           startMs: slot.startMs,
           endMs: slot.endMs,
-          minutes: options[o].minutes,
-          useLocation: options[o].useLocation
+          gymStartMs: gymStartMs,
+          gymEndMs: gymEndMs,
+          travelMode: options[o].travelMode,
+          travelBeforeStartMs: travelMs > 0 ? slot.startMs : null,
+          travelBeforeEndMs: travelMs > 0 ? gymStartMs : null,
+          travelAfterStartMs: travelMs > 0 ? gymEndMs : null,
+          travelAfterEndMs: travelMs > 0 ? slot.endMs : null
+        };
+      }
+    }
+
+    for (var w = 0; w < windows.length; w++) {
+      var slot = _timeMapFindSlotInWindow(freeGaps, windows[w].startMs, windows[w].endMs, durationMs);
+      if (slot) {
+        var travelMs = options[o].travelEachMinutes * msPerMinute;
+        var gymDurationMs = options[o].gymMinutes * msPerMinute;
+        var gymStartMs = slot.startMs + travelMs;
+        var gymEndMs = gymStartMs + gymDurationMs;
+        return {
+          startMs: slot.startMs,
+          endMs: slot.endMs,
+          gymStartMs: gymStartMs,
+          gymEndMs: gymEndMs,
+          travelMode: options[o].travelMode,
+          travelBeforeStartMs: travelMs > 0 ? slot.startMs : null,
+          travelBeforeEndMs: travelMs > 0 ? gymStartMs : null,
+          travelAfterStartMs: travelMs > 0 ? gymEndMs : null,
+          travelAfterEndMs: travelMs > 0 ? slot.endMs : null
         };
       }
     }
@@ -497,13 +563,39 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
 
     var gymSlot = gymCal ? _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) : null;
     if (gymSlot) {
+      var toTitle = gymSlot.travelMode === "run" ? GYM_RUN_TO_TITLE : GYM_DRIVE_TO_TITLE;
+      var homeTitle = gymSlot.travelMode === "run" ? GYM_RUN_HOME_TITLE : GYM_DRIVE_HOME_TITLE;
+      var toKey = gymSlot.travelMode === "run" ? dayKey + "_Gym_RunTo" : dayKey + "_Gym_DriveTo";
+      var homeKey = gymSlot.travelMode === "run" ? dayKey + "_Gym_RunHome" : dayKey + "_Gym_DriveHome";
+
+      if (gymSlot.travelBeforeStartMs != null && gymSlot.travelBeforeEndMs != null) {
+        desiredGym.push({
+          key: toKey,
+          title: toTitle,
+          startMs: gymSlot.travelBeforeStartMs,
+          endMs: gymSlot.travelBeforeEndMs,
+          location: ""
+        });
+      }
+
       desiredGym.push({
-        key: dayKey + "_Gym",
+        key: dayKey + "_Gym_Main",
         title: GYM_TITLE,
-        startMs: gymSlot.startMs,
-        endMs: gymSlot.endMs,
-        location: gymSlot.useLocation ? GYM_LOCATION_SUBSTRING : ""
+        startMs: gymSlot.gymStartMs,
+        endMs: gymSlot.gymEndMs,
+        location: GYM_LOCATION_SUBSTRING
       });
+
+      if (gymSlot.travelAfterStartMs != null && gymSlot.travelAfterEndMs != null) {
+        desiredGym.push({
+          key: homeKey,
+          title: homeTitle,
+          startMs: gymSlot.travelAfterStartMs,
+          endMs: gymSlot.travelAfterEndMs,
+          location: ""
+        });
+      }
+
       busy.push({ startMs: gymSlot.startMs, endMs: gymSlot.endMs });
       mergedBusy = _timeMapMergeIntervals(busy);
       freeGaps = _timeMapFreeGaps(dayStartMs, dayEndMs, mergedBusy);
@@ -559,11 +651,42 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   });
 
   if (gymCal) {
-    _syncCalendarEvents(gymCal, GYM_TITLE, syncStart, syncEnd, desiredGym, {
-      keyFromExisting: function (ev) {
-        var kDate = ev.getStartTime();
-        return _timeMapDateKey(kDate) + "_Gym";
-      },
+    var desiredGymMain = desiredGym.filter(function (e) { return e.title === GYM_TITLE; });
+    var desiredGymRunTo = desiredGym.filter(function (e) { return e.title === GYM_RUN_TO_TITLE; });
+    var desiredGymRunHome = desiredGym.filter(function (e) { return e.title === GYM_RUN_HOME_TITLE; });
+    var desiredGymDriveTo = desiredGym.filter(function (e) { return e.title === GYM_DRIVE_TO_TITLE; });
+    var desiredGymDriveHome = desiredGym.filter(function (e) { return e.title === GYM_DRIVE_HOME_TITLE; });
+
+    _syncCalendarEvents(gymCal, GYM_TITLE, syncStart, syncEnd, desiredGymMain, {
+      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_Main"; },
+      onEventSynced: function (calendar, event, desired) {
+        _timeMapSetEventLocation(calendar, event, desired.location || "");
+      }
+    });
+
+    _syncCalendarEvents(gymCal, GYM_RUN_TO_TITLE, syncStart, syncEnd, desiredGymRunTo, {
+      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_RunTo"; },
+      onEventSynced: function (calendar, event, desired) {
+        _timeMapSetEventLocation(calendar, event, desired.location || "");
+      }
+    });
+
+    _syncCalendarEvents(gymCal, GYM_RUN_HOME_TITLE, syncStart, syncEnd, desiredGymRunHome, {
+      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_RunHome"; },
+      onEventSynced: function (calendar, event, desired) {
+        _timeMapSetEventLocation(calendar, event, desired.location || "");
+      }
+    });
+
+    _syncCalendarEvents(gymCal, GYM_DRIVE_TO_TITLE, syncStart, syncEnd, desiredGymDriveTo, {
+      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveTo"; },
+      onEventSynced: function (calendar, event, desired) {
+        _timeMapSetEventLocation(calendar, event, desired.location || "");
+      }
+    });
+
+    _syncCalendarEvents(gymCal, GYM_DRIVE_HOME_TITLE, syncStart, syncEnd, desiredGymDriveHome, {
+      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveHome"; },
       onEventSynced: function (calendar, event, desired) {
         _timeMapSetEventLocation(calendar, event, desired.location || "");
       }

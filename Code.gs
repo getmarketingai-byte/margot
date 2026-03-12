@@ -67,6 +67,7 @@ const LOCATION_LONG = 145.107420;
 const GYM_TITLE = "Gym";
 const GYM_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
 const GYM_DRIVE_MINUTES = 10;
+const GYM_RUN_MINUTES = 30;
 // Create/use a calendar for generated Gym sessions (must NOT be in CALENDARS_TO_EXCLUDE).
 const GYM_EVENT_CALENDAR_ID = "1a1a44068207e09221d980c6c0ee587bc86587f680f862e56ba0bf6a8e47e020@group.calendar.google.com";
 
