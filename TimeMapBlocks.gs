@@ -5,10 +5,10 @@
  */
 
 // TimeMap title constants (order matters: 1 -> 4).
-const TIMEMAP_1_TITLE = "[Promote]";
-const TIMEMAP_2_TITLE = "[Delivery]";
-const TIMEMAP_3_TITLE = "[Build/Future]";
-const TIMEMAP_4_TITLE = "[Play]";
+const TIMEMAP_1_TITLE = "[1-Promote/Creative]";
+const TIMEMAP_2_TITLE = "[2-Execute]";
+const TIMEMAP_3_TITLE = "[3-Ops/Future]";
+const TIMEMAP_4_TITLE = "[4-Play]";
 const TIMEMAP_ERRANDS_TITLE = "[Errands]";
 const TIMEMAP_SCOUTHALL_TITLE = "[@scouthall]";
 
