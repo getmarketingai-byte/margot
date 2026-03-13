@@ -24,7 +24,7 @@ const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
 const TRAVEL_MAPS_SLEEP_MS = 300;
 const TRAVEL_MAPS_SLEEP_EVERY_N = 2;
 /** When Maps API limit is hit, use this duration (minutes) for legs that cannot be realigned from existing drive events. Rechecked on next run when Maps is available. */
-const TRAVEL_FALLBACK_DURATION_MINUTES = 45;
+const TRAVEL_FALLBACK_DURATION_MINUTES = 60;
 const TRAVEL_LEG_STATE_PREFIX = "TRAVEL_LEG_STATE_";
 
 /** Returns true if the error is the Maps "too many times for one day" quota. */
@@ -248,6 +248,16 @@ function _travelSetLegState(origin, dest, state) {
   }
 }
 
+/**
+ * Returns true when a leg is currently using the default fallback duration constant.
+ */
+function _travelLegUsesDefaultFallback(origin, dest) {
+  var state = _travelGetLegState(origin, dest);
+  return !!(state
+    && state.usedFallback === true
+    && state.durationMin === TRAVEL_FALLBACK_DURATION_MINUTES);
+}
+
 function _travelBuildLegCandidates(events, homeStr) {
   var byKey = {};
   function addLeg(origin, dest, priorityTimeMs) {
@@ -428,6 +438,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
   var arriveBeforeMs = TRAVEL_ARRIVE_MINUTES_BEFORE * 60 * 1000;
   var minHomeMs = TRAVEL_MIN_HOME_MINUTES * 60 * 1000;
   var desiredDrive = [];
+  var fallbackNote = " (fallback " + TRAVEL_FALLBACK_DURATION_MINUTES + "m)";
 
   for (var i = 0; i < events.length; i++) {
     var ev = events[i];
@@ -442,10 +453,12 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
     // --- Outbound ---
     var outboundOrigin = homeStr;
     var outboundDurationMin = isGymAshburton ? GYM_DRIVE_MINUTES : cacheGet(homeStr, evLoc);
+    var outboundUsesDefaultFallback = isGymAshburton ? false : _travelLegUsesDefaultFallback(homeStr, evLoc);
     var parentIdx = _travelIndexOfContainingEvent(events, i);
     if (parentIdx >= 0 && !isGymAshburton) {
       outboundOrigin = events[parentIdx].getLocation();
       outboundDurationMin = cacheGet(outboundOrigin, evLoc);
+      outboundUsesDefaultFallback = _travelLegUsesDefaultFallback(outboundOrigin, evLoc);
     } else if (i > 0 && !isGymAshburton) {
       var prev = events[i - 1];
       var prevEnd = prev.getEndTime();
@@ -459,6 +472,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
       if (timeAtHomeMs < minHomeMs) {
         outboundOrigin = prevLoc;
         outboundDurationMin = cacheGet(prevLoc, evLoc);
+        outboundUsesDefaultFallback = _travelLegUsesDefaultFallback(prevLoc, evLoc);
       }
     }
 
@@ -466,6 +480,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
     if (pushOutbound) {
       var outboundStart = new Date(arriveAt.getTime() - outboundDurationMin * 60 * 1000);
       var outboundTitle = TRAVEL_DRIVE_EVENT_TAG + " To: " + evTitle;
+      if (outboundUsesDefaultFallback) outboundTitle += fallbackNote;
       if (outboundStart.getTime() < arriveAt.getTime()) {
         desiredDrive.push({
           title: outboundTitle,
@@ -480,6 +495,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
     // --- Inbound ---
     var inboundDest = homeStr;
     var inboundDurationMin = isGymAshburton ? GYM_DRIVE_MINUTES : cacheGet(evLoc, homeStr);
+    var inboundUsesDefaultFallback = isGymAshburton ? false : _travelLegUsesDefaultFallback(evLoc, homeStr);
     if (i < events.length - 1 && !isGymAshburton) {
       var next = events[i + 1];
       var nextStart = next.getStartTime();
@@ -493,6 +509,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
       if (timeAtHomeMs < minHomeMs) {
         inboundDest = next.getLocation();
         inboundDurationMin = cacheGet(evLoc, inboundDest);
+        inboundUsesDefaultFallback = _travelLegUsesDefaultFallback(evLoc, inboundDest);
       }
     }
 
@@ -511,6 +528,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
       var inboundTitle = inboundDest === homeStr
         ? TRAVEL_DRIVE_EVENT_TAG + " Home"
         : TRAVEL_DRIVE_EVENT_TAG + " To: " + (events[i + 1].getTitle() || "Next");
+      if (inboundUsesDefaultFallback) inboundTitle += fallbackNote;
       desiredDrive.push({
         title: inboundTitle,
         start: inboundStart,
