@@ -101,11 +101,13 @@ function _travelSetEventFree(calendar, event) {
 }
 
 /**
- * Returns true if the calendar should be excluded from travel scanning (name or ID in CALENDARS_TO_EXCLUDE from Config.gs, or is the travel calendar).
+ * Returns true if the calendar should be excluded from travel scanning
+ * (name or ID in CALENDARS_TO_EXCLUDE from Config.gs, travel calendar, or dedicated gym-events calendar).
  */
 function _travelIsCalendarExcluded(cal) {
   var id = cal.getId();
   if (id === TRAVEL_CALENDAR_ID) return true;
+  if (typeof GYM_EVENT_CALENDAR_ID !== "undefined" && id === GYM_EVENT_CALENDAR_ID) return true;
   var name = cal.getName();
   for (var i = 0; i < CALENDARS_TO_EXCLUDE.length; i++) {
     var ex = CALENDARS_TO_EXCLUDE[i];

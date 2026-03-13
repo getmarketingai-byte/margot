@@ -187,6 +187,35 @@ function _timeMapFreeGaps(dayStartMs, dayEndMs, mergedBusy) {
 }
 
 /**
+ * Loads merged [Outside] intervals from the TimeMap calendar for a day window.
+ */
+function _timeMapGetOutsideIntervalsForDay(timemapCal, dayStartMs, dayEndMs) {
+  if (!timemapCal) return [];
+  var outsideEvents = timemapCal.getEvents(new Date(dayStartMs), new Date(dayEndMs), { search: "[Outside]" });
+  var intervals = [];
+  for (var i = 0; i < outsideEvents.length; i++) {
+    var ev = outsideEvents[i];
+    if (ev.isAllDayEvent()) continue;
+    var s = Math.max(dayStartMs, ev.getStartTime().getTime());
+    var e = Math.min(dayEndMs, ev.getEndTime().getTime());
+    if (e > s) intervals.push({ startMs: s, endMs: e });
+  }
+  return _timeMapMergeIntervals(intervals);
+}
+
+/**
+ * True when [startMs, endMs) is fully contained by one merged interval.
+ */
+function _timeMapIntervalIsFullyContained(startMs, endMs, mergedIntervals) {
+  if (startMs == null || endMs == null || endMs <= startMs) return false;
+  var intervals = mergedIntervals || [];
+  for (var i = 0; i < intervals.length; i++) {
+    if (startMs >= intervals[i].startMs && endMs <= intervals[i].endMs) return true;
+  }
+  return false;
+}
+
+/**
  * Finds the first slot of durationMs in gaps, constrained to a window.
  */
 function _timeMapFindSlotInWindow(gaps, windowStartMs, windowEndMs, durationMs) {
@@ -216,7 +245,7 @@ function _timeMapFindSlotAtExactStart(gaps, exactStartMs, durationMs) {
 /**
  * Picks one Gym slot for the day according to window and duration preferences.
  */
-function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
+function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
   var msPerMinute = 60 * 1000;
   var earliestStartMs = new Date(dayStartMs).setHours(GYM_EARLIEST_START_HOUR, GYM_EARLIEST_START_MINUTE, 0, 0);
   var latestEndMs = Math.min(dayEndMs, new Date(dayStartMs).setHours(GYM_LATEST_END_HOUR, GYM_LATEST_END_MINUTE, 0, 0));
@@ -262,14 +291,12 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
   });
   // #endregion
   var options = [
-    { gymMinutes: 90, travelEachMinutes: 0, travelMode: "none" },
+    // Gym session duration must remain 45m/30m; travel is always emitted as separate events.
     // Prefer run legs first (long then short), then fallback to drive legs.
     { gymMinutes: 45, travelEachMinutes: GYM_RUN_MINUTES, travelMode: "run" },
     { gymMinutes: 30, travelEachMinutes: GYM_RUN_MINUTES, travelMode: "run" },
     { gymMinutes: 45, travelEachMinutes: GYM_DRIVE_MINUTES, travelMode: "drive" },
-    { gymMinutes: 30, travelEachMinutes: GYM_DRIVE_MINUTES, travelMode: "drive" },
-    // Final fallback: still schedule a short gym block if only a 30-minute daytime window is available.
-    { gymMinutes: 30, travelEachMinutes: 0, travelMode: "none" }
+    { gymMinutes: 30, travelEachMinutes: GYM_DRIVE_MINUTES, travelMode: "drive" }
   ];
   var windowFitMinutes = [];
   for (var wi = 0; wi < windows.length; wi++) {
@@ -323,6 +350,45 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
     optionFeasibility: optionFeasibility
   });
   // #endregion
+  var mergedOutside = outsideIntervals || [];
+  var tryBuildGymPlacement = function (slot, option, sourceLabel, sourceData) {
+    var travelMs = option.travelEachMinutes * msPerMinute;
+    var gymDurationMs = option.gymMinutes * msPerMinute;
+    var gymStartMs = slot.startMs + travelMs;
+    var gymEndMs = gymStartMs + gymDurationMs;
+    if (option.travelMode === "run") {
+      var thereCovered = _timeMapIntervalIsFullyContained(slot.startMs, gymStartMs, mergedOutside);
+      var backCovered = _timeMapIntervalIsFullyContained(gymEndMs, slot.endMs, mergedOutside);
+      if (!thereCovered || !backCovered) {
+        // #region agent log
+        _timeMapDebugLog("gym-debug", "H23", "TimeMapBlocks.gs:_timeMapPlaceGym:run-rejected-outside", "Run option rejected because [Outside] does not fully cover both legs", {
+          source: sourceLabel,
+          sourceData: sourceData || null,
+          slotStartMs: slot.startMs,
+          slotEndMs: slot.endMs,
+          gymStartMs: gymStartMs,
+          gymEndMs: gymEndMs,
+          thereCovered: thereCovered,
+          backCovered: backCovered,
+          outsideIntervalsCount: mergedOutside.length
+        });
+        // #endregion
+        return null;
+      }
+    }
+    return {
+      startMs: slot.startMs,
+      endMs: slot.endMs,
+      gymStartMs: gymStartMs,
+      gymEndMs: gymEndMs,
+      travelMode: option.travelMode,
+      travelBeforeStartMs: travelMs > 0 ? slot.startMs : null,
+      travelBeforeEndMs: travelMs > 0 ? gymStartMs : null,
+      travelAfterStartMs: travelMs > 0 ? gymEndMs : null,
+      travelAfterEndMs: travelMs > 0 ? slot.endMs : null
+    };
+  };
+
   for (var o = 0; o < options.length; o++) {
     var totalMinutes = options[o].gymMinutes + (2 * options[o].travelEachMinutes);
     var durationMs = totalMinutes * msPerMinute;
@@ -333,10 +399,8 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
       if (exactStartMs + durationMs > latestEndMs) continue;
       var slot = _timeMapFindSlotAtExactStart(freeGaps, exactStartMs, durationMs);
       if (slot) {
-        var travelMs = options[o].travelEachMinutes * msPerMinute;
-        var gymDurationMs = options[o].gymMinutes * msPerMinute;
-        var gymStartMs = slot.startMs + travelMs;
-        var gymEndMs = gymStartMs + gymDurationMs;
+        var placementExact = tryBuildGymPlacement(slot, options[o], "exact-start", { exactStartMs: exactStartMs });
+        if (!placementExact) continue;
         // #region agent log
         _timeMapDebugLog("gym-debug", "H3", "TimeMapBlocks.gs:_timeMapPlaceGym:exact-match", "Gym slot selected via preferred exact start", { dayStartMs: dayStartMs, freeGapsCount: (freeGaps || []).length, travelMode: options[o].travelMode, gymMinutes: options[o].gymMinutes, travelEachMinutes: options[o].travelEachMinutes, slotStartMs: slot.startMs, slotEndMs: slot.endMs });
         // #endregion
@@ -344,31 +408,19 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
         _timeMapDebugLog("gym-debug", "H12", "TimeMapBlocks.gs:_timeMapPlaceGym:exact-match-local", "Gym exact-match slot local time", {
           slotStartLocal: _timeMapFormatMsLocal(slot.startMs),
           slotEndLocal: _timeMapFormatMsLocal(slot.endMs),
-          gymStartLocal: _timeMapFormatMsLocal(gymStartMs),
-          gymEndLocal: _timeMapFormatMsLocal(gymEndMs)
+          gymStartLocal: _timeMapFormatMsLocal(placementExact.gymStartMs),
+          gymEndLocal: _timeMapFormatMsLocal(placementExact.gymEndMs)
         });
         // #endregion
-        return {
-          startMs: slot.startMs,
-          endMs: slot.endMs,
-          gymStartMs: gymStartMs,
-          gymEndMs: gymEndMs,
-          travelMode: options[o].travelMode,
-          travelBeforeStartMs: travelMs > 0 ? slot.startMs : null,
-          travelBeforeEndMs: travelMs > 0 ? gymStartMs : null,
-          travelAfterStartMs: travelMs > 0 ? gymEndMs : null,
-          travelAfterEndMs: travelMs > 0 ? slot.endMs : null
-        };
+        return placementExact;
       }
     }
 
     for (var w = 0; w < windows.length; w++) {
       var slot = _timeMapFindSlotInWindow(freeGaps, windows[w].startMs, windows[w].endMs, durationMs);
       if (slot) {
-        var travelMs = options[o].travelEachMinutes * msPerMinute;
-        var gymDurationMs = options[o].gymMinutes * msPerMinute;
-        var gymStartMs = slot.startMs + travelMs;
-        var gymEndMs = gymStartMs + gymDurationMs;
+        var placementWindow = tryBuildGymPlacement(slot, options[o], "window", { windowIndex: w });
+        if (!placementWindow) continue;
         // #region agent log
         _timeMapDebugLog("gym-debug", "H3", "TimeMapBlocks.gs:_timeMapPlaceGym:window-match", "Gym slot selected via window search", { dayStartMs: dayStartMs, freeGapsCount: (freeGaps || []).length, windowIndex: w, windowStartMs: windows[w].startMs, windowEndMs: windows[w].endMs, travelMode: options[o].travelMode, gymMinutes: options[o].gymMinutes, travelEachMinutes: options[o].travelEachMinutes, slotStartMs: slot.startMs, slotEndMs: slot.endMs });
         // #endregion
@@ -379,21 +431,11 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
           windowEndLocal: _timeMapFormatMsLocal(windows[w].endMs),
           slotStartLocal: _timeMapFormatMsLocal(slot.startMs),
           slotEndLocal: _timeMapFormatMsLocal(slot.endMs),
-          gymStartLocal: _timeMapFormatMsLocal(gymStartMs),
-          gymEndLocal: _timeMapFormatMsLocal(gymEndMs)
+          gymStartLocal: _timeMapFormatMsLocal(placementWindow.gymStartMs),
+          gymEndLocal: _timeMapFormatMsLocal(placementWindow.gymEndMs)
         });
         // #endregion
-        return {
-          startMs: slot.startMs,
-          endMs: slot.endMs,
-          gymStartMs: gymStartMs,
-          gymEndMs: gymEndMs,
-          travelMode: options[o].travelMode,
-          travelBeforeStartMs: travelMs > 0 ? slot.startMs : null,
-          travelBeforeEndMs: travelMs > 0 ? gymStartMs : null,
-          travelAfterStartMs: travelMs > 0 ? gymEndMs : null,
-          travelAfterEndMs: travelMs > 0 ? slot.endMs : null
-        };
+        return placementWindow;
       }
     }
   }
@@ -797,7 +839,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     });
     // #endregion
 
-    var gymSlot = gymCal ? _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) : null;
+    var outsideIntervals = _timeMapGetOutsideIntervalsForDay(timemapCal, dayStartMs, dayEndMs);
+    var gymSlot = gymCal ? _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) : null;
     // #region agent log
     _timeMapDebugLog("gym-debug", "H4", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-slot", "Gym slot placement result for day", { dayKey: dayKey, hasGymCal: !!gymCal, gymSlotFound: !!gymSlot, travelMode: gymSlot ? gymSlot.travelMode : null, gymStartMs: gymSlot ? gymSlot.gymStartMs : null, gymEndMs: gymSlot ? gymSlot.gymEndMs : null });
     // #endregion
