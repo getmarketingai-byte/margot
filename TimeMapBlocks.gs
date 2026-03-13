@@ -94,12 +94,12 @@ function _timeMapIsCalendarExcluded(cal, extraExcludedById) {
  * Includes all non-all-day, non-multi-day busy events from non-excluded calendars.
  * Returns sorted intervals clipped to [dayStartMs, dayEndMs).
  */
-function _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, extraExcludedById) {
-  var allCalendars = CalendarApp.getAllCalendars();
+function _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, extraExcludedById, allCalendars) {
+  var calendars = allCalendars || CalendarApp.getAllCalendars();
   var out = [];
   var multiDayThresholdMs = 24 * 60 * 60 * 1000;
-  for (var i = 0; i < allCalendars.length; i++) {
-    var cal = allCalendars[i];
+  for (var i = 0; i < calendars.length; i++) {
+    var cal = calendars[i];
     if (_timeMapIsCalendarExcluded(cal, extraExcludedById)) continue;
     var events = cal.getEvents(new Date(dayStartMs), new Date(dayEndMs));
     for (var j = 0; j < events.length; j++) {
@@ -108,7 +108,9 @@ function _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, extraExcludedById) {
       var evStartMs = ev.getStartTime().getTime();
       var evEndMs = ev.getEndTime().getTime();
       if (evEndMs - evStartMs >= multiDayThresholdMs) continue;
-      if (typeof _sleepEventIsBusy === "function" && !_sleepEventIsBusy(ev)) continue;
+      // Busy/free transparency checks are expensive (Calendar.Events.get per event).
+      // Restrict them to SkedPal where free blocks are commonly used for planning.
+      if (_timeMapIsSkedpalCalendar(cal) && typeof _sleepEventIsBusy === "function" && !_sleepEventIsBusy(ev)) continue;
       var s = Math.max(dayStartMs, evStartMs);
       var e = Math.min(dayEndMs, evEndMs);
       if (e > s) out.push({ startMs: s, endMs: e });
@@ -184,6 +186,7 @@ function _timeMapFindSlotAtExactStart(gaps, exactStartMs, durationMs) {
  */
 function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
   var msPerMinute = 60 * 1000;
+  var earliestStartMs = new Date(dayStartMs).setHours(GYM_EARLIEST_START_HOUR, GYM_EARLIEST_START_MINUTE, 0, 0);
   var preferredExactStarts = [
     new Date(dayStartMs).setHours(11, 30, 0, 0)
   ];
@@ -193,11 +196,11 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
       endMs: new Date(dayStartMs).setHours(13, 0, 0, 0)
     },
     {
-      startMs: dayStartMs,
+      startMs: Math.max(dayStartMs, earliestStartMs),
       endMs: new Date(dayStartMs).setHours(9, 0, 0, 0)
     },
     {
-      startMs: dayStartMs,
+      startMs: Math.max(dayStartMs, earliestStartMs),
       endMs: dayEndMs
     }
   ];
@@ -215,6 +218,7 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
 
     for (var p = 0; p < preferredExactStarts.length; p++) {
       var exactStartMs = preferredExactStarts[p];
+      if (exactStartMs < earliestStartMs) continue;
       var slot = _timeMapFindSlotAtExactStart(freeGaps, exactStartMs, durationMs);
       if (slot) {
         var travelMs = options[o].travelEachMinutes * msPerMinute;
@@ -541,6 +545,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   var titles = _timeMapBlockTitles();
   for (var t = 0; t < titles.length; t++) desiredByTitle[titles[t]] = [];
   var desiredGym = [];
+  var allCalendars = CalendarApp.getAllCalendars();
 
   var lastProcessedDay = offset - 1;
   for (var i = offset; i < endDayExclusive; i++) {
@@ -557,7 +562,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     var excluded = {};
     excluded[TIMEMAP_CALENDAR_ID] = true;
     if (gymCal) excluded[GYM_EVENT_CALENDAR_ID] = true;
-    var busy = _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, excluded);
+    var busy = _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, excluded, allCalendars);
     var mergedBusy = _timeMapMergeIntervals(busy);
     var freeGaps = _timeMapFreeGaps(dayStartMs, dayEndMs, mergedBusy);
 
@@ -658,35 +663,55 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     var desiredGymDriveHome = desiredGym.filter(function (e) { return e.title === GYM_DRIVE_HOME_TITLE; });
 
     _syncCalendarEvents(gymCal, GYM_TITLE, syncStart, syncEnd, desiredGymMain, {
-      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_Main"; },
+      keyFromExisting: function (ev) {
+        return (ev.getTitle() || "").trim() === GYM_TITLE
+          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_Main"
+          : null;
+      },
       onEventSynced: function (calendar, event, desired) {
         _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
 
     _syncCalendarEvents(gymCal, GYM_RUN_TO_TITLE, syncStart, syncEnd, desiredGymRunTo, {
-      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_RunTo"; },
+      keyFromExisting: function (ev) {
+        return (ev.getTitle() || "").trim() === GYM_RUN_TO_TITLE
+          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunTo"
+          : null;
+      },
       onEventSynced: function (calendar, event, desired) {
         _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
 
     _syncCalendarEvents(gymCal, GYM_RUN_HOME_TITLE, syncStart, syncEnd, desiredGymRunHome, {
-      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_RunHome"; },
+      keyFromExisting: function (ev) {
+        return (ev.getTitle() || "").trim() === GYM_RUN_HOME_TITLE
+          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunHome"
+          : null;
+      },
       onEventSynced: function (calendar, event, desired) {
         _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
 
     _syncCalendarEvents(gymCal, GYM_DRIVE_TO_TITLE, syncStart, syncEnd, desiredGymDriveTo, {
-      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveTo"; },
+      keyFromExisting: function (ev) {
+        return (ev.getTitle() || "").trim() === GYM_DRIVE_TO_TITLE
+          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveTo"
+          : null;
+      },
       onEventSynced: function (calendar, event, desired) {
         _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
 
     _syncCalendarEvents(gymCal, GYM_DRIVE_HOME_TITLE, syncStart, syncEnd, desiredGymDriveHome, {
-      keyFromExisting: function (ev) { return _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveHome"; },
+      keyFromExisting: function (ev) {
+        return (ev.getTitle() || "").trim() === GYM_DRIVE_HOME_TITLE
+          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveHome"
+          : null;
+      },
       onEventSynced: function (calendar, event, desired) {
         _timeMapSetEventLocation(calendar, event, desired.location || "");
       }

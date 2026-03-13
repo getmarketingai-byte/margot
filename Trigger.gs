@@ -12,6 +12,8 @@ const MAX_RUNTIME_COMBINED_PHASE_MS = 2 * 60 * 1000;
 const TRAVEL_DAYS_PER_CHUNK = 30;
 /** Number of days per Sleep chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
 const SLEEP_DAYS_PER_CHUNK = 30;
+/** Number of days per TimeMap chunk when using chunked runs. Defaults to half the scheduling window. */
+const TIMEMAP_DAYS_PER_CHUNK = Math.ceil(SCHEDULING_WINDOW / 2);
 
 /**
  * Master TimeMap: updates Travel drive events, Sleep blocks, then TimeMap/Gym blocks.
@@ -57,6 +59,18 @@ async function update_Master_TimeMap_Sleep_Chunk(chunkIndex) {
 }
 
 /**
+ * Runs TimeMap/Gym updates for one chunk of the scheduling window to avoid execution timeout:
+ * e.g. trigger update_Master_TimeMap_TimeMapBlocks_Chunk(0) and update_Master_TimeMap_TimeMapBlocks_Chunk(1) 5-10 min apart.
+ * @param {number} chunkIndex - 0 = first TIMEMAP_DAYS_PER_CHUNK days, 1 = next TIMEMAP_DAYS_PER_CHUNK, etc.
+ */
+function update_Master_TimeMap_TimeMapBlocks_Chunk(chunkIndex) {
+  var offset = (chunkIndex || 0) * TIMEMAP_DAYS_PER_CHUNK;
+  var count = Math.min(TIMEMAP_DAYS_PER_CHUNK, SCHEDULING_WINDOW - offset);
+  if (count <= 0) return;
+  addEvents_TimeMapBlocks(offset, count, { maxRuntimeMs: MAX_RUNTIME_PER_RUN_MS });
+}
+
+/**
  * Optional helper to move from single combined trigger to split Travel/Sleep triggers.
  * Run once from Apps Script editor to recreate triggers with current cadence values.
  */
@@ -67,7 +81,8 @@ function setup_MasterTimeMap_SplitTriggers() {
     update_Master_TimeMap_Sleep: true,
     update_Master_TimeMap_TimeMapBlocks: true,
     update_Master_TimeMap_Travel_Chunk: true,
-    update_Master_TimeMap_Sleep_Chunk: true
+    update_Master_TimeMap_Sleep_Chunk: true,
+    update_Master_TimeMap_TimeMapBlocks_Chunk: true
   };
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
