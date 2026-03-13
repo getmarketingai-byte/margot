@@ -37,27 +37,11 @@ const TIMEMAP_SCOUTHALL_BUFFER_MINUTES = 60;
 const TIMEMAP_SCOUTHALL_LOCATION_MATCH = "waverleyvalley scout group";
 // Include SkedPal calendars in busy collection, but only treat their busy/opaque events as blocking.
 const TIMEMAP_TREAT_SKEDPAL_AS_BUSY = true;
-// Debug mode: compute placements/logs but do not write any calendar changes.
-const TIMEMAP_DEBUG_NO_WRITES = true;
+// Optional safety switch for dry-run behavior.
+const TIMEMAP_DEBUG_NO_WRITES = false;
 
 function _timeMapDebugLog(runId, hypothesisId, location, message, data) {
-  var payload = {
-    sessionId: "b97152",
-    runId: runId,
-    hypothesisId: hypothesisId,
-    location: location,
-    message: message,
-    data: data || {},
-    timestamp: Date.now()
-  };
-  console.log("DEBUG_GYM " + JSON.stringify(payload));
-  if (typeof fetch === "function") {
-    fetch('http://127.0.0.1:7245/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'b97152' },
-      body: JSON.stringify(payload)
-    }).catch(function () {});
-  }
+  return;
 }
 
 /**
@@ -156,33 +140,11 @@ function _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, extraExcludedById, a
       var skedpalBusyState = null;
       if (isSkedpal) {
         if (debugMeta) debugMeta.skedpalSeen++;
-        if (debugMeta && (debugMeta.skedpalDiagnosticSamples || 0) < 8) {
-          var evCal = null;
-          var evCalId = "";
-          var evCalName = "";
-          var evOriginalCalId = "";
-          var evId = "";
-          try {
-            evCal = ev.getCalendar();
-            evCalId = evCal ? evCal.getId() : "";
-            evCalName = evCal ? (evCal.getName() || "") : "";
-            if (typeof ev.getOriginalCalendarId === "function") evOriginalCalId = ev.getOriginalCalendarId() || "";
-            evId = ev.getId() || "";
-          } catch (_e) {}
-          // #region agent log
-          _timeMapDebugLog("gym-debug", "H23", "TimeMapBlocks.gs:_timeMapCollectBusyIntervals:skedpal-event-identity", "SkedPal event identity before busy lookup", {
-            sourceCalendarId: cal.getId(),
-            sourceCalendarName: cal.getName() || "",
-            eventCalendarId: evCalId,
-            eventCalendarName: evCalName,
-            eventOriginalCalendarId: evOriginalCalId,
-            eventId: evId
-          });
-          // #endregion
-          debugMeta.skedpalDiagnosticSamples = (debugMeta.skedpalDiagnosticSamples || 0) + 1;
-        }
         if (typeof _sleepEventIsBusy === "function") {
-          skedpalBusyState = _sleepEventIsBusy(ev);
+          skedpalBusyState = _sleepEventIsBusy(ev, {
+            sourceCalendarId: cal.getId(),
+            sourceCalendarName: cal.getName() || ""
+          });
           if (!skedpalBusyState) {
             if (debugMeta) debugMeta.skedpalFreeSkipped++;
             continue;
@@ -776,13 +738,9 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   // #region agent log
   _timeMapDebugLog("gym-debug", "H22", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:sleep-helper-availability", "Sleep helper availability/function fingerprint", {
     hasSleepEventIsBusy: typeof _sleepEventIsBusy === "function",
-    hasSleepBusyDebugReset: typeof _sleepBusyDebugReset === "function",
-    hasSleepBusyDebugSnapshot: typeof _sleepBusyDebugSnapshot === "function",
     sleepEventIsBusyFingerprint: typeof _sleepEventIsBusy === "function" ? String(_sleepEventIsBusy).slice(0, 180) : null
   });
   // #endregion
-  if (typeof _sleepBusyDebugReset === "function") _sleepBusyDebugReset();
-
   var desiredByTitle = {};
   var titles = _timeMapBlockTitles();
   for (var t = 0; t < titles.length; t++) desiredByTitle[titles[t]] = [];
@@ -839,8 +797,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
       skedpalFreeSkipped: 0,
       skedpalBusyCheckUnavailable: 0,
       skedpalAllDaySkipped: 0,
-      skedpalMultiDaySkipped: 0,
-      skedpalDiagnosticSamples: 0
+      skedpalMultiDaySkipped: 0
     };
     var busy = _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, excluded, allCalendars, busyDebugMeta);
     var mergedBusy = _timeMapMergeIntervals(busy);
@@ -969,13 +926,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   syncEnd.setDate(todayStart.getDate() + (lastProcessedDay + 1));
   syncEnd.setHours(0, 0, 0, 0);
   syncEnd.setMilliseconds(syncEnd.getMilliseconds() - 1);
-  var sleepBusySnapshot = (typeof _sleepBusyDebugSnapshot === "function") ? _sleepBusyDebugSnapshot() : null;
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H21", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:sleep-busy-summary", "SkedPal transparency/busy summary from _sleepEventIsBusy", {
-    sleepBusySummary: sleepBusySnapshot
-  });
-  // #endregion
-
   if (TIMEMAP_DEBUG_NO_WRITES) {
     var desiredTimeMapCounts = {};
     for (var tc = 0; tc < titles.length; tc++) {

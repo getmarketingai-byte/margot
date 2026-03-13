@@ -111,156 +111,42 @@ function _sleepIsCalendarExcluded(cal) {
  * Returns true if the event blocks time (busy). Returns false if status is "free" (transparent).
  * Uses Calendar advanced service; if lookup fails, treats as busy to be safe.
  */
-var _sleepBusyDebugSampleCount = 0;
-var _sleepBusyDebugSampleLimit = 12;
-var _sleepBusyDebugInspectCount = 0;
-var _sleepBusyDebugInspectLimit = 12;
-var _sleepBusyDebugStats = {
-  skedpalCalls: 0,
-  skedpalBusy: 0,
-  skedpalTransparent: 0,
-  skedpalErrors: 0
-};
-
-function _sleepBusyDebugReset() {
-  _sleepBusyDebugSampleCount = 0;
-  _sleepBusyDebugInspectCount = 0;
-  _sleepBusyDebugStats = {
-    skedpalCalls: 0,
-    skedpalBusy: 0,
-    skedpalTransparent: 0,
-    skedpalErrors: 0
-  };
-}
-
-function _sleepBusyDebugSnapshot() {
-  return {
-    skedpalCalls: _sleepBusyDebugStats.skedpalCalls,
-    skedpalBusy: _sleepBusyDebugStats.skedpalBusy,
-    skedpalTransparent: _sleepBusyDebugStats.skedpalTransparent,
-    skedpalErrors: _sleepBusyDebugStats.skedpalErrors
-  };
-}
-
-function _sleepEventIsBusy(calendarEvent) {
-  var cal = null;
+function _sleepEventIsBusy(calendarEvent, context) {
   var calId = "";
   var calName = "";
   var originalCalId = "";
   var rawEventId = "";
   var apiEventId = "";
-  var isSkedpalCalendar = false;
-  var isSkedpalByOriginalCal = false;
+  var lookupEventId = "";
+  var sourceCalId = context && context.sourceCalendarId ? String(context.sourceCalendarId) : "";
+  var sourceCalName = context && context.sourceCalendarName ? String(context.sourceCalendarName) : "";
   try {
     if (calendarEvent && typeof calendarEvent.getOriginalCalendarId === "function") {
       originalCalId = calendarEvent.getOriginalCalendarId() || "";
     }
-    cal = calendarEvent.getCalendar();
-    calId = cal ? cal.getId() : "";
-    calName = cal ? (cal.getName() || "") : "";
-    isSkedpalCalendar = calName.toLowerCase().indexOf("skedpal") !== -1 || calId.toLowerCase().indexOf("skedpal") !== -1;
-    isSkedpalByOriginalCal = originalCalId.toLowerCase().indexOf("skedpal") !== -1;
-    rawEventId = calendarEvent.getId();
+    if (calendarEvent && typeof calendarEvent.getId === "function") {
+      rawEventId = calendarEvent.getId() || "";
+    }
     apiEventId = _sleepGetApiEventId(rawEventId);
-    if (_sleepBusyDebugInspectCount < _sleepBusyDebugInspectLimit) {
-      _sleepBusyDebugInspectCount++;
-      // #region agent log
-      console.log("DEBUG_GYM " + JSON.stringify({
-        sessionId: "b97152",
-        runId: "gym-debug",
-        hypothesisId: "H24",
-        location: "Sleep.gs:_sleepEventIsBusy:identity",
-        message: "Sleep busy lookup event identity",
-        data: {
-          calId: calId,
-          calName: calName,
-          originalCalId: originalCalId,
-          rawEventId: rawEventId,
-          apiEventId: apiEventId,
-          isSkedpalByCalendar: isSkedpalCalendar,
-          isSkedpalByOriginalCalendarId: isSkedpalByOriginalCal
-        },
-        timestamp: Date.now()
-      }));
-      // #endregion
+    calId = sourceCalId || originalCalId || "";
+    calName = sourceCalName || "";
+    if (!calId || !rawEventId) {
+      throw new Error("Missing calendar id or event id for busy lookup");
     }
-    var ev = Calendar.Events.get(calId, rawEventId);
-    var isBusy = ev.transparency !== "transparent";
-    if (isSkedpalCalendar) {
-      _sleepBusyDebugStats.skedpalCalls++;
-      if (isBusy) _sleepBusyDebugStats.skedpalBusy++;
-      else _sleepBusyDebugStats.skedpalTransparent++;
+    var ev = null;
+    try {
+      lookupEventId = rawEventId;
+      ev = Calendar.Events.get(calId, rawEventId);
+    } catch (primaryLookupError) {
+      if (apiEventId && apiEventId !== rawEventId) {
+        lookupEventId = apiEventId;
+        ev = Calendar.Events.get(calId, apiEventId);
+      } else {
+        throw primaryLookupError;
+      }
     }
-    if (_sleepBusyDebugSampleCount < _sleepBusyDebugSampleLimit && isSkedpalCalendar) {
-      _sleepBusyDebugSampleCount++;
-      // #region agent log
-      console.log("DEBUG_GYM " + JSON.stringify({
-        sessionId: "b97152",
-        runId: "gym-debug",
-        hypothesisId: "H19",
-        location: "Sleep.gs:_sleepEventIsBusy:result",
-        message: "SkedPal transparency resolution",
-        data: {
-          calId: calId,
-          calName: calName,
-          rawEventId: rawEventId,
-          apiEventId: apiEventId,
-          transparency: ev.transparency || null,
-          returnedBusy: isBusy
-        },
-        timestamp: Date.now()
-      }));
-      // #endregion
-    }
-    return isBusy;
+    return ev.transparency !== "transparent";
   } catch (e) {
-    if (_sleepBusyDebugInspectCount < _sleepBusyDebugInspectLimit) {
-      _sleepBusyDebugInspectCount++;
-      // #region agent log
-      console.log("DEBUG_GYM " + JSON.stringify({
-        sessionId: "b97152",
-        runId: "gym-debug",
-        hypothesisId: "H25",
-        location: "Sleep.gs:_sleepEventIsBusy:lookup-error",
-        message: "Sleep busy lookup failed",
-        data: {
-          calId: calId,
-          calName: calName,
-          originalCalId: originalCalId,
-          rawEventId: rawEventId,
-          apiEventId: apiEventId,
-          isSkedpalByCalendar: isSkedpalCalendar,
-          isSkedpalByOriginalCalendarId: isSkedpalByOriginalCal,
-          error: e && e.message ? e.message : String(e)
-        },
-        timestamp: Date.now()
-      }));
-      // #endregion
-    }
-    if (isSkedpalCalendar) {
-      _sleepBusyDebugStats.skedpalCalls++;
-      _sleepBusyDebugStats.skedpalErrors++;
-    }
-    if (_sleepBusyDebugSampleCount < _sleepBusyDebugSampleLimit && isSkedpalCalendar) {
-      _sleepBusyDebugSampleCount++;
-      // #region agent log
-      console.log("DEBUG_GYM " + JSON.stringify({
-        sessionId: "b97152",
-        runId: "gym-debug",
-        hypothesisId: "H19",
-        location: "Sleep.gs:_sleepEventIsBusy:error",
-        message: "SkedPal transparency lookup failed; defaulting busy",
-        data: {
-          calId: calId,
-          calName: calName,
-          rawEventId: rawEventId,
-          apiEventId: apiEventId,
-          error: e && e.message ? e.message : String(e)
-        },
-        timestamp: Date.now()
-      }));
-      // #endregion
-    }
     return true;
   }
 }
