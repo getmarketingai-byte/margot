@@ -4,42 +4,6 @@
  * preferred windows and duration fallbacks.
  */
 
-// TimeMap title constants (order matters: 1 -> 4).
-const TIMEMAP_1_TITLE = "[1-Promote/Creative]";
-const TIMEMAP_2_TITLE = "[2-Execute]";
-const TIMEMAP_3_TITLE = "[3-Ops/Future]";
-const TIMEMAP_4_TITLE = "[4-Play]";
-const TIMEMAP_ERRANDS_TITLE = "[Errands]";
-const TIMEMAP_SCOUTHALL_TITLE = "[@scouthall]";
-const GYM_RUN_TO_TITLE = "[Run] to Gym";
-const GYM_RUN_HOME_TITLE = "[Run] Home";
-const GYM_DRIVE_TO_TITLE = "[Drive] To: Gym";
-const GYM_DRIVE_HOME_TITLE = "[Drive] Home";
-const GYM_LATEST_END_HOUR = 20;
-const GYM_LATEST_END_MINUTE = 0;
-
-// Full-day target durations.
-const TIMEMAP_1_HOURS = 4;
-const TIMEMAP_2_HOURS = 4;
-const TIMEMAP_3_HOURS = 4;
-const TIMEMAP_4_HOURS = 2;
-
-// 7h floor profile for linear scaling in the 7h..14h range.
-const TIMEMAP_MIN_1_HOURS = 2;
-const TIMEMAP_MIN_2_HOURS = 2;
-const TIMEMAP_MIN_3_HOURS = 2;
-const TIMEMAP_MIN_4_HOURS = 1;
-
-// Multi-segment guard: avoid tiny context-switch blocks.
-const TIMEMAP_MIN_BLOCK_MINUTES = 30;
-const TIMEMAP_ERRANDS_WINDOW_MINUTES = 60;
-const TIMEMAP_SCOUTHALL_BUFFER_MINUTES = 60;
-const TIMEMAP_SCOUTHALL_LOCATION_MATCH = "waverleyvalley scout group";
-// Include SkedPal calendars in busy collection, but only treat their busy/opaque events as blocking.
-const TIMEMAP_TREAT_SKEDPAL_AS_BUSY = true;
-// Optional safety switch for dry-run behavior.
-const TIMEMAP_DEBUG_NO_WRITES = false;
-
 function _timeMapDebugLog(runId, hypothesisId, location, message, data) {
   return;
 }
@@ -271,16 +235,16 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps) {
   // #endregion
   if (latestEndMs <= earliestStartMs) return null;
   var preferredExactStarts = [
-    new Date(dayStartMs).setHours(11, 30, 0, 0)
+    new Date(dayStartMs).setHours(GYM_PREFERRED_EXACT_START_HOUR, GYM_PREFERRED_EXACT_START_MINUTE, 0, 0)
   ];
   var windows = [
     {
-      startMs: new Date(dayStartMs).setHours(11, 0, 0, 0),
-      endMs: new Date(dayStartMs).setHours(13, 0, 0, 0)
+      startMs: new Date(dayStartMs).setHours(GYM_PREFERRED_WINDOW_1_START_HOUR, GYM_PREFERRED_WINDOW_1_START_MINUTE, 0, 0),
+      endMs: new Date(dayStartMs).setHours(GYM_PREFERRED_WINDOW_1_END_HOUR, GYM_PREFERRED_WINDOW_1_END_MINUTE, 0, 0)
     },
     {
       startMs: Math.max(dayStartMs, earliestStartMs),
-      endMs: new Date(dayStartMs).setHours(9, 0, 0, 0)
+      endMs: new Date(dayStartMs).setHours(GYM_PREFERRED_WINDOW_2_END_HOUR, GYM_PREFERRED_WINDOW_2_END_MINUTE, 0, 0)
     },
     {
       startMs: Math.max(dayStartMs, earliestStartMs),
@@ -701,14 +665,14 @@ function _timeMapBuildScoutHallOverlays(rangeStart, rangeEnd) {
 function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   var timemapCal = CalendarApp.getCalendarById(TIMEMAP_CALENDAR_ID);
   if (!timemapCal) {
-    console.warn("TimeMap calendar not found. Set TIMEMAP_CALENDAR_ID in Code.gs.");
+    console.warn("TimeMap calendar not found. Set TIMEMAP_CALENDAR_ID in Config.gs.");
     return;
   }
 
   var gymCal = null;
   if (GYM_EVENT_CALENDAR_ID && GYM_EVENT_CALENDAR_ID.indexOf("REPLACE_WITH_") !== 0) {
     gymCal = CalendarApp.getCalendarById(GYM_EVENT_CALENDAR_ID);
-    if (!gymCal) console.warn("Gym calendar not found. Set GYM_EVENT_CALENDAR_ID in Code.gs.");
+    if (!gymCal) console.warn("Gym calendar not found. Set GYM_EVENT_CALENDAR_ID in Config.gs.");
   } else {
     console.warn("GYM_EVENT_CALENDAR_ID is placeholder; Gym scheduling is skipped.");
   }

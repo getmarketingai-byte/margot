@@ -5,29 +5,9 @@
  * avoiding or splitting around events during normal sleep hours (fallback: two 4-hour blocks).
  *
  * Requires: Travel calendar to be updated first (run updateTravelDriveEvents before addEvents_Sleep).
- * Set SLEEP_CALENDAR_ID to your sleep calendar ID. Uses CALENDARS_TO_EXCLUDE from Code.gs when scanning for commitments.
+ * Configure SLEEP_CALENDAR_ID in Config.gs. Uses CALENDARS_TO_EXCLUDE when scanning for commitments.
  * Events with status "free" (transparency: transparent) are not counted as conflicts; requires Calendar advanced service.
  */
-
-// Replace with your sleep calendar ID (create calendar in Google Calendar, then copy ID from settings).
-const SLEEP_CALENDAR_ID = "496baca0d033db4062ef3acd672aa7ba22cc505bad94b3920b2bd2358c25d610@group.calendar.google.com";
-
-const SLEEP_DURATION_HOURS = 8.5;
-const SLEEP_BEGIN = 20;   // hour (0-23) start of "normal sleep" window
-const SLEEP_END = 12;     // hour (0-23) end of "normal sleep" window (next day)
-const SLEEP_IDEAL_WAKE_UP_HRS = 6;
-const SLEEP_IDEAL_WAKE_UP_MIN = 0;
-const SLEEP_BUFFER_BEFORE_LEAVE_MINUTES = 60;
-const SLEEP_MIN_BLOCK_HOURS = 4;
-const SLEEP_EVENT_TAG = "[SLEEP]";
-const SLEEP_OVERRIDE_TAG = "[OVERRIDE]";
-const SLEEP_EXTPROP_AUTO_START = "sleepAutoStart";
-const SLEEP_EXTPROP_AUTO_END = "sleepAutoEnd";
-
-/** Prefix for outbound-from-home drive events on the Travel calendar (leave time = event start). */
-const SLEEP_DRIVE_OUTBOUND_PREFIX = "[Drive] To:";
-/** Title for inbound-to-home drive events; sleep cannot start until this event ends (arrive home). */
-const SLEEP_DRIVE_HOME_TITLE = "[Drive] Home";
 
 /** Returns true if the event title is travel/drive-related (excluded from "last main conflict" display). */
 function _sleepIsTravelConflict(title) {
@@ -151,10 +131,6 @@ function _sleepEventIsBusy(calendarEvent, context) {
   }
 }
 
-/** Event title/location that should not affect sleep conflicts (e.g. Gym; may add scheduling later). Location is substring match. */
-const SLEEP_IGNORE_TITLE = "Gym";
-const SLEEP_IGNORE_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
-
 /**
  * Returns true if the event should be ignored for sleep conflict detection (e.g. Gym at Snap Fitness Ashburton).
  */
@@ -163,9 +139,6 @@ function _sleepIsEventIgnoredForConflicts(calendarEvent) {
   var loc = (calendarEvent.getLocation() || "").trim();
   return title === SLEEP_IGNORE_TITLE && loc.indexOf(SLEEP_IGNORE_LOCATION_SUBSTRING) !== -1;
 }
-
-/** Events spanning at least this many hours are treated as all-day and do not affect sleep conflicts. */
-const SLEEP_MULTIDAY_HOURS = 24;
 
 /**
  * Returns true if the event spans multiple days (duration >= 24 hours). Such events are treated as all-day and do not affect sleep.
@@ -302,7 +275,7 @@ function _sleepFreeGaps(nightStart, nightEnd, events) {
 async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var sleep_cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
   if (!sleep_cal) {
-    console.warn("Sleep calendar not found. Set SLEEP_CALENDAR_ID in Sleep.gs.");
+    console.warn("Sleep calendar not found. Set SLEEP_CALENDAR_ID in Config.gs.");
     return;
   }
 

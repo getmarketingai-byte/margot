@@ -3,18 +3,6 @@
  * Keeping these functions in one file makes Apps Script trigger setup easier.
  */
 
-// Keep individual trigger runs under the 6-minute Apps Script hard limit.
-const MAX_RUNTIME_PER_RUN_MS = 5 * 60 * 1000;
-// update_Master_TimeMap runs Travel + Sleep + TimeMap blocks in one execution, so each phase gets a smaller cap.
-const MAX_RUNTIME_COMBINED_PHASE_MS = 2 * 60 * 1000;
-
-/** Number of days per Travel chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
-const TRAVEL_DAYS_PER_CHUNK = 30;
-/** Number of days per Sleep chunk when using chunked runs. Chunk 0 = days 0..n, chunk 1 = days n..2n, etc. */
-const SLEEP_DAYS_PER_CHUNK = 30;
-/** Number of days per TimeMap chunk when using chunked runs. Defaults to half the scheduling window. */
-const TIMEMAP_DAYS_PER_CHUNK = Math.ceil(SCHEDULING_WINDOW / 2);
-
 /**
  * Master TimeMap: updates Travel drive events, Sleep blocks, then TimeMap/Gym blocks.
  */

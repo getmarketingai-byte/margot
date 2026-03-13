@@ -1,80 +1,10 @@
 /**
  * Google Apps Script: Calendar automations (timemaps, work, sleep, pay period, travel drive events).
  * Enable Calendar Advanced Service: Resources > Advanced Google services > Calendar API.
- * For travel drive events (Travel.gs): enable Maps service; set TRAVEL_CALENDAR_ID in Travel.gs.
+ * For travel drive events (Travel.gs): enable Maps service.
  * For getFlightData(): set script property AVIATION_STACK_API_KEY in Project properties.
+ * Configuration constants live in Config.gs.
  */
-const TIMEMAP_CALENDAR_ID = "1a1a44068207e09221d980c6c0ee587bc86587f680f862e56ba0bf6a8e47e020@group.calendar.google.com";
-const WORK_CALENDAR_ID = "070pmqum2gcm69ekmog6fvkmtk@group.calendar.google.com";
-const SCHEDULING_WINDOW = 60; // days
-const ASSUME_NICEWEATHER_BEYOND_FORCAST = false;
-const WORK_OFFICE_IS_INSIDE = false; // add inside map to office time
-const BEYOND_FORCAST_IS_INSIDE = true; // add inside event for days beyond forecast (both inside and outside tasks)
-const SPLIT_TIMEMAPS_BY_DAYS = true;
-
-// Rate limiting and buffer constants
-const RATE_LIMIT_SLEEP_MS = 3000;
-const RATE_LIMIT_EVERY_N_EVENTS = 3;
-// Sync helper: throttle calendar writes to avoid "too many events" API limit (e.g. every N ops).
-const SYNC_THROTTLE_EVERY_N = 8;
-const SYNC_THROTTLE_MS = 200;
-const SUMMARY_EVENT_DURATION_MINUTES = 5;
-const WORK_NONWORK_BUFFER_MINUTES = 60;
-
-// Quota-aware scheduling configuration (aligned with Apps Script quotas docs).
-const IS_WORKSPACE_ACCOUNT = false; // true for Google Workspace (higher quotas), false for consumer/gmail
-const MAPS_DIRECTION_DAILY_LIMIT = IS_WORKSPACE_ACCOUNT ? 10000 : 1000;
-const CALENDAR_EVENTS_CREATED_DAILY_LIMIT = IS_WORKSPACE_ACCOUNT ? 10000 : 5000;
-const SCRIPT_RUNTIME_LIMIT_MINUTES = 6;
-const QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
-const QUOTA_BURST_TARGET_FRACTION = 0.75; // try to reach ~75% early
-const QUOTA_BACKOFF_START_FRACTION = 0.75; // begin backing off once used >= 75%
-const QUOTA_BACKOFF_SOFT_STOP_FRACTION = 0.95; // heavy backoff near cap
-const QUOTA_BACKOFF_MID_REMAINING_FRACTION = 0.25; // use 25% of remaining when in backoff zone
-const QUOTA_BACKOFF_LOW_REMAINING_FRACTION = 0.10; // use 10% of remaining near cap
-const QUOTA_STATE_PREFIX = 'QUOTA_STATE_';
-const QUOTA_SERVICE_MAPS_DIRECTION = 'MAPS_DIRECTION';
-const QUOTA_SERVICE_CALENDAR_CREATES = 'CALENDAR_CREATES';
-const TRAVEL_RECHECK_STALE_MS = 3 * 24 * 60 * 60 * 1000; // refresh Maps checks older than 3 days
-
-// Open-Meteo cache: avoid exceeding daily API limit (429). Limits are per IP; GAS shares IPs.
-// Cache key prefix and max chunk size for Script Properties (9KB limit).
-// OPENMETEO_CACHE_MAX_AGE_DAYS: use cached data up to N days old without fetching (reduces API calls).
-const OPENMETEO_CACHE_DATE_KEY = 'OPENMETEO_LAST_FETCH_DATE';
-const OPENMETEO_CACHE_PREFIX = 'OPENMETEO_RAW_';
-const OPENMETEO_CACHE_CHUNK_SIZE = 8000;
-const OPENMETEO_CACHE_TIMEZONE = 'Australia/Melbourne';
-const OPENMETEO_CACHE_MAX_AGE_DAYS = 2;  // Use cache for 2 days; only fetch when stale (1 call per 2 days max)
-const OPENMETEO_429_RETRY_DELAY_MS = 90000;  // Wait 90s before retry on 429 (may cross hourly boundary)
-
-// Pay Period variables
-const REFERENCE_PAY_PERIOD_START = new Date('2023-11-16T00:00:00');
-const MIN_WORK_HOURS_ENABLE = false;
-const MIN_WORKING_MINUTES_PER_FORTNIGHT = 1 * 60;
-const WORK_REMAINING_HOUR_EVENT_STATUS_FREE = true; // true = free, false = busy
-const HOURLY_RATE = 50;
-const PAY_PERIOD = 14; // days
-
-//melbounre
-//const LOCATION_LAT = -37.840935
-//const LOCATION_LONG = 144.946457
-
-// Ashwood - home
-const LOCATION_LAT = -37.910156;
-const LOCATION_LONG = 145.107420;
-
-// Shared Gym constants used by Travel and TimeMapBlocks modules.
-const GYM_TITLE = "Gym";
-const GYM_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
-const GYM_DRIVE_MINUTES = 10;
-const GYM_RUN_MINUTES = 30;
-const GYM_EARLIEST_START_HOUR = 6;
-const GYM_EARLIEST_START_MINUTE = 0;
-// Create/use a calendar for generated Gym sessions (must NOT be in CALENDARS_TO_EXCLUDE).
-const GYM_EVENT_CALENDAR_ID = "e2cded7a7d9b7ab233db56e5fbf138f413a2c7b9a68e45cfe58af95f432f9f5f@group.calendar.google.com";
-
-// Calendars to exclude when scanning (Sleep commitments, Travel locations, etc.). Use names (e.g. "Travel", "Timemap") or full IDs. Each module also excludes its own calendar by ID.
-const CALENDARS_TO_EXCLUDE = ["Travel", "Waverley Valley Scout Group - Shared Calendar","WV SCOUTS", "Travel Time", "Sleep", "Birthdays", "TimeMaps", "SkedPal Task Zones", "SkedPal","Waverley Valley Equipment Booking", "Victoria Holidays","MSC Sailing Calendar", "melbourne Weather","lewisdavidr53@gmail.com","Formula 1","ScoutHall-1-Main Hall/Kitchen (80)", "https://events.terrain.scouts.com.au/calendar-feeds/b2985cbe-a853-394b-9920-77cdb37b575c/36a95f57-b798-43fc-9513-d8ac4cbe35fb"];
 
 async function Update_InsideTimemap() //rolls daylight and nice weather into one timemap.
 {

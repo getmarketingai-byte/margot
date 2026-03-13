@@ -7,25 +7,8 @@
  * If the source event is marked as "free", the drive events for that leg are also created as free.
  *
  * Requires: Maps service and Calendar Advanced Service (Resources > Advanced Google services).
- * Set TRAVEL_CALENDAR_ID to your travel calendar ID (create the calendar in Google Calendar first).
+ * Configure TRAVEL_CALENDAR_ID in Config.gs.
  */
-
-// Replace with your travel calendar ID (create calendar in Google Calendar, then copy ID from calendar settings).
-const TRAVEL_CALENDAR_ID = "c6511974498db2a541c354a55443df76cbee6a1ba88e943c898e013768e05a12@group.calendar.google.com";
-// Uses CALENDARS_TO_EXCLUDE from Code.gs when scanning for events with locations. Travel calendar (TRAVEL_CALENDAR_ID) is always excluded.
-// Location substrings treated as "no physical location" (video/phone meetings). Case-insensitive.
-const TRAVEL_VIRTUAL_LOCATION_SUBSTRINGS = ["microsoft teams meeting", "teams meeting", "zoom", "google meet", "meet - ", "webex", "video call", "ringcentral", "gotomeeting", "skype", "facetime", "meet.google", "teams.microsoft", "zoom.us"];
-
-const TRAVEL_ARRIVE_MINUTES_BEFORE = 15;
-const TRAVEL_MIN_HOME_MINUTES = 30;
-const TRAVEL_DRIVE_EVENT_TAG = "[Drive]";
-
-// Rate limiting for Maps API calls (avoid quota issues). Sleep every N calls to balance runtime vs quota.
-const TRAVEL_MAPS_SLEEP_MS = 300;
-const TRAVEL_MAPS_SLEEP_EVERY_N = 2;
-/** When Maps API limit is hit, use this duration (minutes) for legs that cannot be realigned from existing drive events. Rechecked on next run when Maps is available. */
-const TRAVEL_FALLBACK_DURATION_MINUTES = 60;
-const TRAVEL_LEG_STATE_PREFIX = "TRAVEL_LEG_STATE_";
 
 /** Returns true if the error is the Maps "too many times for one day" quota. */
 function _travelIsMapsQuotaError(e) {
@@ -85,7 +68,7 @@ function _getDriveDurationMinutes(origin, destination) {
 }
 
 /**
- * Returns home as a string for Directions API: "lat,lng" using LOCATION_LAT, LOCATION_LONG from Code.gs.
+ * Returns home as a string for Directions API: "lat,lng" using LOCATION_LAT, LOCATION_LONG from Config.gs.
  */
 function _travelHomeOrigin() {
   return LOCATION_LAT + "," + LOCATION_LONG;
@@ -118,7 +101,7 @@ function _travelSetEventFree(calendar, event) {
 }
 
 /**
- * Returns true if the calendar should be excluded from travel scanning (name or ID in CALENDARS_TO_EXCLUDE from Code.gs, or is the travel calendar).
+ * Returns true if the calendar should be excluded from travel scanning (name or ID in CALENDARS_TO_EXCLUDE from Config.gs, or is the travel calendar).
  */
 function _travelIsCalendarExcluded(cal) {
   var id = cal.getId();
@@ -405,7 +388,7 @@ function _travelBuildDurationCache(events, homeStr, runOptions) {
 function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
   var travelCal = CalendarApp.getCalendarById(TRAVEL_CALENDAR_ID);
   if (!travelCal) {
-    console.warn("Travel calendar not found. Set TRAVEL_CALENDAR_ID in Travel.gs.");
+    console.warn("Travel calendar not found. Set TRAVEL_CALENDAR_ID in Config.gs.");
     return;
   }
 
