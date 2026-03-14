@@ -87,48 +87,11 @@ function _sleepIsCalendarExcluded(cal) {
   return false;
 }
 
-/**
- * Returns true if the event blocks time (busy). Returns false if status is "free" (transparent).
- * Uses Calendar advanced service; if lookup fails, treats as busy to be safe.
- */
-function _sleepEventIsBusy(calendarEvent, context) {
-  var calId = "";
-  var calName = "";
-  var originalCalId = "";
-  var rawEventId = "";
-  var apiEventId = "";
-  var lookupEventId = "";
-  var sourceCalId = context && context.sourceCalendarId ? String(context.sourceCalendarId) : "";
-  var sourceCalName = context && context.sourceCalendarName ? String(context.sourceCalendarName) : "";
-  try {
-    if (calendarEvent && typeof calendarEvent.getOriginalCalendarId === "function") {
-      originalCalId = calendarEvent.getOriginalCalendarId() || "";
-    }
-    if (calendarEvent && typeof calendarEvent.getId === "function") {
-      rawEventId = calendarEvent.getId() || "";
-    }
-    apiEventId = _sleepGetApiEventId(rawEventId);
-    calId = sourceCalId || originalCalId || "";
-    calName = sourceCalName || "";
-    if (!calId || !rawEventId) {
-      throw new Error("Missing calendar id or event id for busy lookup");
-    }
-    var ev = null;
-    try {
-      lookupEventId = rawEventId;
-      ev = Calendar.Events.get(calId, rawEventId);
-    } catch (primaryLookupError) {
-      if (apiEventId && apiEventId !== rawEventId) {
-        lookupEventId = apiEventId;
-        ev = Calendar.Events.get(calId, apiEventId);
-      } else {
-        throw primaryLookupError;
-      }
-    }
-    return ev.transparency !== "transparent";
-  } catch (e) {
-    return true;
-  }
+/** Returns true when this event should block sleep as busy time. */
+function _sleepEventBlocksTime(calendarEvent, calendar) {
+  var calId = calendar && typeof calendar.getId === "function" ? calendar.getId() : "";
+  var calName = calendar && typeof calendar.getName === "function" ? (calendar.getName() || "") : "";
+  return _eventIsBusyByTransparency(calendarEvent, calId, calName);
 }
 
 /**
@@ -166,7 +129,7 @@ function _sleepCollectCommitmentEvents(start, end) {
     var calEvents = cal.getEvents(start, end);
     for (var k = 0; k < calEvents.length; k++) {
       var ev = calEvents[k];
-      if (!ev.isAllDayEvent() && !_sleepIsMultiDayEvent(ev) && _sleepEventIsBusy(ev) && !_sleepIsEventIgnoredForConflicts(ev)) {
+      if (!ev.isAllDayEvent() && !_sleepIsMultiDayEvent(ev) && _sleepEventBlocksTime(ev, cal) && !_sleepIsEventIgnoredForConflicts(ev)) {
         events.push({
           startMs: ev.getStartTime().getTime(),
           endMs: ev.getEndTime().getTime(),

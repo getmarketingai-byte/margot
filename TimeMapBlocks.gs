@@ -104,11 +104,8 @@ function _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, extraExcludedById, a
       var skedpalBusyState = null;
       if (isSkedpal) {
         if (debugMeta) debugMeta.skedpalSeen++;
-        if (typeof _sleepEventIsBusy === "function") {
-          skedpalBusyState = _sleepEventIsBusy(ev, {
-            sourceCalendarId: cal.getId(),
-            sourceCalendarName: cal.getName() || ""
-          });
+        if (typeof _eventIsBusyByTransparency === "function") {
+          skedpalBusyState = _eventIsBusyByTransparency(ev, cal.getId(), cal.getName() || "");
           if (!skedpalBusyState) {
             if (debugMeta) debugMeta.skedpalFreeSkipped++;
             continue;
@@ -504,31 +501,47 @@ function _timeMapBuildMultiGapBlocks(gaps) {
   }
   if (totalMinutes < TIMEMAP_MIN_BLOCK_MINUTES) return [];
 
+  var out = [];
+  if (totalMinutes < 7 * 60) {
+    var windowStartMs = usable[0].startMs;
+    var windowEndMs = usable[usable.length - 1].endMs;
+    var b4s = Math.max(windowStartMs, windowEndMs - 60 * 60000);
+    var b3s = Math.max(windowStartMs, windowEndMs - 120 * 60000);
+    var b2e = b3s;
+    var b2s = Math.max(windowStartMs, b2e - 120 * 60000);
+    var b1e = b2s;
+    var b1s = Math.max(windowStartMs, b1e - 120 * 60000);
+    var blocks = [
+      { title: titles[0], startMs: b1s, endMs: b1e },
+      { title: titles[1], startMs: b2s, endMs: b2e },
+      { title: titles[2], startMs: b3s, endMs: windowEndMs },
+      { title: titles[3], startMs: b4s, endMs: windowEndMs }
+    ];
+
+    for (var b = 0; b < blocks.length; b++) {
+      var block = blocks[b];
+      if (block.endMs <= block.startMs) continue;
+      for (var g = 0; g < usable.length; g++) {
+        var segStart = Math.max(block.startMs, usable[g].startMs);
+        var segEnd = Math.min(block.endMs, usable[g].endMs);
+        if ((segEnd - segStart) < minMs) continue;
+        out.push({
+          title: block.title,
+          startMs: segStart,
+          endMs: segEnd
+        });
+      }
+    }
+    return out;
+  }
+
   var durationsMin;
   if (totalMinutes >= 14 * 60) {
     durationsMin = [TIMEMAP_1_HOURS * 60, TIMEMAP_2_HOURS * 60, TIMEMAP_3_HOURS * 60, TIMEMAP_4_HOURS * 60];
-  } else if (totalMinutes >= 7 * 60) {
-    durationsMin = _timeMapScaledDurations(totalMinutes);
-  } else if (totalMinutes >= 2 * 60) {
-    durationsMin = [TIMEMAP_MIN_1_HOURS * 60, TIMEMAP_MIN_2_HOURS * 60, TIMEMAP_MIN_3_HOURS * 60, TIMEMAP_MIN_4_HOURS * 60];
   } else {
-    // Tiny multi-gap day: flow what is available with 30m minimum chunks when feasible.
-    durationsMin = [0, 0, 0, 0];
-    var remaining = totalMinutes;
-    for (var d = 0; d < 4; d++) {
-      if (remaining < TIMEMAP_MIN_BLOCK_MINUTES) break;
-      var slotsLeft = 4 - d;
-      var reserveForRest = (slotsLeft - 1) * TIMEMAP_MIN_BLOCK_MINUTES;
-      var take = (d < 3 && remaining > reserveForRest + TIMEMAP_MIN_BLOCK_MINUTES)
-        ? TIMEMAP_MIN_BLOCK_MINUTES
-        : remaining;
-      durationsMin[d] = take;
-      remaining -= take;
-      if (remaining <= 0) break;
-    }
+    durationsMin = _timeMapScaledDurations(totalMinutes);
   }
 
-  var out = [];
   var blockIdx = 0;
   while (blockIdx < 4 && durationsMin[blockIdx] <= 0) blockIdx++;
   if (blockIdx >= 4) return [];
@@ -742,9 +755,9 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   });
   // #endregion
   // #region agent log
-  _timeMapDebugLog("gym-debug", "H22", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:sleep-helper-availability", "Sleep helper availability/function fingerprint", {
-    hasSleepEventIsBusy: typeof _sleepEventIsBusy === "function",
-    sleepEventIsBusyFingerprint: typeof _sleepEventIsBusy === "function" ? String(_sleepEventIsBusy).slice(0, 180) : null
+  _timeMapDebugLog("gym-debug", "H22", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:busy-helper-availability", "Busy helper availability/function fingerprint", {
+    hasEventIsBusyByTransparency: typeof _eventIsBusyByTransparency === "function",
+    eventIsBusyByTransparencyFingerprint: typeof _eventIsBusyByTransparency === "function" ? String(_eventIsBusyByTransparency).slice(0, 180) : null
   });
   // #endregion
   var desiredByTitle = {};

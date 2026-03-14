@@ -215,12 +215,17 @@ function _wipeCalendarFutureEvents(calendarId, daysAhead) {
     return;
   }
   var now = new Date();
+  var nowMs = now.getTime();
   var end = new Date(now.getTime());
   end.setDate(end.getDate() + daysAhead);
   end.setHours(23, 59, 59, 999);
   var events = cal.getEvents(now, end);
   for (var j = 0; j < events.length; j++) {
-    events[j].deleteEvent();
+    // Only delete events that *start* on or after now (doc). Events that started before now
+    // (e.g. last night's sleep ending this morning) must be kept so time maps don't start from midnight.
+    if (events[j].getStartTime().getTime() >= nowMs) {
+      events[j].deleteEvent();
+    }
   }
 }
 
@@ -441,6 +446,43 @@ function _setEventFreeForSync(calendar, event) {
   }
 }
 
+/** Returns Calendar API eventId from CalendarApp event id (strips @google.com suffix if present). */
+function _eventGetApiEventId(calendarEventId) {
+  if (!calendarEventId) return calendarEventId;
+  return calendarEventId.slice(-11) === "@google.com" ? calendarEventId.slice(0, -11) : calendarEventId;
+}
+
+/**
+ * Returns true if the event blocks time (busy), false when explicitly transparent.
+ * Uses Calendar advanced service; if lookup fails, treats as busy to be safe.
+ */
+function _eventIsBusyByTransparency(calendarEvent, calendarId, calendarName) {
+  var calId = calendarId ? String(calendarId) : "";
+  var calName = calendarName ? String(calendarName) : "";
+  var rawEventId = "";
+  var apiEventId = "";
+  if (!calendarEvent || !calId) return true;
+  try {
+    if (typeof calendarEvent.getId === "function") rawEventId = calendarEvent.getId() || "";
+    apiEventId = _eventGetApiEventId(rawEventId);
+    if (!rawEventId) throw new Error("Missing event id for busy lookup" + (calName ? " in " + calName : ""));
+    var ev = null;
+    try {
+      ev = Calendar.Events.get(calId, rawEventId);
+    } catch (primaryLookupError) {
+      if (apiEventId && apiEventId !== rawEventId) {
+        ev = Calendar.Events.get(calId, apiEventId);
+      } else {
+        throw primaryLookupError;
+      }
+    }
+    return ev.transparency !== "transparent";
+  } catch (e) {
+    // Keep default-safe behavior: if transparency cannot be resolved, treat as busy.
+    return true;
+  }
+}
+
 function _Date_add_days(date, numDays) {
   var newDate = new Date();
   newDate.setTime(date.getTime() + 1000 * 60 * 60 * 24 * numDays);
@@ -556,7 +598,11 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
     if (existing) {
       var sameTime = existing.getStartTime().getTime() === startTime.getTime() && existing.getEndTime().getTime() === endTime.getTime();
       var sameTitle = (existing.getTitle() || "") === (desired.title || "");
-      if (sameTime && sameTitle) continue;
+      if (sameTime && sameTitle) {
+        // Keep availability aligned even when time/title are unchanged.
+        if (setFree && desired.free) setFree(calendar, existing);
+        continue;
+      }
       existing.setTime(startTime, endTime);
       if (desired.title != null) existing.setTitle(desired.title);
       if (setFree && desired.free) setFree(calendar, existing);

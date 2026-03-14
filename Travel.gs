@@ -79,10 +79,38 @@ function _travelHomeOrigin() {
  */
 function _travelIsEventFree(calendarEvent) {
   try {
-    var calId = calendarEvent.getCalendar().getId();
-    var eventId = calendarEvent.getId();
-    var resource = Calendar.Events.get(calId, eventId);
-    return resource.transparency === "transparent";
+    var cal = calendarEvent && typeof calendarEvent.getCalendar === "function" ? calendarEvent.getCalendar() : null;
+    var calId = cal ? cal.getId() : "";
+    var originalCalId = calendarEvent && typeof calendarEvent.getOriginalCalendarId === "function"
+      ? (calendarEvent.getOriginalCalendarId() || "")
+      : "";
+    var rawEventId = calendarEvent && typeof calendarEvent.getId === "function" ? (calendarEvent.getId() || "") : "";
+    if (!rawEventId) return false;
+    var apiEventId = _eventGetApiEventId(rawEventId);
+    var candidateCalIds = [];
+    if (calId) candidateCalIds.push(calId);
+    if (originalCalId && originalCalId !== calId) candidateCalIds.push(originalCalId);
+    for (var c = 0; c < candidateCalIds.length; c++) {
+      var candidateCalId = candidateCalIds[c];
+      var resource = null;
+      try {
+        resource = Calendar.Events.get(candidateCalId, rawEventId);
+      } catch (primaryLookupError) {
+        if (apiEventId && apiEventId !== rawEventId) {
+          resource = Calendar.Events.get(candidateCalId, apiEventId);
+        } else {
+          continue;
+        }
+      }
+      if (resource && resource.transparency === "transparent") return true;
+      // Invites you declined should not generate busy drive legs.
+      var attendees = resource && resource.attendees ? resource.attendees : [];
+      for (var i = 0; i < attendees.length; i++) {
+        var a = attendees[i];
+        if (a && a.self && a.responseStatus === "declined") return true;
+      }
+    }
+    return false;
   } catch (e) {
     return false;
   }
