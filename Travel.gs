@@ -74,10 +74,30 @@ function _travelHomeOrigin() {
   return LOCATION_LAT + "," + LOCATION_LONG;
 }
 
+// Temporary targeted debug for free/busy resolution on a specific event.
+var TRAVEL_FREE_BUSY_DEBUG_TITLE_SUBSTRING = "Rigger: SOS Gala 2026";
+
+function _travelShouldDebugFreeBusy(calendarEvent) {
+  var title = calendarEvent && typeof calendarEvent.getTitle === "function" ? (calendarEvent.getTitle() || "") : "";
+  return title.indexOf(TRAVEL_FREE_BUSY_DEBUG_TITLE_SUBSTRING) !== -1;
+}
+
 /**
  * Returns true if the calendar event is marked as "free" (transparent). Uses Calendar Advanced Service.
  */
-function _travelIsEventFree(calendarEvent) {
+function _travelIsEventFree(calendarEvent, context) {
+  var debugEnabled = _travelShouldDebugFreeBusy(calendarEvent);
+  var debugInfo = {
+    title: calendarEvent && typeof calendarEvent.getTitle === "function" ? (calendarEvent.getTitle() || "") : "",
+    eventId: calendarEvent && typeof calendarEvent.getId === "function" ? (calendarEvent.getId() || "") : "",
+    originalCalendarId: calendarEvent && typeof calendarEvent.getOriginalCalendarId === "function" ? (calendarEvent.getOriginalCalendarId() || "") : "",
+    calendarId: "",
+    contextCalendarId: context && context.sourceCalendarId ? String(context.sourceCalendarId) : "",
+    candidateCalIds: [],
+    candidateEventIds: [],
+    lookups: [],
+    resolution: null
+  };
   try {
     var cal = calendarEvent && typeof calendarEvent.getCalendar === "function" ? calendarEvent.getCalendar() : null;
     var calId = cal ? cal.getId() : "";
@@ -85,34 +105,99 @@ function _travelIsEventFree(calendarEvent) {
       ? (calendarEvent.getOriginalCalendarId() || "")
       : "";
     var rawEventId = calendarEvent && typeof calendarEvent.getId === "function" ? (calendarEvent.getId() || "") : "";
+    debugInfo.calendarId = calId;
     if (!rawEventId) return false;
     var apiEventId = _eventGetApiEventId(rawEventId);
+    var baseEventId = rawEventId.indexOf("@") !== -1 ? rawEventId.split("@")[0] : rawEventId;
     var candidateCalIds = [];
-    if (calId) candidateCalIds.push(calId);
-    if (originalCalId && originalCalId !== calId) candidateCalIds.push(originalCalId);
+    var contextCalId = context && context.sourceCalendarId ? String(context.sourceCalendarId) : "";
+    if (contextCalId) candidateCalIds.push(contextCalId);
+    if (calId && candidateCalIds.indexOf(calId) === -1) candidateCalIds.push(calId);
+    if (originalCalId && candidateCalIds.indexOf(originalCalId) === -1) candidateCalIds.push(originalCalId);
+    var candidateEventIds = [];
+    if (rawEventId) candidateEventIds.push(rawEventId);
+    if (apiEventId && candidateEventIds.indexOf(apiEventId) === -1) candidateEventIds.push(apiEventId);
+    if (baseEventId && candidateEventIds.indexOf(baseEventId) === -1) candidateEventIds.push(baseEventId);
+    debugInfo.candidateCalIds = candidateCalIds.slice();
+    debugInfo.candidateEventIds = candidateEventIds.slice();
     for (var c = 0; c < candidateCalIds.length; c++) {
       var candidateCalId = candidateCalIds[c];
-      var resource = null;
-      try {
-        resource = Calendar.Events.get(candidateCalId, rawEventId);
-      } catch (primaryLookupError) {
-        if (apiEventId && apiEventId !== rawEventId) {
-          resource = Calendar.Events.get(candidateCalId, apiEventId);
-        } else {
+      for (var e = 0; e < candidateEventIds.length; e++) {
+        var resource = null;
+        var lookup = { candidateCalId: candidateCalId, candidateEventId: candidateEventIds[e], transparency: null, selfResponseStatus: null, error: null };
+        try {
+          resource = Calendar.Events.get(candidateCalId, candidateEventIds[e]);
+        } catch (lookupError) {
+          lookup.error = lookupError && lookupError.message ? lookupError.message : String(lookupError);
+          debugInfo.lookups.push(lookup);
           continue;
         }
+        lookup.transparency = resource && resource.transparency ? resource.transparency : null;
+        if (resource && resource.transparency === "transparent") {
+          lookup.selfResponseStatus = "n/a";
+          debugInfo.lookups.push(lookup);
+          debugInfo.resolution = "free-via-transparency";
+          return true;
+        }
+        // Invites you declined should not generate busy drive legs.
+        var attendees = resource && resource.attendees ? resource.attendees : [];
+        for (var i = 0; i < attendees.length; i++) {
+          var a = attendees[i];
+          if (a && a.self) {
+            lookup.selfResponseStatus = a.responseStatus || null;
+            if (a.responseStatus === "declined") {
+              debugInfo.lookups.push(lookup);
+              debugInfo.resolution = "free-via-declined-self";
+              return true;
+            }
+          }
+        }
+        debugInfo.lookups.push(lookup);
       }
-      if (resource && resource.transparency === "transparent") return true;
-      // Invites you declined should not generate busy drive legs.
-      var attendees = resource && resource.attendees ? resource.attendees : [];
-      for (var i = 0; i < attendees.length; i++) {
-        var a = attendees[i];
-        if (a && a.self && a.responseStatus === "declined") return true;
+    }
+    // Fallback path for imported/external feeds where Calendar.Events.get cannot resolve by id.
+    // In these feeds, declined events are surfaced in title/status but may not be fetchable via Advanced API.
+    var titleLower = (debugInfo.title || "").toLowerCase();
+    if (titleLower.indexOf("declined:") === 0 || titleLower.indexOf("pending:") === 0) {
+      debugInfo.resolution = titleLower.indexOf("declined:") === 0
+        ? "free-via-declined-title-fallback"
+        : "free-via-pending-title-fallback";
+      return true;
+    }
+    try {
+      if (calendarEvent && typeof calendarEvent.getMyStatus === "function") {
+        var myStatus = calendarEvent.getMyStatus();
+        if (myStatus === CalendarApp.GuestStatus.NO) {
+          debugInfo.resolution = "free-via-gueststatus-no-fallback";
+          return true;
+        }
       }
+    } catch (_statusError) {}
+    debugInfo.resolution = "busy-default";
+    if (debugEnabled) {
+      console.log("DEBUG_TRAVEL_FREE_BUSY " + JSON.stringify({
+        phase: "_travelIsEventFree:return-false",
+        info: debugInfo
+      }));
     }
     return false;
   } catch (e) {
+    debugInfo.resolution = "error-default-busy";
+    if (debugEnabled) {
+      console.log("DEBUG_TRAVEL_FREE_BUSY " + JSON.stringify({
+        phase: "_travelIsEventFree:exception",
+        error: e && e.message ? e.message : String(e),
+        info: debugInfo
+      }));
+    }
     return false;
+  } finally {
+    if (debugEnabled) {
+      console.log("DEBUG_TRAVEL_FREE_BUSY " + JSON.stringify({
+        phase: "_travelIsEventFree:finished",
+        info: debugInfo
+      }));
+    }
   }
 }
 
@@ -183,6 +268,7 @@ function _travelIsVirtualMeetingLocation(loc) {
 function _travelCollectEventsWithLocations(startDate, endDate) {
   var allCalendars = CalendarApp.getAllCalendars();
   var events = [];
+  var eventSourceByKey = {};
   for (var i = 0; i < allCalendars.length; i++) {
     var cal = allCalendars[i];
     if (_travelIsCalendarExcluded(cal)) continue;
@@ -193,13 +279,15 @@ function _travelCollectEventsWithLocations(startDate, endDate) {
       var loc = ev.getLocation ? ev.getLocation() : (ev.getEventLocation ? ev.getEventLocation() : "");
       if (loc && loc.toString().trim() !== "" && !_travelIsVirtualMeetingLocation(loc)) {
         events.push(ev);
+        var evKey = (ev.getId() || "") + "|" + ev.getStartTime().getTime() + "|" + ev.getEndTime().getTime();
+        eventSourceByKey[evKey] = { sourceCalendarId: cal.getId(), sourceCalendarName: cal.getName() || "" };
       }
     }
   }
   events.sort(function (a, b) {
     return a.getStartTime().getTime() - b.getStartTime().getTime();
   });
-  return events;
+  return { events: events, eventSourceByKey: eventSourceByKey };
 }
 
 /**
@@ -433,7 +521,9 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
   endDate.setDate(endDate.getDate() + numDays);
   endDate.setHours(23, 59, 59, 999);
 
-  var events = _travelCollectEventsWithLocations(startDate, endDate);
+  var collected = _travelCollectEventsWithLocations(startDate, endDate);
+  var events = collected.events || [];
+  var eventSourceByKey = collected.eventSourceByKey || {};
   if (events.length === 0) {
     _syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, [], {
       keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()) + "_" + ev.getEndTime().getTime(); }
@@ -459,7 +549,20 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
     var evEnd = ev.getEndTime();
     var evLoc = ev.getLocation();
     var evTitle = ev.getTitle() || "Event";
-    var evIsFree = _travelIsEventFree(ev);
+    var evKey = (ev.getId() || "") + "|" + evStart.getTime() + "|" + evEnd.getTime();
+    var sourceContext = eventSourceByKey[evKey] || null;
+    var evIsFree = _travelIsEventFree(ev, sourceContext);
+    var debugFreeBusy = _travelShouldDebugFreeBusy(ev);
+    if (debugFreeBusy) {
+      console.log("DEBUG_TRAVEL_FREE_BUSY " + JSON.stringify({
+        phase: "updateTravelDriveEvents:event-classification",
+        title: evTitle,
+        startMs: evStart.getTime(),
+        endMs: evEnd.getTime(),
+        location: evLoc || "",
+        evIsFree: evIsFree
+      }));
+    }
     var isGymAshburton = _travelIsGymAshburton(ev);
     var arriveAt = isGymAshburton ? new Date(evStart.getTime()) : new Date(evStart.getTime() - arriveBeforeMs);
 
@@ -495,6 +598,15 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
       var outboundTitle = TRAVEL_DRIVE_EVENT_TAG + " To: " + evTitle;
       if (outboundUsesDefaultFallback) outboundTitle += fallbackNote;
       if (outboundStart.getTime() < arriveAt.getTime()) {
+        if (debugFreeBusy) {
+          console.log("DEBUG_TRAVEL_FREE_BUSY " + JSON.stringify({
+            phase: "updateTravelDriveEvents:outbound-desired",
+            title: outboundTitle,
+            startMs: outboundStart.getTime(),
+            endMs: arriveAt.getTime(),
+            free: evIsFree
+          }));
+        }
         desiredDrive.push({
           title: outboundTitle,
           start: outboundStart,
@@ -542,6 +654,15 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
         ? TRAVEL_DRIVE_EVENT_TAG + " Home"
         : TRAVEL_DRIVE_EVENT_TAG + " To: " + (events[i + 1].getTitle() || "Next");
       if (inboundUsesDefaultFallback) inboundTitle += fallbackNote;
+      if (debugFreeBusy) {
+        console.log("DEBUG_TRAVEL_FREE_BUSY " + JSON.stringify({
+          phase: "updateTravelDriveEvents:inbound-desired",
+          title: inboundTitle,
+          startMs: inboundStart.getTime(),
+          endMs: inboundEnd.getTime(),
+          free: evIsFree
+        }));
+      }
       desiredDrive.push({
         title: inboundTitle,
         start: inboundStart,

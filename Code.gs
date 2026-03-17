@@ -456,15 +456,32 @@ function _eventGetApiEventId(calendarEventId) {
  * Returns true if the event blocks time (busy), false when explicitly transparent.
  * Uses Calendar advanced service; if lookup fails, treats as busy to be safe.
  */
+function _eventShouldDefaultFreeOnLookupFailure(calendarEvent) {
+  if (!calendarEvent) return false;
+  try {
+    var title = typeof calendarEvent.getTitle === "function" ? (calendarEvent.getTitle() || "") : "";
+    var titleLower = title.toLowerCase();
+    if (titleLower.indexOf("declined:") === 0 || titleLower.indexOf("pending:") === 0) return true;
+  } catch (_titleError) {}
+  try {
+    if (typeof calendarEvent.getMyStatus === "function") {
+      var myStatus = calendarEvent.getMyStatus();
+      if (myStatus === CalendarApp.GuestStatus.NO) return true;
+    }
+  } catch (_statusError) {}
+  return false;
+}
+
 function _eventIsBusyByTransparency(calendarEvent, calendarId, calendarName) {
   var calId = calendarId ? String(calendarId) : "";
   var calName = calendarName ? String(calendarName) : "";
   var rawEventId = "";
   var apiEventId = "";
-  if (!calendarEvent || !calId) return true;
+  if (!calendarEvent) return true;
   try {
     if (typeof calendarEvent.getId === "function") rawEventId = calendarEvent.getId() || "";
     apiEventId = _eventGetApiEventId(rawEventId);
+    if (!calId) throw new Error("Missing calendar id for busy lookup" + (calName ? " in " + calName : ""));
     if (!rawEventId) throw new Error("Missing event id for busy lookup" + (calName ? " in " + calName : ""));
     var ev = null;
     try {
@@ -478,6 +495,7 @@ function _eventIsBusyByTransparency(calendarEvent, calendarId, calendarName) {
     }
     return ev.transparency !== "transparent";
   } catch (e) {
+    if (_eventShouldDefaultFreeOnLookupFailure(calendarEvent)) return false;
     // Keep default-safe behavior: if transparency cannot be resolved, treat as busy.
     return true;
   }
@@ -577,10 +595,14 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
     opCount++;
     if (opCount % SYNC_THROTTLE_EVERY_N === 0) Utilities.sleep(SYNC_THROTTLE_MS);
   }
-  // Delete existing events that are no longer desired.
+  // Delete existing events that are no longer desired. Skip events that have already ended
+  // (historical records), e.g. last night's sleep - keep those for the calendar record.
+  var nowMs = Date.now();
   for (var key in existingByKey) {
     if (!desiredByKey[key]) {
-      existingByKey[key].deleteEvent();
+      var ev = existingByKey[key];
+      if (ev.getEndTime().getTime() < nowMs) continue;  // preserve past events
+      ev.deleteEvent();
       stats.deleted++;
       throttle();
     }

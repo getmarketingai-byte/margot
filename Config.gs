@@ -37,6 +37,9 @@ const GYM_PREFERRED_WINDOW_1_END_HOUR = 15;
 const GYM_PREFERRED_WINDOW_1_END_MINUTE = 30;
 const GYM_PREFERRED_WINDOW_2_END_HOUR = 9;
 const GYM_PREFERRED_WINDOW_2_END_MINUTE = 0;
+// Linear gym scaling by daily free time (minutes inside gym window).
+const GYM_FREE_MINUTES_FULL = 360;
+const GYM_FREE_MINUTES_MIN = 120;
 
 // TimeMap titles and duration profile.
 const TIMEMAP_1_TITLE = "[1-Promote/Creative]";

@@ -319,14 +319,24 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
   });
   // #endregion
   var longestDaytimeFitMs = 0;
+  var totalFreeDaytimeMs = 0;
   for (var fg = 0; fg < freeGaps.length; fg++) {
     var fitS = Math.max(freeGaps[fg].startMs, earliestStartMs);
     var fitE = Math.min(freeGaps[fg].endMs, latestEndMs);
     if (fitE > fitS) {
       var fitMs = fitE - fitS;
       if (fitMs > longestDaytimeFitMs) longestDaytimeFitMs = fitMs;
+      totalFreeDaytimeMs += fitMs;
     }
   }
+  var totalFreeDaytimeMinutes = Math.floor(totalFreeDaytimeMs / 60000);
+  var linearDenominator = GYM_FREE_MINUTES_FULL - GYM_FREE_MINUTES_MIN;
+  var freeTimeRatio = linearDenominator > 0
+    ? (totalFreeDaytimeMinutes - GYM_FREE_MINUTES_MIN) / linearDenominator
+    : (totalFreeDaytimeMinutes >= GYM_FREE_MINUTES_FULL ? 1 : 0);
+  if (freeTimeRatio < 0) freeTimeRatio = 0;
+  if (freeTimeRatio > 1) freeTimeRatio = 1;
+  var allowedGymMinutes = 30 + (15 * freeTimeRatio);
   var optionFeasibility = [];
   for (var ofi = 0; ofi < options.length; ofi++) {
     var requiredMinutes = options[ofi].gymMinutes + 2 * options[ofi].travelEachMinutes;
@@ -344,6 +354,11 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
     earliestStartMs: earliestStartMs,
     latestEndMs: latestEndMs,
     longestDaytimeFitMinutes: Math.floor(longestDaytimeFitMs / 60000),
+    totalFreeDaytimeMinutes: totalFreeDaytimeMinutes,
+    freeMinutesMin: GYM_FREE_MINUTES_MIN,
+    freeMinutesFull: GYM_FREE_MINUTES_FULL,
+    freeTimeRatio: freeTimeRatio,
+    allowedGymMinutes: allowedGymMinutes,
     optionFeasibility: optionFeasibility
   });
   // #endregion
@@ -398,6 +413,7 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
       if (slot) {
         var placementExact = tryBuildGymPlacement(slot, options[o], "exact-start", { exactStartMs: exactStartMs });
         if (!placementExact) continue;
+        if (options[o].gymMinutes > allowedGymMinutes) continue;
         // #region agent log
         _timeMapDebugLog("gym-debug", "H3", "TimeMapBlocks.gs:_timeMapPlaceGym:exact-match", "Gym slot selected via preferred exact start", { dayStartMs: dayStartMs, freeGapsCount: (freeGaps || []).length, travelMode: options[o].travelMode, gymMinutes: options[o].gymMinutes, travelEachMinutes: options[o].travelEachMinutes, slotStartMs: slot.startMs, slotEndMs: slot.endMs });
         // #endregion
@@ -418,6 +434,7 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
       if (slot) {
         var placementWindow = tryBuildGymPlacement(slot, options[o], "window", { windowIndex: w });
         if (!placementWindow) continue;
+        if (options[o].gymMinutes > allowedGymMinutes) continue;
         // #region agent log
         _timeMapDebugLog("gym-debug", "H3", "TimeMapBlocks.gs:_timeMapPlaceGym:window-match", "Gym slot selected via window search", { dayStartMs: dayStartMs, freeGapsCount: (freeGaps || []).length, windowIndex: w, windowStartMs: windows[w].startMs, windowEndMs: windows[w].endMs, travelMode: options[o].travelMode, gymMinutes: options[o].gymMinutes, travelEachMinutes: options[o].travelEachMinutes, slotStartMs: slot.startMs, slotEndMs: slot.endMs });
         // #endregion
