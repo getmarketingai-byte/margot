@@ -655,6 +655,35 @@ function _timeMapSetEventLocation(calendar, event, locationText) {
 }
 
 /**
+ * Returns SkedPal Gym intervals in [startDate, endDate], sorted by start time.
+ * Used only for building gym travel legs when GYM_SOURCE_SKEDPAL is enabled.
+ */
+function _timeMapGetSkedpalGymIntervals(startDate, endDate) {
+  var out = [];
+  var calendars = CalendarApp.getAllCalendars();
+  for (var i = 0; i < calendars.length; i++) {
+    var cal = calendars[i];
+    if (!_timeMapIsSkedpalCalendar(cal)) continue;
+    var events = cal.getEvents(startDate, endDate, { search: GYM_TITLE });
+    for (var j = 0; j < events.length; j++) {
+      var ev = events[j];
+      if (ev.isAllDayEvent()) continue;
+      var title = (ev.getTitle() || "").trim();
+      if (title !== GYM_TITLE) continue;
+      var startMs = ev.getStartTime().getTime();
+      var endMs = ev.getEndTime().getTime();
+      if (endMs <= startMs) continue;
+      out.push({
+        startMs: startMs,
+        endMs: endMs
+      });
+    }
+  }
+  out.sort(function (a, b) { return a.startMs - b.startMs; });
+  return out;
+}
+
+/**
  * Builds [Errands] overlays from Travel [Drive] events.
  * - 1h before "[Drive] To:"
  * - 1h after "[Drive] Home"
@@ -741,15 +770,20 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     return;
   }
 
+  var useSkedpalGymSource = (typeof GYM_SOURCE_SKEDPAL !== "undefined") && !!GYM_SOURCE_SKEDPAL;
   var gymCal = null;
   if (GYM_EVENT_CALENDAR_ID && GYM_EVENT_CALENDAR_ID.indexOf("REPLACE_WITH_") !== 0) {
     gymCal = CalendarApp.getCalendarById(GYM_EVENT_CALENDAR_ID);
     if (!gymCal) console.warn("Gym calendar not found. Set GYM_EVENT_CALENDAR_ID in Config.gs.");
   } else {
-    console.warn("GYM_EVENT_CALENDAR_ID is placeholder; Gym scheduling is skipped.");
+    console.warn("GYM_EVENT_CALENDAR_ID is placeholder; legacy gym calendar sync is skipped.");
+  }
+  var travelCal = CalendarApp.getCalendarById(TRAVEL_CALENDAR_ID);
+  if (!travelCal) {
+    console.warn("Travel calendar not found. Set TRAVEL_CALENDAR_ID in Config.gs.");
   }
   // #region agent log
-  _timeMapDebugLog("gym-debug", "H1", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-cal-init", "Gym calendar initialization status", { gymEventCalendarIdConfigured: !!GYM_EVENT_CALENDAR_ID, isPlaceholder: GYM_EVENT_CALENDAR_ID ? GYM_EVENT_CALENDAR_ID.indexOf("REPLACE_WITH_") === 0 : true, gymCalendarResolved: !!gymCal });
+  _timeMapDebugLog("gym-debug", "H1", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-cal-init", "Gym calendar initialization status", { gymEventCalendarIdConfigured: !!GYM_EVENT_CALENDAR_ID, isPlaceholder: GYM_EVENT_CALENDAR_ID ? GYM_EVENT_CALENDAR_ID.indexOf("REPLACE_WITH_") === 0 : true, gymCalendarResolved: !!gymCal, useSkedpalGymSource: useSkedpalGymSource, travelCalendarResolved: !!travelCal });
   // #endregion
 
   var now = new Date();
@@ -781,6 +815,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   var titles = _timeMapBlockTitles();
   for (var t = 0; t < titles.length; t++) desiredByTitle[titles[t]] = [];
   var desiredGym = [];
+  var desiredGymTimemap = [];
+  var desiredGymTravel = [];
   var allCalendars = CalendarApp.getAllCalendars();
   var skedpalCalendarAudit = [];
   for (var ac = 0; ac < allCalendars.length; ac++) {
@@ -870,11 +906,12 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     // #endregion
 
     var outsideIntervals = _timeMapGetOutsideIntervalsForDay(timemapCal, dayStartMs, dayEndMs);
-    var gymSlot = gymCal ? _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) : null;
+    var shouldPlaceGymSlot = useSkedpalGymSource || !!gymCal;
+    var gymSlot = shouldPlaceGymSlot ? _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) : null;
     // #region agent log
     _timeMapDebugLog("gym-debug", "H4", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-slot", "Gym slot placement result for day", { dayKey: dayKey, hasGymCal: !!gymCal, gymSlotFound: !!gymSlot, travelMode: gymSlot ? gymSlot.travelMode : null, gymStartMs: gymSlot ? gymSlot.gymStartMs : null, gymEndMs: gymSlot ? gymSlot.gymEndMs : null });
     // #endregion
-    if (!gymSlot && noSlotDiagnosticsEmitted < 6) {
+    if (shouldPlaceGymSlot && !gymSlot && noSlotDiagnosticsEmitted < 6) {
       var topCalendars = Object.keys(busyDebugMeta.calendarCounts).map(function (name) {
         return { name: name, count: busyDebugMeta.calendarCounts[name] };
       }).sort(function (a, b) {
@@ -894,37 +931,46 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
       noSlotDiagnosticsEmitted++;
     }
     if (gymSlot) {
-      var toTitle = gymSlot.travelMode === "run" ? GYM_RUN_TO_TITLE : GYM_DRIVE_TO_TITLE;
-      var homeTitle = gymSlot.travelMode === "run" ? GYM_RUN_HOME_TITLE : GYM_DRIVE_HOME_TITLE;
-      var toKey = gymSlot.travelMode === "run" ? dayKey + "_Gym_RunTo" : dayKey + "_Gym_DriveTo";
-      var homeKey = gymSlot.travelMode === "run" ? dayKey + "_Gym_RunHome" : dayKey + "_Gym_DriveHome";
-
-      if (gymSlot.travelBeforeStartMs != null && gymSlot.travelBeforeEndMs != null) {
-        desiredGym.push({
-          key: toKey,
-          title: toTitle,
-          startMs: gymSlot.travelBeforeStartMs,
-          endMs: gymSlot.travelBeforeEndMs,
-          location: ""
+      if (useSkedpalGymSource) {
+        desiredGymTimemap.push({
+          key: "GYM_TIMEMAP_" + gymSlot.gymStartMs + "_" + gymSlot.gymEndMs,
+          title: TIMEMAP_GYM_TITLE,
+          startMs: gymSlot.gymStartMs,
+          endMs: gymSlot.gymEndMs
         });
-      }
+      } else {
+        var toTitle = gymSlot.travelMode === "run" ? GYM_RUN_TO_TITLE : GYM_DRIVE_TO_TITLE;
+        var homeTitle = gymSlot.travelMode === "run" ? GYM_RUN_HOME_TITLE : GYM_DRIVE_HOME_TITLE;
+        var toKey = gymSlot.travelMode === "run" ? dayKey + "_Gym_RunTo" : dayKey + "_Gym_DriveTo";
+        var homeKey = gymSlot.travelMode === "run" ? dayKey + "_Gym_RunHome" : dayKey + "_Gym_DriveHome";
 
-      desiredGym.push({
-        key: dayKey + "_Gym_Main",
-        title: GYM_TITLE,
-        startMs: gymSlot.gymStartMs,
-        endMs: gymSlot.gymEndMs,
-        location: GYM_LOCATION_SUBSTRING
-      });
+        if (gymSlot.travelBeforeStartMs != null && gymSlot.travelBeforeEndMs != null) {
+          desiredGym.push({
+            key: toKey,
+            title: toTitle,
+            startMs: gymSlot.travelBeforeStartMs,
+            endMs: gymSlot.travelBeforeEndMs,
+            location: ""
+          });
+        }
 
-      if (gymSlot.travelAfterStartMs != null && gymSlot.travelAfterEndMs != null) {
         desiredGym.push({
-          key: homeKey,
-          title: homeTitle,
-          startMs: gymSlot.travelAfterStartMs,
-          endMs: gymSlot.travelAfterEndMs,
-          location: ""
+          key: dayKey + "_Gym_Main",
+          title: GYM_TITLE,
+          startMs: gymSlot.gymStartMs,
+          endMs: gymSlot.gymEndMs,
+          location: GYM_LOCATION_SUBSTRING
         });
+
+        if (gymSlot.travelAfterStartMs != null && gymSlot.travelAfterEndMs != null) {
+          desiredGym.push({
+            key: homeKey,
+            title: homeTitle,
+            startMs: gymSlot.travelAfterStartMs,
+            endMs: gymSlot.travelAfterEndMs,
+            location: ""
+          });
+        }
       }
 
       busy.push({ startMs: gymSlot.startMs, endMs: gymSlot.endMs });
@@ -963,6 +1009,56 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   syncEnd.setDate(todayStart.getDate() + (lastProcessedDay + 1));
   syncEnd.setHours(0, 0, 0, 0);
   syncEnd.setMilliseconds(syncEnd.getMilliseconds() - 1);
+
+  if (useSkedpalGymSource && travelCal) {
+    var skedpalGymIntervals = _timeMapGetSkedpalGymIntervals(syncStart, syncEnd);
+    for (var sg = 0; sg < skedpalGymIntervals.length; sg++) {
+      var gymStartMs = skedpalGymIntervals[sg].startMs;
+      var gymEndMs = skedpalGymIntervals[sg].endMs;
+      if (gymEndMs <= gymStartMs) continue;
+
+      var gymDayStart = new Date(gymStartMs);
+      gymDayStart.setHours(0, 0, 0, 0);
+      var gymDayEnd = new Date(gymDayStart.getTime());
+      gymDayEnd.setDate(gymDayEnd.getDate() + 1);
+      var gymDayStartMs = gymDayStart.getTime();
+      var gymDayEndMs = gymDayEnd.getTime();
+      var outsideForGymDay = _timeMapGetOutsideIntervalsForDay(timemapCal, gymDayStartMs, gymDayEndMs);
+      var runLegMs = GYM_RUN_MINUTES * 60 * 1000;
+      var runToStartMs = gymStartMs - runLegMs;
+      var runHomeEndMs = gymEndMs + runLegMs;
+      var useRun = _timeMapIntervalIsFullyContained(runToStartMs, gymStartMs, outsideForGymDay)
+        && _timeMapIntervalIsFullyContained(gymEndMs, runHomeEndMs, outsideForGymDay);
+      var legMinutes = useRun ? GYM_RUN_MINUTES : GYM_DRIVE_MINUTES;
+      var legMs = legMinutes * 60 * 1000;
+      var toTitle = useRun ? GYM_RUN_TO_TITLE : GYM_DRIVE_TO_TITLE;
+      var homeTitle = useRun ? GYM_RUN_HOME_TITLE : GYM_DRIVE_HOME_TITLE;
+      var toStartMs = gymStartMs - legMs;
+      var toEndMs = gymStartMs;
+      var homeStartMs = gymEndMs;
+      var homeEndMs = gymEndMs + legMs;
+
+      if (toEndMs > toStartMs) {
+        desiredGymTravel.push({
+          key: "GYM_TRAVEL_" + toStartMs + "_" + toEndMs + "_" + toTitle,
+          title: toTitle,
+          startMs: toStartMs,
+          endMs: toEndMs,
+          location: ""
+        });
+      }
+      if (homeEndMs > homeStartMs) {
+        desiredGymTravel.push({
+          key: "GYM_TRAVEL_" + homeStartMs + "_" + homeEndMs + "_" + homeTitle,
+          title: homeTitle,
+          startMs: homeStartMs,
+          endMs: homeEndMs,
+          location: ""
+        });
+      }
+    }
+  }
+
   if (TIMEMAP_DEBUG_NO_WRITES) {
     var desiredTimeMapCounts = {};
     for (var tc = 0; tc < titles.length; tc++) {
@@ -970,13 +1066,15 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     }
     var desiredErrands = _timeMapBuildErrandsOverlays(syncStart, syncEnd);
     var desiredScoutHall = _timeMapBuildScoutHallOverlays(syncStart, syncEnd);
+    var desiredGymTimemapCount = desiredGymTimemap.length;
     var desiredGymMainCount = 0;
     var desiredGymRunToCount = 0;
     var desiredGymRunHomeCount = 0;
     var desiredGymDriveToCount = 0;
     var desiredGymDriveHomeCount = 0;
-    for (var dg = 0; dg < desiredGym.length; dg++) {
-      var gTitle = desiredGym[dg].title;
+    var desiredGymAll = desiredGym.concat(desiredGymTravel);
+    for (var dg = 0; dg < desiredGymAll.length; dg++) {
+      var gTitle = desiredGymAll[dg].title;
       if (gTitle === GYM_TITLE) desiredGymMainCount++;
       else if (gTitle === GYM_RUN_TO_TITLE) desiredGymRunToCount++;
       else if (gTitle === GYM_RUN_HOME_TITLE) desiredGymRunHomeCount++;
@@ -991,7 +1089,9 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
       desiredTimeMapCounts: desiredTimeMapCounts,
       desiredErrandsCount: desiredErrands.length,
       desiredScoutHallCount: desiredScoutHall.length,
-      desiredGymTotal: desiredGym.length,
+      useSkedpalGymSource: useSkedpalGymSource,
+      desiredGymTimemap: desiredGymTimemapCount,
+      desiredGymTotal: desiredGymAll.length,
       desiredGymMain: desiredGymMainCount,
       desiredGymRunTo: desiredGymRunToCount,
       desiredGymRunHome: desiredGymRunHomeCount,
@@ -1025,95 +1125,179 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     }
   });
 
-  if (gymCal) {
-    var desiredGymMain = desiredGym.filter(function (e) { return e.title === GYM_TITLE; });
-    var desiredGymRunTo = desiredGym.filter(function (e) { return e.title === GYM_RUN_TO_TITLE; });
-    var desiredGymRunHome = desiredGym.filter(function (e) { return e.title === GYM_RUN_HOME_TITLE; });
-    var desiredGymDriveTo = desiredGym.filter(function (e) { return e.title === GYM_DRIVE_TO_TITLE; });
-    var desiredGymDriveHome = desiredGym.filter(function (e) { return e.title === GYM_DRIVE_HOME_TITLE; });
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H5", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:pre-sync-gym", "Gym desired payload counts before sync", { syncStartMs: syncStart.getTime(), syncEndMs: syncEnd.getTime(), desiredGymTotal: desiredGym.length, desiredGymMain: desiredGymMain.length, desiredGymRunTo: desiredGymRunTo.length, desiredGymRunHome: desiredGymRunHome.length, desiredGymDriveTo: desiredGymDriveTo.length, desiredGymDriveHome: desiredGymDriveHome.length });
-    // #endregion
-
-    var gymMainStats = _syncCalendarEvents(gymCal, GYM_TITLE, syncStart, syncEnd, desiredGymMain, {
+  if (useSkedpalGymSource) {
+    _syncCalendarEvents(timemapCal, TIMEMAP_GYM_TITLE, syncStart, syncEnd, desiredGymTimemap, {
       keyFromExisting: function (ev) {
-        return (ev.getTitle() || "").trim() === GYM_TITLE
-          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_Main"
+        return (ev.getTitle() || "").trim() === TIMEMAP_GYM_TITLE
+          ? "GYM_TIMEMAP_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime()
           : null;
-      },
-      onEventSynced: function (calendar, event, desired) {
-        // #region agent log
-        _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-main-synced", "Gym main event synced", {
-          calendarId: calendar.getId(),
-          eventId: event.getId(),
-          title: event.getTitle(),
-          startMs: event.getStartTime().getTime(),
-          endMs: event.getEndTime().getTime(),
-          desiredKey: desired ? desired.key : null
-        });
-        // #endregion
-        _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-main-stats", "Gym main sync stats", gymMainStats);
-    // #endregion
+  }
 
-    var gymRunToStats = _syncCalendarEvents(gymCal, GYM_RUN_TO_TITLE, syncStart, syncEnd, desiredGymRunTo, {
+  if (useSkedpalGymSource && travelCal) {
+    var desiredTravelRunTo = desiredGymTravel.filter(function (e) { return e.title === GYM_RUN_TO_TITLE; });
+    var desiredTravelRunHome = desiredGymTravel.filter(function (e) { return e.title === GYM_RUN_HOME_TITLE; });
+    var desiredTravelDriveTo = desiredGymTravel.filter(function (e) { return e.title === GYM_DRIVE_TO_TITLE; });
+    var desiredTravelDriveHome = desiredGymTravel.filter(function (e) { return e.title === GYM_DRIVE_HOME_TITLE; });
+
+    _syncCalendarEvents(travelCal, GYM_RUN_TO_TITLE, syncStart, syncEnd, desiredTravelRunTo, {
       keyFromExisting: function (ev) {
         return (ev.getTitle() || "").trim() === GYM_RUN_TO_TITLE
-          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunTo"
+          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_RUN_TO_TITLE
           : null;
-      },
-      onEventSynced: function (calendar, event, desired) {
-        _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-run-to-stats", "Gym run-to sync stats", gymRunToStats);
-    // #endregion
-
-    var gymRunHomeStats = _syncCalendarEvents(gymCal, GYM_RUN_HOME_TITLE, syncStart, syncEnd, desiredGymRunHome, {
+    _syncCalendarEvents(travelCal, GYM_RUN_HOME_TITLE, syncStart, syncEnd, desiredTravelRunHome, {
       keyFromExisting: function (ev) {
         return (ev.getTitle() || "").trim() === GYM_RUN_HOME_TITLE
-          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunHome"
+          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_RUN_HOME_TITLE
           : null;
-      },
-      onEventSynced: function (calendar, event, desired) {
-        _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-run-home-stats", "Gym run-home sync stats", gymRunHomeStats);
-    // #endregion
-
-    var gymDriveToStats = _syncCalendarEvents(gymCal, GYM_DRIVE_TO_TITLE, syncStart, syncEnd, desiredGymDriveTo, {
+    _syncCalendarEvents(travelCal, GYM_DRIVE_TO_TITLE, syncStart, syncEnd, desiredTravelDriveTo, {
       keyFromExisting: function (ev) {
         return (ev.getTitle() || "").trim() === GYM_DRIVE_TO_TITLE
-          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveTo"
+          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_DRIVE_TO_TITLE
           : null;
-      },
-      onEventSynced: function (calendar, event, desired) {
-        _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-drive-to-stats", "Gym drive-to sync stats", gymDriveToStats);
-    // #endregion
-
-    var gymDriveHomeStats = _syncCalendarEvents(gymCal, GYM_DRIVE_HOME_TITLE, syncStart, syncEnd, desiredGymDriveHome, {
+    _syncCalendarEvents(travelCal, GYM_DRIVE_HOME_TITLE, syncStart, syncEnd, desiredTravelDriveHome, {
       keyFromExisting: function (ev) {
         return (ev.getTitle() || "").trim() === GYM_DRIVE_HOME_TITLE
-          ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveHome"
+          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_DRIVE_HOME_TITLE
           : null;
-      },
-      onEventSynced: function (calendar, event, desired) {
-        _timeMapSetEventLocation(calendar, event, desired.location || "");
       }
     });
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-drive-home-stats", "Gym drive-home sync stats", gymDriveHomeStats);
-    // #endregion
+  }
+
+  if (gymCal) {
+    if (useSkedpalGymSource) {
+      _syncCalendarEvents(gymCal, GYM_TITLE, syncStart, syncEnd, [], {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_TITLE
+            ? "LEGACY_GYM_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime()
+            : null;
+        }
+      });
+      _syncCalendarEvents(gymCal, GYM_RUN_TO_TITLE, syncStart, syncEnd, [], {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_RUN_TO_TITLE
+            ? "LEGACY_GYM_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_RUNTO"
+            : null;
+        }
+      });
+      _syncCalendarEvents(gymCal, GYM_RUN_HOME_TITLE, syncStart, syncEnd, [], {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_RUN_HOME_TITLE
+            ? "LEGACY_GYM_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_RUNHOME"
+            : null;
+        }
+      });
+      _syncCalendarEvents(gymCal, GYM_DRIVE_TO_TITLE, syncStart, syncEnd, [], {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_DRIVE_TO_TITLE
+            ? "LEGACY_GYM_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_DRIVETO"
+            : null;
+        }
+      });
+      _syncCalendarEvents(gymCal, GYM_DRIVE_HOME_TITLE, syncStart, syncEnd, [], {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_DRIVE_HOME_TITLE
+            ? "LEGACY_GYM_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_DRIVEHOME"
+            : null;
+        }
+      });
+    } else {
+      var desiredGymMain = desiredGym.filter(function (e) { return e.title === GYM_TITLE; });
+      var desiredGymRunTo = desiredGym.filter(function (e) { return e.title === GYM_RUN_TO_TITLE; });
+      var desiredGymRunHome = desiredGym.filter(function (e) { return e.title === GYM_RUN_HOME_TITLE; });
+      var desiredGymDriveTo = desiredGym.filter(function (e) { return e.title === GYM_DRIVE_TO_TITLE; });
+      var desiredGymDriveHome = desiredGym.filter(function (e) { return e.title === GYM_DRIVE_HOME_TITLE; });
+      // #region agent log
+      _timeMapDebugLog("gym-debug", "H5", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:pre-sync-gym", "Gym desired payload counts before sync", { syncStartMs: syncStart.getTime(), syncEndMs: syncEnd.getTime(), desiredGymTotal: desiredGym.length, desiredGymMain: desiredGymMain.length, desiredGymRunTo: desiredGymRunTo.length, desiredGymRunHome: desiredGymRunHome.length, desiredGymDriveTo: desiredGymDriveTo.length, desiredGymDriveHome: desiredGymDriveHome.length });
+      // #endregion
+
+      var gymMainStats = _syncCalendarEvents(gymCal, GYM_TITLE, syncStart, syncEnd, desiredGymMain, {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_TITLE
+            ? _timeMapDateKey(ev.getStartTime()) + "_Gym_Main"
+            : null;
+        },
+        onEventSynced: function (calendar, event, desired) {
+          // #region agent log
+          _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-main-synced", "Gym main event synced", {
+            calendarId: calendar.getId(),
+            eventId: event.getId(),
+            title: event.getTitle(),
+            startMs: event.getStartTime().getTime(),
+            endMs: event.getEndTime().getTime(),
+            desiredKey: desired ? desired.key : null
+          });
+          // #endregion
+          _timeMapSetEventLocation(calendar, event, desired.location || "");
+        }
+      });
+      // #region agent log
+      _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-main-stats", "Gym main sync stats", gymMainStats);
+      // #endregion
+
+      var gymRunToStats = _syncCalendarEvents(gymCal, GYM_RUN_TO_TITLE, syncStart, syncEnd, desiredGymRunTo, {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_RUN_TO_TITLE
+            ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunTo"
+            : null;
+        },
+        onEventSynced: function (calendar, event, desired) {
+          _timeMapSetEventLocation(calendar, event, desired.location || "");
+        }
+      });
+      // #region agent log
+      _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-run-to-stats", "Gym run-to sync stats", gymRunToStats);
+      // #endregion
+
+      var gymRunHomeStats = _syncCalendarEvents(gymCal, GYM_RUN_HOME_TITLE, syncStart, syncEnd, desiredGymRunHome, {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_RUN_HOME_TITLE
+            ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunHome"
+            : null;
+        },
+        onEventSynced: function (calendar, event, desired) {
+          _timeMapSetEventLocation(calendar, event, desired.location || "");
+        }
+      });
+      // #region agent log
+      _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-run-home-stats", "Gym run-home sync stats", gymRunHomeStats);
+      // #endregion
+
+      var gymDriveToStats = _syncCalendarEvents(gymCal, GYM_DRIVE_TO_TITLE, syncStart, syncEnd, desiredGymDriveTo, {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_DRIVE_TO_TITLE
+            ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveTo"
+            : null;
+        },
+        onEventSynced: function (calendar, event, desired) {
+          _timeMapSetEventLocation(calendar, event, desired.location || "");
+        }
+      });
+      // #region agent log
+      _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-drive-to-stats", "Gym drive-to sync stats", gymDriveToStats);
+      // #endregion
+
+      var gymDriveHomeStats = _syncCalendarEvents(gymCal, GYM_DRIVE_HOME_TITLE, syncStart, syncEnd, desiredGymDriveHome, {
+        keyFromExisting: function (ev) {
+          return (ev.getTitle() || "").trim() === GYM_DRIVE_HOME_TITLE
+            ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveHome"
+            : null;
+        },
+        onEventSynced: function (calendar, event, desired) {
+          _timeMapSetEventLocation(calendar, event, desired.location || "");
+        }
+      });
+      // #region agent log
+      _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-drive-home-stats", "Gym drive-home sync stats", gymDriveHomeStats);
+      // #endregion
+    }
   }
 }
 

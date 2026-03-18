@@ -46,6 +46,7 @@ const TIMEMAP_1_TITLE = "[1-Promote/Creative]";
 const TIMEMAP_2_TITLE = "[2-Execute]";
 const TIMEMAP_3_TITLE = "[3-Ops/Future]";
 const TIMEMAP_4_TITLE = "[4-Play]";
+const TIMEMAP_GYM_TITLE = "[gym]";
 const TIMEMAP_ERRANDS_TITLE = "[Errands]";
 const TIMEMAP_SCOUTHALL_TITLE = "[@scouthall]";
 const TIMEMAP_1_HOURS = 4;
@@ -61,6 +62,7 @@ const TIMEMAP_ERRANDS_WINDOW_MINUTES = 60;
 const TIMEMAP_SCOUTHALL_BUFFER_MINUTES = 60;
 const TIMEMAP_SCOUTHALL_LOCATION_MATCH = "waverleyvalley scout group";
 const TIMEMAP_TREAT_SKEDPAL_AS_BUSY = true;
+const GYM_SOURCE_SKEDPAL = true;
 const TIMEMAP_DEBUG_NO_WRITES = false;
 
 // Sleep configuration.
