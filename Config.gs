@@ -42,7 +42,7 @@ const GYM_FREE_MINUTES_FULL = 360;
 const GYM_FREE_MINUTES_MIN = 120;
 
 // TimeMap titles and duration profile.
-const TIMEMAP_1_TITLE = "[1-Promote/Creative]";
+const TIMEMAP_1_TITLE = "[1-Needle-Mover]";
 const TIMEMAP_2_TITLE = "[2-Execute]";
 const TIMEMAP_3_TITLE = "[3-Ops/Future]";
 const TIMEMAP_4_TITLE = "[4-Play]";
@@ -52,11 +52,11 @@ const TIMEMAP_SCOUTHALL_TITLE = "[@scouthall]";
 const TIMEMAP_1_HOURS = 4;
 const TIMEMAP_2_HOURS = 4;
 const TIMEMAP_3_HOURS = 4;
-const TIMEMAP_4_HOURS = 2;
+const TIMEMAP_4_HOURS = 4;
 const TIMEMAP_MIN_1_HOURS = 2;
 const TIMEMAP_MIN_2_HOURS = 2;
 const TIMEMAP_MIN_3_HOURS = 2;
-const TIMEMAP_MIN_4_HOURS = 1;
+const TIMEMAP_MIN_4_HOURS = 2;
 const TIMEMAP_MIN_BLOCK_MINUTES = 30;
 const TIMEMAP_ERRANDS_WINDOW_MINUTES = 60;
 const TIMEMAP_SCOUTHALL_BUFFER_MINUTES = 60;
@@ -66,10 +66,10 @@ const GYM_SOURCE_SKEDPAL = true;
 const TIMEMAP_DEBUG_NO_WRITES = false;
 
 // Sleep configuration.
-const SLEEP_DURATION_HOURS = 8.5;
+const SLEEP_DURATION_HOURS = 8;
 const SLEEP_BEGIN = 20; // hour (0-23) start of "normal sleep" window
 const SLEEP_END = 12; // hour (0-23) end of "normal sleep" window (next day)
-const SLEEP_IDEAL_WAKE_UP_HRS = 6;
+const SLEEP_IDEAL_WAKE_UP_HRS = 7;
 const SLEEP_IDEAL_WAKE_UP_MIN = 0;
 const SLEEP_BUFFER_BEFORE_LEAVE_MINUTES = 60;
 const SLEEP_MIN_BLOCK_HOURS = 4;
