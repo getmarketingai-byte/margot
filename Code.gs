@@ -68,7 +68,7 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
       }
     }
   }
-  if ((ASSUME_NICEWEATHER_BEYOND_FORCAST || BEYOND_FORCAST_IS_INSIDE) && tempEventList.length > 0) {
+  if ((USE_SUNRISE_SUNSET_FOR_OUTSIDE_BEYOND_FORECAST || EXTEND_INSIDE_AND_OUTSIDE_BEYOND_FORECAST) && tempEventList.length > 0) {
     //tempEventList[j]= {};
     const lastEvent = tempEventList[tempEventList.length - 1].niceweather_stop;;
     const newStart = new Date(tempEventList[tempEventList.length - 1].niceweather_stop.getTime() + 24 * 60 * 60 * 1000);
@@ -110,10 +110,10 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });
   _Update_InvertedTimemap(timemap_cal, startDate, endDate, "[Outside]", "[Inside]");
-  if (WORK_OFFICE_IS_INSIDE) {
+  if (ADD_WORK_OFFICE_TO_INSIDE_TIMEMAP) {
     await _BlindAdd_TimeMapEvents_from_EventArr(timemap_cal, timemap_cal.getEvents(startDate, endDate, { search: "[Work_Office]" }), "[Inside]");
   }
-  if (BEYOND_FORCAST_IS_INSIDE && tempEventList.length > 0) {
+  if (EXTEND_INSIDE_AND_OUTSIDE_BEYOND_FORECAST && tempEventList.length > 0) {
     var j = 0;
     var notFound = true;
     while (notFound && j < tempEventList.length) {

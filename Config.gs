@@ -100,10 +100,13 @@ const TRAVEL_DAYS_PER_CHUNK = 30;
 const SLEEP_DAYS_PER_CHUNK = 30;
 const TIMEMAP_DAYS_PER_CHUNK = Math.ceil(SCHEDULING_WINDOW / 2);
 
-// Misc runtime and feature flags.
-const ASSUME_NICEWEATHER_BEYOND_FORCAST = false;
-const WORK_OFFICE_IS_INSIDE = false; // add inside map to office time
-const BEYOND_FORCAST_IS_INSIDE = true; // add inside event for days beyond forecast (both inside and outside tasks)
+// Timemap: behaviour beyond weather forecast and for office.
+/** Use sunrise–sunset for [Outside] on days beyond the weather forecast (assume nice weather). */
+const USE_SUNRISE_SUNSET_FOR_OUTSIDE_BEYOND_FORECAST = false;
+/** Add [Work_Office] events to the [Inside] timemap as well. */
+const ADD_WORK_OFFICE_TO_INSIDE_TIMEMAP = false;
+/** For days beyond the weather forecast, create both [Inside] and [Outside] slots (outside from sunrise–sunset). */
+const EXTEND_INSIDE_AND_OUTSIDE_BEYOND_FORECAST = true;
 const SPLIT_TIMEMAPS_BY_DAYS = true;
 const RATE_LIMIT_SLEEP_MS = 3000;
 const RATE_LIMIT_EVERY_N_EVENTS = 3;
