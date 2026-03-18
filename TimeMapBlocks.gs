@@ -502,6 +502,52 @@ function _timeMapScaledDurations(totalMinutes) {
 }
 
 /**
+ * Minimum total minutes for all four blocks (no overlap).
+ */
+function _timeMapTotalMinMinutes() {
+  return (TIMEMAP_MIN_1_HOURS + TIMEMAP_MIN_2_HOURS + TIMEMAP_MIN_3_HOURS + TIMEMAP_MIN_4_HOURS) * 60;
+}
+
+/**
+ * When available time is below total minimum, builds four blocks: place 1, 2, 3, 4 from the start;
+ * when the next block would go past the end of the day, that block and all remaining blocks
+ * overlap at the end (same end time). Produces 1 | 2 | 3 | 4, then 1 | 2 | 34, 1 | 234, 1234.
+ * @param {number} windowStartMs
+ * @param {number} windowEndMs
+ * @returns {{ title: string, startMs: number, endMs: number }[]}
+ */
+function _timeMapBuildOverlapFromEndBlocks(windowStartMs, windowEndMs) {
+  var titles = _timeMapBlockTitles();
+  var minMs = [
+    TIMEMAP_MIN_1_HOURS * 60 * 60 * 1000,
+    TIMEMAP_MIN_2_HOURS * 60 * 60 * 1000,
+    TIMEMAP_MIN_3_HOURS * 60 * 60 * 1000,
+    TIMEMAP_MIN_4_HOURS * 60 * 60 * 1000
+  ];
+  var out = [];
+  var E = windowEndMs;
+  var W = windowStartMs;
+  var cursor = W;
+  var i = 0;
+  while (i <= 3) {
+    if (cursor + minMs[i] <= E) {
+      out.push({ title: titles[i], startMs: cursor, endMs: cursor + minMs[i] });
+      cursor += minMs[i];
+      i++;
+    } else {
+      var overlapEnd = E;
+      var overlapStart = E - minMs[3];
+      if (overlapStart < W) overlapStart = W;
+      for (var j = i; j <= 3; j++) {
+        out.push({ title: titles[j], startMs: overlapStart, endMs: overlapEnd });
+      }
+      break;
+    }
+  }
+  return out;
+}
+
+/**
  * Builds block events when there are multiple gaps and we want gaps as separators.
  */
 function _timeMapBuildMultiGapBlocks(gaps) {
@@ -519,22 +565,11 @@ function _timeMapBuildMultiGapBlocks(gaps) {
   if (totalMinutes < TIMEMAP_MIN_BLOCK_MINUTES) return [];
 
   var out = [];
-  if (totalMinutes < 7 * 60) {
+  var totalMinMinutes = _timeMapTotalMinMinutes();
+  if (totalMinutes < totalMinMinutes) {
     var windowStartMs = usable[0].startMs;
     var windowEndMs = usable[usable.length - 1].endMs;
-    var b4s = Math.max(windowStartMs, windowEndMs - 60 * 60000);
-    var b3s = Math.max(windowStartMs, windowEndMs - 120 * 60000);
-    var b2e = b3s;
-    var b2s = Math.max(windowStartMs, b2e - 120 * 60000);
-    var b1e = b2s;
-    var b1s = Math.max(windowStartMs, b1e - 120 * 60000);
-    var blocks = [
-      { title: titles[0], startMs: b1s, endMs: b1e },
-      { title: titles[1], startMs: b2s, endMs: b2e },
-      { title: titles[2], startMs: b3s, endMs: windowEndMs },
-      { title: titles[3], startMs: b4s, endMs: windowEndMs }
-    ];
-
+    var blocks = _timeMapBuildOverlapFromEndBlocks(windowStartMs, windowEndMs);
     for (var b = 0; b < blocks.length; b++) {
       var block = blocks[b];
       if (block.endMs <= block.startMs) continue;
@@ -590,6 +625,7 @@ function _timeMapBuildMultiGapBlocks(gaps) {
 
 /**
  * Builds blocks for a single contiguous available window.
+ * When total available time is below the sum of minimum block hours, blocks overlap from the end of the day (4 at end, then 3, 2, 1).
  */
 function _timeMapBuildSingleGapBlocks(startMs, endMs) {
   var titles = _timeMapBlockTitles();
@@ -597,25 +633,11 @@ function _timeMapBuildSingleGapBlocks(startMs, endMs) {
   var out = [];
   if (totalMinutes < TIMEMAP_MIN_BLOCK_MINUTES) return out;
 
-  // < 2h: all blocks fill available time.
-  if (totalMinutes < 120) {
-    for (var t = 0; t < 4; t++) out.push({ title: titles[t], startMs: startMs, endMs: endMs });
-    return out;
-  }
+  var totalMinMinutes = _timeMapTotalMinMinutes();
 
-  // 2h..7h: overlap from end of available window.
-  if (totalMinutes < 7 * 60) {
-    var b4s = Math.max(startMs, endMs - 60 * 60000);
-    var b3s = Math.max(startMs, endMs - 120 * 60000);
-    var b2e = b3s;
-    var b2s = Math.max(startMs, b2e - 120 * 60000);
-    var b1e = b2s;
-    var b1s = Math.max(startMs, b1e - 120 * 60000);
-    out.push({ title: titles[0], startMs: b1s, endMs: b1e });
-    out.push({ title: titles[1], startMs: b2s, endMs: b2e });
-    out.push({ title: titles[2], startMs: b3s, endMs: endMs });
-    out.push({ title: titles[3], startMs: b4s, endMs: endMs });
-    return out;
+  // Below minimum total: overlap from end (1 | 2 | 34, 1 | 234, 1234).
+  if (totalMinutes < totalMinMinutes) {
+    return _timeMapBuildOverlapFromEndBlocks(startMs, endMs);
   }
 
   var durations;
