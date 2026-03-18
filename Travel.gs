@@ -246,6 +246,150 @@ function _travelIsGymAshburton(calendarEvent) {
   return title === GYM_TITLE && _travelIsGymLocation(loc);
 }
 
+function _travelIsGymTitle(titleText) {
+  return /^gym\b/i.test(String(titleText || "").trim());
+}
+
+function _travelIsSkedpalCalendar(cal) {
+  var id = String(cal.getId() || "").toLowerCase();
+  var name = String(cal.getName() || "").toLowerCase();
+  return id.indexOf("skedpal") !== -1 || name.indexOf("skedpal") !== -1;
+}
+
+function _travelMergeIntervals(intervals) {
+  if (!intervals || intervals.length === 0) return [];
+  var sorted = intervals.slice().sort(function (a, b) { return a.startMs - b.startMs; });
+  var merged = [{ startMs: sorted[0].startMs, endMs: sorted[0].endMs }];
+  for (var i = 1; i < sorted.length; i++) {
+    var cur = sorted[i];
+    var last = merged[merged.length - 1];
+    if (cur.startMs <= last.endMs) {
+      if (cur.endMs > last.endMs) last.endMs = cur.endMs;
+    } else {
+      merged.push({ startMs: cur.startMs, endMs: cur.endMs });
+    }
+  }
+  return merged;
+}
+
+function _travelIntervalIsFullyContained(startMs, endMs, mergedIntervals) {
+  if (startMs == null || endMs == null || endMs <= startMs) return false;
+  var intervals = mergedIntervals || [];
+  for (var i = 0; i < intervals.length; i++) {
+    if (startMs >= intervals[i].startMs && endMs <= intervals[i].endMs) return true;
+  }
+  return false;
+}
+
+function _travelGetOutsideIntervalsForDay(dayStartMs, dayEndMs) {
+  var timemapCal = CalendarApp.getCalendarById(TIMEMAP_CALENDAR_ID);
+  if (!timemapCal) return [];
+  var outsideEvents = timemapCal.getEvents(new Date(dayStartMs), new Date(dayEndMs), { search: "[Outside]" });
+  var intervals = [];
+  for (var i = 0; i < outsideEvents.length; i++) {
+    var ev = outsideEvents[i];
+    if (ev.isAllDayEvent()) continue;
+    var s = Math.max(dayStartMs, ev.getStartTime().getTime());
+    var e = Math.min(dayEndMs, ev.getEndTime().getTime());
+    if (e > s) intervals.push({ startMs: s, endMs: e });
+  }
+  return _travelMergeIntervals(intervals);
+}
+
+function _travelGetSkedpalGymIntervals(startDate, endDate) {
+  var out = [];
+  var calendars = CalendarApp.getAllCalendars();
+  for (var i = 0; i < calendars.length; i++) {
+    var cal = calendars[i];
+    if (!_travelIsSkedpalCalendar(cal)) continue;
+    var events = cal.getEvents(startDate, endDate, { search: GYM_TITLE });
+    for (var j = 0; j < events.length; j++) {
+      var ev = events[j];
+      if (ev.isAllDayEvent()) continue;
+      if (!_travelIsGymTitle(ev.getTitle())) continue;
+      var startMs = ev.getStartTime().getTime();
+      var endMs = ev.getEndTime().getTime();
+      if (endMs <= startMs) continue;
+      out.push({ startMs: startMs, endMs: endMs });
+    }
+  }
+  out.sort(function (a, b) { return a.startMs - b.startMs; });
+  return out;
+}
+
+function _travelBuildGymLegEventsFromSkedpal(startDate, endDate) {
+  var out = {
+    driveEvents: [],
+    runToEvents: [],
+    runHomeEvents: []
+  };
+  if (!(typeof GYM_SOURCE_SKEDPAL !== "undefined" && GYM_SOURCE_SKEDPAL)) return out;
+
+  var intervals = _travelGetSkedpalGymIntervals(startDate, endDate);
+  for (var i = 0; i < intervals.length; i++) {
+    var gymStartMs = intervals[i].startMs;
+    var gymEndMs = intervals[i].endMs;
+    var dayStart = new Date(gymStartMs);
+    dayStart.setHours(0, 0, 0, 0);
+    var dayEnd = new Date(dayStart.getTime());
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    var outsideIntervals = _travelGetOutsideIntervalsForDay(dayStart.getTime(), dayEnd.getTime());
+
+    var runLegMs = GYM_RUN_MINUTES * 60 * 1000;
+    var canRunBothLegs = _travelIntervalIsFullyContained(gymStartMs - runLegMs, gymStartMs, outsideIntervals)
+      && _travelIntervalIsFullyContained(gymEndMs, gymEndMs + runLegMs, outsideIntervals);
+    var useRun = !!canRunBothLegs;
+    var legMs = (useRun ? GYM_RUN_MINUTES : GYM_DRIVE_MINUTES) * 60 * 1000;
+
+    var outboundStart = gymStartMs - legMs;
+    var outboundEnd = gymStartMs;
+    var inboundStart = gymEndMs;
+    var inboundEnd = gymEndMs + legMs;
+
+    if (useRun) {
+      if (outboundEnd > outboundStart) {
+        out.runToEvents.push({
+          title: GYM_RUN_TO_TITLE,
+          start: new Date(outboundStart),
+          end: new Date(outboundEnd),
+          key: "GYM_TRAVEL_" + outboundStart + "_" + outboundEnd + "_" + GYM_RUN_TO_TITLE,
+          free: true
+        });
+      }
+      if (inboundEnd > inboundStart) {
+        out.runHomeEvents.push({
+          title: GYM_RUN_HOME_TITLE,
+          start: new Date(inboundStart),
+          end: new Date(inboundEnd),
+          key: "GYM_TRAVEL_" + inboundStart + "_" + inboundEnd + "_" + GYM_RUN_HOME_TITLE,
+          free: true
+        });
+      }
+    } else {
+      if (outboundEnd > outboundStart) {
+        out.driveEvents.push({
+          title: GYM_DRIVE_TO_TITLE,
+          start: new Date(outboundStart),
+          end: new Date(outboundEnd),
+          key: String(outboundStart) + "_" + outboundEnd,
+          free: true
+        });
+      }
+      if (inboundEnd > inboundStart) {
+        out.driveEvents.push({
+          title: GYM_DRIVE_HOME_TITLE,
+          start: new Date(inboundStart),
+          end: new Date(inboundEnd),
+          key: String(inboundStart) + "_" + inboundEnd,
+          free: true
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
 /**
  * Returns true if the location string should be treated as empty (video/phone meeting, no physical place).
  */
@@ -524,15 +668,10 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
   var collected = _travelCollectEventsWithLocations(startDate, endDate);
   var events = collected.events || [];
   var eventSourceByKey = collected.eventSourceByKey || {};
-  if (events.length === 0) {
-    _syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, [], {
-      keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()) + "_" + ev.getEndTime().getTime(); }
-    });
-    return;
-  }
+  var gymLegs = _travelBuildGymLegEventsFromSkedpal(startDate, endDate);
 
   var homeStr = _travelHomeOrigin();
-  var cache = _travelBuildDurationCache(events, homeStr, runOptions);
+  var cache = events.length > 0 ? _travelBuildDurationCache(events, homeStr, runOptions) : {};
 
   var cacheGet = function (origin, dest) {
     return cache[origin + "\n" + dest];
@@ -673,9 +812,30 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
     }
   }
 
+  for (var gd = 0; gd < gymLegs.driveEvents.length; gd++) {
+    desiredDrive.push(gymLegs.driveEvents[gd]);
+  }
+
   _syncCalendarEvents(travelCal, TRAVEL_DRIVE_EVENT_TAG, startDate, endDate, desiredDrive, {
     keyFromExisting: function (ev) {
       return String(ev.getStartTime().getTime()) + "_" + ev.getEndTime().getTime();
+    },
+    setFree: _travelSetEventFree
+  });
+
+  _syncCalendarEvents(travelCal, GYM_RUN_TO_TITLE, startDate, endDate, gymLegs.runToEvents, {
+    keyFromExisting: function (ev) {
+      return (ev.getTitle() || "").trim() === GYM_RUN_TO_TITLE
+        ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_RUN_TO_TITLE
+        : null;
+    },
+    setFree: _travelSetEventFree
+  });
+  _syncCalendarEvents(travelCal, GYM_RUN_HOME_TITLE, startDate, endDate, gymLegs.runHomeEvents, {
+    keyFromExisting: function (ev) {
+      return (ev.getTitle() || "").trim() === GYM_RUN_HOME_TITLE
+        ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_RUN_HOME_TITLE
+        : null;
     },
     setFree: _travelSetEventFree
   });

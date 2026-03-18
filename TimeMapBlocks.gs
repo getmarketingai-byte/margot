@@ -655,35 +655,6 @@ function _timeMapSetEventLocation(calendar, event, locationText) {
 }
 
 /**
- * Returns SkedPal Gym intervals in [startDate, endDate], sorted by start time.
- * Used only for building gym travel legs when GYM_SOURCE_SKEDPAL is enabled.
- */
-function _timeMapGetSkedpalGymIntervals(startDate, endDate) {
-  var out = [];
-  var calendars = CalendarApp.getAllCalendars();
-  for (var i = 0; i < calendars.length; i++) {
-    var cal = calendars[i];
-    if (!_timeMapIsSkedpalCalendar(cal)) continue;
-    var events = cal.getEvents(startDate, endDate, { search: GYM_TITLE });
-    for (var j = 0; j < events.length; j++) {
-      var ev = events[j];
-      if (ev.isAllDayEvent()) continue;
-      var title = (ev.getTitle() || "").trim();
-      if (title !== GYM_TITLE) continue;
-      var startMs = ev.getStartTime().getTime();
-      var endMs = ev.getEndTime().getTime();
-      if (endMs <= startMs) continue;
-      out.push({
-        startMs: startMs,
-        endMs: endMs
-      });
-    }
-  }
-  out.sort(function (a, b) { return a.startMs - b.startMs; });
-  return out;
-}
-
-/**
  * Builds [Errands] overlays from Travel [Drive] events.
  * - 1h before "[Drive] To:"
  * - 1h after "[Drive] Home"
@@ -778,12 +749,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   } else {
     console.warn("GYM_EVENT_CALENDAR_ID is placeholder; legacy gym calendar sync is skipped.");
   }
-  var travelCal = CalendarApp.getCalendarById(TRAVEL_CALENDAR_ID);
-  if (!travelCal) {
-    console.warn("Travel calendar not found. Set TRAVEL_CALENDAR_ID in Config.gs.");
-  }
   // #region agent log
-  _timeMapDebugLog("gym-debug", "H1", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-cal-init", "Gym calendar initialization status", { gymEventCalendarIdConfigured: !!GYM_EVENT_CALENDAR_ID, isPlaceholder: GYM_EVENT_CALENDAR_ID ? GYM_EVENT_CALENDAR_ID.indexOf("REPLACE_WITH_") === 0 : true, gymCalendarResolved: !!gymCal, useSkedpalGymSource: useSkedpalGymSource, travelCalendarResolved: !!travelCal });
+  _timeMapDebugLog("gym-debug", "H1", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-cal-init", "Gym calendar initialization status", { gymEventCalendarIdConfigured: !!GYM_EVENT_CALENDAR_ID, isPlaceholder: GYM_EVENT_CALENDAR_ID ? GYM_EVENT_CALENDAR_ID.indexOf("REPLACE_WITH_") === 0 : true, gymCalendarResolved: !!gymCal, useSkedpalGymSource: useSkedpalGymSource });
   // #endregion
 
   var now = new Date();
@@ -816,7 +783,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   for (var t = 0; t < titles.length; t++) desiredByTitle[titles[t]] = [];
   var desiredGym = [];
   var desiredGymTimemap = [];
-  var desiredGymTravel = [];
   var allCalendars = CalendarApp.getAllCalendars();
   var skedpalCalendarAudit = [];
   for (var ac = 0; ac < allCalendars.length; ac++) {
@@ -1010,55 +976,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   syncEnd.setHours(0, 0, 0, 0);
   syncEnd.setMilliseconds(syncEnd.getMilliseconds() - 1);
 
-  if (useSkedpalGymSource && travelCal) {
-    var skedpalGymIntervals = _timeMapGetSkedpalGymIntervals(syncStart, syncEnd);
-    for (var sg = 0; sg < skedpalGymIntervals.length; sg++) {
-      var gymStartMs = skedpalGymIntervals[sg].startMs;
-      var gymEndMs = skedpalGymIntervals[sg].endMs;
-      if (gymEndMs <= gymStartMs) continue;
-
-      var gymDayStart = new Date(gymStartMs);
-      gymDayStart.setHours(0, 0, 0, 0);
-      var gymDayEnd = new Date(gymDayStart.getTime());
-      gymDayEnd.setDate(gymDayEnd.getDate() + 1);
-      var gymDayStartMs = gymDayStart.getTime();
-      var gymDayEndMs = gymDayEnd.getTime();
-      var outsideForGymDay = _timeMapGetOutsideIntervalsForDay(timemapCal, gymDayStartMs, gymDayEndMs);
-      var runLegMs = GYM_RUN_MINUTES * 60 * 1000;
-      var runToStartMs = gymStartMs - runLegMs;
-      var runHomeEndMs = gymEndMs + runLegMs;
-      var useRun = _timeMapIntervalIsFullyContained(runToStartMs, gymStartMs, outsideForGymDay)
-        && _timeMapIntervalIsFullyContained(gymEndMs, runHomeEndMs, outsideForGymDay);
-      var legMinutes = useRun ? GYM_RUN_MINUTES : GYM_DRIVE_MINUTES;
-      var legMs = legMinutes * 60 * 1000;
-      var toTitle = useRun ? GYM_RUN_TO_TITLE : GYM_DRIVE_TO_TITLE;
-      var homeTitle = useRun ? GYM_RUN_HOME_TITLE : GYM_DRIVE_HOME_TITLE;
-      var toStartMs = gymStartMs - legMs;
-      var toEndMs = gymStartMs;
-      var homeStartMs = gymEndMs;
-      var homeEndMs = gymEndMs + legMs;
-
-      if (toEndMs > toStartMs) {
-        desiredGymTravel.push({
-          key: "GYM_TRAVEL_" + toStartMs + "_" + toEndMs + "_" + toTitle,
-          title: toTitle,
-          startMs: toStartMs,
-          endMs: toEndMs,
-          location: ""
-        });
-      }
-      if (homeEndMs > homeStartMs) {
-        desiredGymTravel.push({
-          key: "GYM_TRAVEL_" + homeStartMs + "_" + homeEndMs + "_" + homeTitle,
-          title: homeTitle,
-          startMs: homeStartMs,
-          endMs: homeEndMs,
-          location: ""
-        });
-      }
-    }
-  }
-
   if (TIMEMAP_DEBUG_NO_WRITES) {
     var desiredTimeMapCounts = {};
     for (var tc = 0; tc < titles.length; tc++) {
@@ -1072,7 +989,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     var desiredGymRunHomeCount = 0;
     var desiredGymDriveToCount = 0;
     var desiredGymDriveHomeCount = 0;
-    var desiredGymAll = desiredGym.concat(desiredGymTravel);
+    var desiredGymAll = desiredGym;
     for (var dg = 0; dg < desiredGymAll.length; dg++) {
       var gTitle = desiredGymAll[dg].title;
       if (gTitle === GYM_TITLE) desiredGymMainCount++;
@@ -1130,42 +1047,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
       keyFromExisting: function (ev) {
         return (ev.getTitle() || "").trim() === TIMEMAP_GYM_TITLE
           ? "GYM_TIMEMAP_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime()
-          : null;
-      }
-    });
-  }
-
-  if (useSkedpalGymSource && travelCal) {
-    var desiredTravelRunTo = desiredGymTravel.filter(function (e) { return e.title === GYM_RUN_TO_TITLE; });
-    var desiredTravelRunHome = desiredGymTravel.filter(function (e) { return e.title === GYM_RUN_HOME_TITLE; });
-    var desiredTravelDriveTo = desiredGymTravel.filter(function (e) { return e.title === GYM_DRIVE_TO_TITLE; });
-    var desiredTravelDriveHome = desiredGymTravel.filter(function (e) { return e.title === GYM_DRIVE_HOME_TITLE; });
-
-    _syncCalendarEvents(travelCal, GYM_RUN_TO_TITLE, syncStart, syncEnd, desiredTravelRunTo, {
-      keyFromExisting: function (ev) {
-        return (ev.getTitle() || "").trim() === GYM_RUN_TO_TITLE
-          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_RUN_TO_TITLE
-          : null;
-      }
-    });
-    _syncCalendarEvents(travelCal, GYM_RUN_HOME_TITLE, syncStart, syncEnd, desiredTravelRunHome, {
-      keyFromExisting: function (ev) {
-        return (ev.getTitle() || "").trim() === GYM_RUN_HOME_TITLE
-          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_RUN_HOME_TITLE
-          : null;
-      }
-    });
-    _syncCalendarEvents(travelCal, GYM_DRIVE_TO_TITLE, syncStart, syncEnd, desiredTravelDriveTo, {
-      keyFromExisting: function (ev) {
-        return (ev.getTitle() || "").trim() === GYM_DRIVE_TO_TITLE
-          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_DRIVE_TO_TITLE
-          : null;
-      }
-    });
-    _syncCalendarEvents(travelCal, GYM_DRIVE_HOME_TITLE, syncStart, syncEnd, desiredTravelDriveHome, {
-      keyFromExisting: function (ev) {
-        return (ev.getTitle() || "").trim() === GYM_DRIVE_HOME_TITLE
-          ? "GYM_TRAVEL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime() + "_" + GYM_DRIVE_HOME_TITLE
           : null;
       }
     });
