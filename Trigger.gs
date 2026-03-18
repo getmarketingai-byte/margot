@@ -111,7 +111,7 @@ function clean_used_timeMapCal() {
   var endDate = new Date();
   endDate.setDate(now.getDate() + SCHEDULING_WINDOW);
   var timemap_calendar = CalendarApp.getCalendarById(TIMEMAP_CALENDAR_ID);
-  var arr = ['[Outside]', '[Inside]', '[NiceWeather]', '[Daylight]', '[Not@work]', '[SLEEP]', TIMEMAP_1_TITLE, TIMEMAP_2_TITLE, TIMEMAP_3_TITLE, TIMEMAP_4_TITLE, TIMEMAP_ERRANDS_TITLE, TIMEMAP_SCOUTHALL_TITLE];
+  var arr = ['[Outside]', '[Inside]', '[NiceWeather]', '[Daylight]', '[Not@work]', '[SLEEP]', TIMEMAP_1_TITLE, TIMEMAP_2_TITLE, TIMEMAP_3_TITLE, TIMEMAP_4_TITLE, TIMEMAP_ERRANDS_TITLE, TIMEMAP_SCOUTHALL_TITLE, TIMEMAP_MORNING_ROUTINE_TITLE, TIMEMAP_SHUTDOWN_ROUTINE_TITLE];
   return _clean_timeMapCal(timemap_calendar, arr, now, endDate);
 }
 

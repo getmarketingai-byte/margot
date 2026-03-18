@@ -565,59 +565,21 @@ function _timeMapBuildMultiGapBlocks(gaps) {
   if (totalMinutes < TIMEMAP_MIN_BLOCK_MINUTES) return [];
 
   var out = [];
-  var totalMinMinutes = _timeMapTotalMinMinutes();
-  if (totalMinutes < totalMinMinutes) {
-    var windowStartMs = usable[0].startMs;
-    var windowEndMs = usable[usable.length - 1].endMs;
-    var blocks = _timeMapBuildOverlapFromEndBlocks(windowStartMs, windowEndMs);
-    for (var b = 0; b < blocks.length; b++) {
-      var block = blocks[b];
-      if (block.endMs <= block.startMs) continue;
-      for (var g = 0; g < usable.length; g++) {
-        var segStart = Math.max(block.startMs, usable[g].startMs);
-        var segEnd = Math.min(block.endMs, usable[g].endMs);
-        if ((segEnd - segStart) < minMs) continue;
-        out.push({
-          title: block.title,
-          startMs: segStart,
-          endMs: segEnd
-        });
-      }
-    }
-    return out;
-  }
-
-  var durationsMin;
-  if (totalMinutes >= 14 * 60) {
-    durationsMin = [TIMEMAP_1_HOURS * 60, TIMEMAP_2_HOURS * 60, TIMEMAP_3_HOURS * 60, TIMEMAP_4_HOURS * 60];
-  } else {
-    durationsMin = _timeMapScaledDurations(totalMinutes);
-  }
-
-  var blockIdx = 0;
-  while (blockIdx < 4 && durationsMin[blockIdx] <= 0) blockIdx++;
-  if (blockIdx >= 4) return [];
-
-  var remainingMsForBlock = durationsMin[blockIdx] * 60 * 1000;
-  for (var g = 0; g < usable.length && blockIdx < 4; g++) {
-    var gapCursor = usable[g].startMs;
-    var gapEnd = usable[g].endMs;
-    while (gapCursor < gapEnd && blockIdx < 4) {
-      var gapRemainingMs = gapEnd - gapCursor;
-      var placeMs = Math.min(remainingMsForBlock, gapRemainingMs);
-      if (placeMs < minMs) break;
+  var windowStartMs = usable[0].startMs;
+  var windowEndMs = usable[usable.length - 1].endMs;
+  var blocks = _timeMapBuildOverlapFromEndBlocks(windowStartMs, windowEndMs);
+  for (var b = 0; b < blocks.length; b++) {
+    var block = blocks[b];
+    if (block.endMs <= block.startMs) continue;
+    for (var g = 0; g < usable.length; g++) {
+      var segStart = Math.max(block.startMs, usable[g].startMs);
+      var segEnd = Math.min(block.endMs, usable[g].endMs);
+      if ((segEnd - segStart) < minMs) continue;
       out.push({
-        title: titles[blockIdx],
-        startMs: gapCursor,
-        endMs: gapCursor + placeMs
+        title: block.title,
+        startMs: segStart,
+        endMs: segEnd
       });
-      gapCursor += placeMs;
-      remainingMsForBlock -= placeMs;
-      if (remainingMsForBlock <= 0) {
-        blockIdx++;
-        while (blockIdx < 4 && durationsMin[blockIdx] <= 0) blockIdx++;
-        if (blockIdx < 4) remainingMsForBlock = durationsMin[blockIdx] * 60 * 1000;
-      }
     }
   }
   return out;
@@ -651,6 +613,22 @@ function _timeMapBuildSingleGapBlocks(startMs, endMs) {
     var next = (i === 3) ? endMs : Math.min(endMs, cursor + durations[i] * 60000);
     if (next > cursor) out.push({ title: titles[i], startMs: cursor, endMs: next });
     cursor = next;
+  }
+  var minBlockMs = TIMEMAP_MIN_BLOCK_MINUTES * 60 * 1000;
+  var minMsByBlock = [
+    TIMEMAP_MIN_1_HOURS * 60 * 60 * 1000,
+    TIMEMAP_MIN_2_HOURS * 60 * 60 * 1000,
+    TIMEMAP_MIN_3_HOURS * 60 * 60 * 1000,
+    TIMEMAP_MIN_4_HOURS * 60 * 60 * 1000
+  ];
+  for (var bi = 0; bi <= 3; bi++) {
+    var hasBlock = out.some(function (b) { return b.title === titles[bi]; });
+    if (!hasBlock) {
+      var segStart = Math.max(startMs, endMs - minMsByBlock[bi]);
+      if (endMs - segStart >= minBlockMs) {
+        out.push({ title: titles[bi], startMs: segStart, endMs: endMs });
+      }
+    }
   }
   return out;
 }
@@ -748,6 +726,57 @@ function _timeMapBuildScoutHallOverlays(rangeStart, rangeEnd) {
     }
   }
   return out;
+}
+
+/**
+ * Builds [MorningRoutine] and [ShutdownRoutine] overlays from Sleep calendar [SLEEP] events.
+ * MorningRoutine: 30 min immediately after each sleep end (wake). ShutdownRoutine: 30 min immediately before each sleep start.
+ * @param {Date} rangeStart
+ * @param {Date} rangeEnd
+ * @returns {{ morning: Array<{title: string, startMs: number, endMs: number, key: string}>, shutdown: Array<{title: string, startMs: number, endMs: number, key: string}> }}
+ */
+function _timeMapBuildRoutineOverlays(rangeStart, rangeEnd) {
+  var morning = [];
+  var shutdown = [];
+  if (typeof SLEEP_CALENDAR_ID === "undefined" || typeof SLEEP_EVENT_TAG === "undefined") return { morning: morning, shutdown: shutdown };
+  var sleepCal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
+  if (!sleepCal) return { morning: morning, shutdown: shutdown };
+  var rangeStartMs = rangeStart.getTime();
+  var rangeEndMs = rangeEnd.getTime();
+  var morningMs = (typeof TIMEMAP_MORNING_ROUTINE_MINUTES !== "undefined" ? TIMEMAP_MORNING_ROUTINE_MINUTES : 30) * 60 * 1000;
+  var shutdownMs = (typeof TIMEMAP_SHUTDOWN_ROUTINE_MINUTES !== "undefined" ? TIMEMAP_SHUTDOWN_ROUTINE_MINUTES : 30) * 60 * 1000;
+  var sleepEvents = sleepCal.getEvents(rangeStart, rangeEnd, { search: SLEEP_EVENT_TAG });
+  for (var i = 0; i < sleepEvents.length; i++) {
+    var ev = sleepEvents[i];
+    if (ev.isAllDayEvent()) continue;
+    var S = ev.getStartTime().getTime();
+    var E = ev.getEndTime().getTime();
+    var mornStart = E;
+    var mornEnd = E + morningMs;
+    if (mornEnd > rangeStartMs && mornStart < rangeEndMs) {
+      var clipMornStart = Math.max(mornStart, rangeStartMs);
+      var clipMornEnd = Math.min(mornEnd, rangeEndMs);
+      morning.push({
+        title: TIMEMAP_MORNING_ROUTINE_TITLE,
+        startMs: clipMornStart,
+        endMs: clipMornEnd,
+        key: "MORNING_" + clipMornStart + "_" + clipMornEnd
+      });
+    }
+    var shutStart = S - shutdownMs;
+    var shutEnd = S;
+    if (shutEnd > rangeStartMs && shutStart < rangeEndMs) {
+      var clipShutStart = Math.max(shutStart, rangeStartMs);
+      var clipShutEnd = Math.min(shutEnd, rangeEndMs);
+      shutdown.push({
+        title: TIMEMAP_SHUTDOWN_ROUTINE_TITLE,
+        startMs: clipShutStart,
+        endMs: clipShutEnd,
+        key: "SHUTDOWN_" + clipShutStart + "_" + clipShutEnd
+      });
+    }
+  }
+  return { morning: morning, shutdown: shutdown };
 }
 
 /**
@@ -1061,6 +1090,18 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   _syncCalendarEvents(timemapCal, TIMEMAP_SCOUTHALL_TITLE, syncStart, syncEnd, desiredScoutHall, {
     keyFromExisting: function (ev) {
       return "SCOUTHALL_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime();
+    }
+  });
+
+  var routineOverlays = _timeMapBuildRoutineOverlays(syncStart, syncEnd);
+  _syncCalendarEvents(timemapCal, TIMEMAP_MORNING_ROUTINE_TITLE, syncStart, syncEnd, routineOverlays.morning, {
+    keyFromExisting: function (ev) {
+      return "MORNING_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime();
+    }
+  });
+  _syncCalendarEvents(timemapCal, TIMEMAP_SHUTDOWN_ROUTINE_TITLE, syncStart, syncEnd, routineOverlays.shutdown, {
+    keyFromExisting: function (ev) {
+      return "SHUTDOWN_" + ev.getStartTime().getTime() + "_" + ev.getEndTime().getTime();
     }
   });
 
