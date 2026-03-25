@@ -7,7 +7,29 @@
  * Requires: Travel calendar to be updated first (run updateTravelDriveEvents before addEvents_Sleep).
  * Configure SLEEP_CALENDAR_ID in Config.gs. Uses CALENDARS_TO_EXCLUDE when scanning for commitments.
  * Events with status "free" (transparency: transparent) are not counted as conflicts; requires Calendar advanced service.
+ * Gym-related outbound [Drive] To: legs do not shift wake time; [Drive] Home is only a sleep constraint when shown as busy (non-gym travel stays busy).
  */
+
+/** Strips trailing " (fallback Nm)" suffix from travel event titles for stable matching. */
+function _sleepStripTravelFallbackSuffix(title) {
+  var t = (title || "").trim();
+  var marker = " (fallback ";
+  var idx = t.indexOf(marker);
+  if (idx === -1) return t;
+  return t.substring(0, idx).trim();
+}
+
+/**
+ * True for outbound travel titles that exist only for gym (Skedpal or Snap Ashburton), so they must not pull wake time earlier.
+ */
+function _sleepIsGymRelatedOutboundDriveTitle(title) {
+  var t = _sleepStripTravelFallbackSuffix(title || "");
+  if (t.indexOf(SLEEP_DRIVE_OUTBOUND_PREFIX) !== 0) return false;
+  var rest = t.substring(SLEEP_DRIVE_OUTBOUND_PREFIX.length).trim();
+  if (rest === GYM_TITLE || /^gym\b/i.test(rest)) return true;
+  if (/gym/i.test(rest) && /\[run\]/i.test(rest)) return true;
+  return false;
+}
 
 /** Returns true if the event title is travel/drive-related (excluded from "last main conflict" display). */
 function _sleepIsTravelConflict(title) {
@@ -116,7 +138,7 @@ function _sleepIsMultiDayEvent(calendarEvent) {
  * Collects timed (non-all-day) events in the given range from all calendars except
  * those excluded by _sleepIsCalendarExcluded. Only includes events that are "busy"
  * (transparency !== "transparent"). Events with status "free" do not affect sleep scheduling; all-day and multi-day events are also excluded.
- * Also includes [Drive] Home from Travel calendar so sleep cannot start until you've arrived home.
+ * Also includes busy [Drive] Home from Travel calendar so sleep cannot start until you've arrived home (transparent legs, e.g. gym, are ignored).
  * Returns array of lightweight commitment records sorted by start time.
  */
 function _sleepCollectCommitmentEvents(start, end) {
@@ -146,7 +168,7 @@ function _sleepCollectCommitmentEvents(start, end) {
     for (var d = 0; d < driveEvents.length; d++) {
       var dev = driveEvents[d];
       if ((dev.getTitle() || "").trim() === SLEEP_DRIVE_HOME_TITLE) {
-        if (!dev.isAllDayEvent() && !_sleepIsMultiDayEvent(dev)) {
+        if (!dev.isAllDayEvent() && !_sleepIsMultiDayEvent(dev) && _eventIsBusyByTransparency(dev, travelCal.getId(), travelCal.getName())) {
           events.push({
             startMs: dev.getStartTime().getTime(),
             endMs: dev.getEndTime().getTime(),
@@ -188,6 +210,7 @@ function _sleepGetLeaveTimesByDay(startDate, endDate) {
     var ev = driveEvents[i];
     var title = ev.getTitle() || "";
     if (title.indexOf(SLEEP_DRIVE_OUTBOUND_PREFIX) !== 0) continue;
+    if (_sleepIsGymRelatedOutboundDriveTitle(title)) continue;
     var start = ev.getStartTime();
     var key = start.getFullYear() + "-" + start.getMonth() + "-" + start.getDate();
     if (byDay[key] === undefined || start.getTime() < byDay[key].time.getTime()) {

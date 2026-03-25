@@ -578,16 +578,37 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
   var existingList = calendar.getEvents(startDate, endDate, { search: eventTag });
   var existingByKey = {};
   var stats = { created: 0, updated: 0, deleted: 0, skippedCreates: 0 };
+  var nowMs = Date.now();
   for (var i = 0; i < existingList.length; i++) {
     var ev = existingList[i];
     var k = keyFromExistingWithList ? keyFromExistingWithList(ev, existingList) : keyFromExisting(ev);
-    if (k != null && k !== "") existingByKey[k] = ev;
+    if (k == null || k === "") continue;
+    if (existingByKey[k]) {
+      if (ev.getEndTime().getTime() >= nowMs) {
+        ev.deleteEvent();
+        stats.deleted++;
+        if (stats.deleted % SYNC_THROTTLE_EVERY_N === 0) Utilities.sleep(SYNC_THROTTLE_MS);
+      }
+      continue;
+    }
+    existingByKey[k] = ev;
   }
+  var dedupedDesired = [];
   var desiredByKey = {};
-  for (var j = 0; j < desiredEvents.length; j++) {
-    var d = desiredEvents[j];
-    if (d.key != null && d.key !== "") desiredByKey[d.key] = d;
+  var lastDesiredByKey = {};
+  for (var jd = 0; jd < desiredEvents.length; jd++) {
+    var dj = desiredEvents[jd];
+    if (dj.key != null && dj.key !== "") lastDesiredByKey[dj.key] = dj;
   }
+  for (var je = 0; je < desiredEvents.length; je++) {
+    var de = desiredEvents[je];
+    if (de.key == null || de.key === "") continue;
+    if (lastDesiredByKey[de.key] !== de) continue;
+    desiredByKey[de.key] = de;
+    dedupedDesired.push(de);
+    delete lastDesiredByKey[de.key];
+  }
+  desiredEvents = dedupedDesired;
   var opCount = 0;
   function throttle() {
     opCount++;
@@ -595,7 +616,6 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
   }
   // Delete existing events that are no longer desired. Skip events that have already ended
   // (historical records), e.g. last night's sleep - keep those for the calendar record.
-  var nowMs = Date.now();
   for (var key in existingByKey) {
     if (!desiredByKey[key]) {
       var ev = existingByKey[key];
@@ -637,6 +657,7 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
       var newEv = calendar.createEvent(desired.title || eventTag, startTime, endTime);
       if (setFree && desired.free) setFree(calendar, newEv);
       if (onEventSynced) onEventSynced(calendar, newEv, desired, true);
+      existingByKey[dKey] = newEv;
       stats.created++;
       throttle();
     }

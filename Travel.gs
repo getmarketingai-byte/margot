@@ -317,7 +317,7 @@ function _travelGetSkedpalGymIntervals(startDate, endDate) {
   return out;
 }
 
-function _travelBuildGymLegEventsFromSkedpal(startDate, endDate) {
+function _travelBuildGymLegEventsFromSkedpal(startDate, endDate, locationEvents) {
   var out = {
     driveEvents: [],
     runToEvents: [],
@@ -329,6 +329,20 @@ function _travelBuildGymLegEventsFromSkedpal(startDate, endDate) {
   for (var i = 0; i < intervals.length; i++) {
     var gymStartMs = intervals[i].startMs;
     var gymEndMs = intervals[i].endMs;
+    if (locationEvents && locationEvents.length) {
+      var skipSynthetic = false;
+      for (var ex = 0; ex < locationEvents.length; ex++) {
+        var lev = locationEvents[ex];
+        if (!_travelIsGymAshburton(lev)) continue;
+        var ls = lev.getStartTime().getTime();
+        var le = lev.getEndTime().getTime();
+        if (ls < gymEndMs && le > gymStartMs) {
+          skipSynthetic = true;
+          break;
+        }
+      }
+      if (skipSynthetic) continue;
+    }
     var dayStart = new Date(gymStartMs);
     dayStart.setHours(0, 0, 0, 0);
     var dayEnd = new Date(dayStart.getTime());
@@ -668,7 +682,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
   var collected = _travelCollectEventsWithLocations(startDate, endDate);
   var events = collected.events || [];
   var eventSourceByKey = collected.eventSourceByKey || {};
-  var gymLegs = _travelBuildGymLegEventsFromSkedpal(startDate, endDate);
+  var gymLegs = _travelBuildGymLegEventsFromSkedpal(startDate, endDate, events);
 
   var homeStr = _travelHomeOrigin();
   var cache = events.length > 0 ? _travelBuildDurationCache(events, homeStr, runOptions) : {};
@@ -751,7 +765,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
           start: outboundStart,
           end: arriveAt,
           key: String(outboundStart.getTime()) + "_" + arriveAt.getTime(),
-          free: evIsFree
+          free: isGymAshburton ? true : evIsFree
         });
       }
     }
@@ -807,7 +821,7 @@ function updateTravelDriveEvents(dayOffset, dayCount, runOptions) {
         start: inboundStart,
         end: inboundEnd,
         key: String(inboundStart.getTime()) + "_" + inboundEnd.getTime(),
-        free: evIsFree
+        free: isGymAshburton ? true : evIsFree
       });
     }
   }
