@@ -1,7 +1,9 @@
 /**
  * Sleep automation module.
- * Reserves 8 hours of sleep per night, ending 1 hour before "leave" time from the travel
- * automation when present, otherwise at an ideal wake time. Adapts to shift work by
+ * Reserves 8 hours of sleep per night, ending before earliest outbound [Drive] To: (minus
+ * SLEEP_BUFFER_BEFORE_LEAVE_MINUTES, optionally rounded) when present, otherwise at ideal wake.
+ * [Drive] Home blocks sleep until end + SLEEP_BUFFER_AFTER_DRIVE_HOME_MINUTES (then optional round).
+ * Adapts to shift work by
  * avoiding or splitting around events during normal sleep hours (fallback: two 4-hour blocks).
  *
  * Requires: Travel calendar to be updated first (run updateTravelDriveEvents before addEvents_Sleep).
@@ -169,9 +171,16 @@ function _sleepCollectCommitmentEvents(start, end) {
       var dev = driveEvents[d];
       if ((dev.getTitle() || "").trim() === SLEEP_DRIVE_HOME_TITLE) {
         if (!dev.isAllDayEvent() && !_sleepIsMultiDayEvent(dev) && _eventIsBusyByTransparency(dev, travelCal.getId(), travelCal.getName())) {
+          var rawEnd = dev.getEndTime().getTime();
+          var afterHomeMs =
+            rawEnd + (typeof SLEEP_BUFFER_AFTER_DRIVE_HOME_MINUTES === "number" ? SLEEP_BUFFER_AFTER_DRIVE_HOME_MINUTES : 0) * 60 * 1000;
+          var endAfterBuffer =
+            typeof SLEEP_TRAVEL_BUFFER_ROUND_MINUTES === "number" && SLEEP_TRAVEL_BUFFER_ROUND_MINUTES > 0
+              ? _sleepRoundLocalTimeMs(afterHomeMs, SLEEP_TRAVEL_BUFFER_ROUND_MINUTES)
+              : afterHomeMs;
           events.push({
             startMs: dev.getStartTime().getTime(),
-            endMs: dev.getEndTime().getTime(),
+            endMs: endAfterBuffer,
             title: dev.getTitle() || "",
             calendarName: travelCal.getName() || ""
           });
@@ -223,6 +232,21 @@ function _sleepGetLeaveTimesByDay(startDate, endDate) {
 /** Returns true if [start1, end1] and [start2, end2] overlap (times in ms). */
 function _sleepOverlaps(start1, end1, start2, end2) {
   return start1 < end2 && start2 < end1;
+}
+
+/**
+ * Rounds a local-time instant to the nearest N minutes (same calendar day anchor from midnight).
+ * @param {number} ms - UTC ms
+ * @param {number} roundMinutes - e.g. 15; 0 or negative = return ms unchanged
+ * @returns {number}
+ */
+function _sleepRoundLocalTimeMs(ms, roundMinutes) {
+  if (!roundMinutes || roundMinutes <= 0) return ms;
+  var d = new Date(ms);
+  var dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0).getTime();
+  var minsSinceMidnight = (ms - dayStart) / 60000;
+  var rounded = Math.round(minsSinceMidnight / roundMinutes) * roundMinutes;
+  return dayStart + rounded * 60000;
 }
 
 /**
@@ -287,6 +311,8 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var ms8 = SLEEP_DURATION_HOURS * msPerHour;
   var ms4 = SLEEP_MIN_BLOCK_HOURS * msPerHour;
   var bufferMs = SLEEP_BUFFER_BEFORE_LEAVE_MINUTES * 60 * 1000;
+  var roundMin =
+    typeof SLEEP_TRAVEL_BUFFER_ROUND_MINUTES === "number" ? SLEEP_TRAVEL_BUFFER_ROUND_MINUTES : 0;
   var quotaBudget = null;
   if (runOptions && runOptions.useQuotaBudget) {
     quotaBudget = _getQuotaRunBudget(QUOTA_SERVICE_CALENDAR_CREATES);
@@ -312,7 +338,9 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
     idealWake.setHours(SLEEP_IDEAL_WAKE_UP_HRS, SLEEP_IDEAL_WAKE_UP_MIN, 0, 0);
     var targetWake;
     if (leaveByDay[dateKey]) {
-      var wakeFromLeave = new Date(leaveByDay[dateKey].time.getTime() - bufferMs);
+      var leaveWakeMs = leaveByDay[dateKey].time.getTime() - bufferMs;
+      leaveWakeMs = _sleepRoundLocalTimeMs(leaveWakeMs, roundMin);
+      var wakeFromLeave = new Date(leaveWakeMs);
       // Use leave only to wake earlier, never later (no sleep-in from travel).
       targetWake = wakeFromLeave.getTime() < idealWake.getTime() ? wakeFromLeave : idealWake;
     } else {
@@ -322,7 +350,10 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
     var targetEnd = targetWake.getTime();
     var targetStart = targetEnd - ms8;
     var leaveInfo = leaveByDay[dateKey];
-    var usedLeaveForWake = leaveInfo && targetWake.getTime() === leaveInfo.time.getTime() - bufferMs;
+    var leaveWakeForCompare =
+      leaveInfo &&
+      _sleepRoundLocalTimeMs(leaveInfo.time.getTime() - bufferMs, roundMin);
+    var usedLeaveForWake = leaveInfo && targetWake.getTime() === leaveWakeForCompare;
     var leaveTitleForDay = leaveInfo ? leaveInfo.title : null;
 
     // Only schedule nights that end in the future (skip "night ending today" / past nights).

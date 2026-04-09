@@ -75,7 +75,15 @@ const SLEEP_BEGIN = 20; // hour (0-23) start of "normal sleep" window
 const SLEEP_END = 12; // hour (0-23) end of "normal sleep" window (next day)
 const SLEEP_IDEAL_WAKE_UP_HRS = 7;
 const SLEEP_IDEAL_WAKE_UP_MIN = 0;
+/** Minutes before earliest outbound [Drive] To: start to set wake (prep, breakfast). */
 const SLEEP_BUFFER_BEFORE_LEAVE_MINUTES = 60;
+/**
+ * Minutes after [Drive] Home ends before sleep may start (wind-down; not straight to bed).
+ * Applied on top of the drive end time, then SLEEP_TRAVEL_BUFFER_ROUND_MINUTES (if > 0).
+ */
+const SLEEP_BUFFER_AFTER_DRIVE_HOME_MINUTES = 60;
+/** Round travel-adjusted times (wake-from-leave, earliest sleep after home) to nearest N minutes; 0 = no rounding. */
+const SLEEP_TRAVEL_BUFFER_ROUND_MINUTES = 15;
 const SLEEP_MIN_BLOCK_HOURS = 4;
 const SLEEP_EVENT_TAG = "[SLEEP]";
 const SLEEP_OVERRIDE_TAG = "[OVERRIDE]";
