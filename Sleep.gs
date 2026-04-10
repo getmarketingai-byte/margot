@@ -45,6 +45,11 @@ function _sleepGetApiEventId(calendarEventId) {
   return calendarEventId.slice(-11) === "@google.com" ? calendarEventId.slice(0, -11) : calendarEventId;
 }
 
+/** True when the user recorded real sleep at bedtime ([Actual]); must not be replaced by automation. */
+function _sleepTitleHasActualTag(title) {
+  return (title || "").indexOf(SLEEP_ACTUAL_TAG) !== -1;
+}
+
 /** Adds [OVERRIDE] after [SLEEP] tag if missing, preserving existing suffix text. */
 function _sleepEnsureOverrideTag(title) {
   var t = (title || "").trim();
@@ -519,6 +524,14 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
         endMs: existingEndMs,
         isOverride: true
       };
+    } else if (_sleepTitleHasActualTag(existingTitle)) {
+      desiredByKey[existingKey] = {
+        key: existingKey,
+        title: existingTitle,
+        startMs: existingStartMs,
+        endMs: existingEndMs,
+        isOverride: true
+      };
     }
   }
   desiredSleep = [];
@@ -534,6 +547,9 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var syncStats = _syncCalendarEvents(sleep_cal, SLEEP_EVENT_TAG, syncStart, syncEnd, desiredSleep, {
     keyFromExistingWithList: keyFromExistingWithList,
     maxCreates: quotaBudget ? quotaBudget.budget : null,
+    preserveExisting: function (ev) {
+      return _sleepTitleHasActualTag(ev.getTitle());
+    },
     onEventSynced: function (calendar, event, desired) {
       if (desired && desired.isOverride) return;
       var startTime = desired.start instanceof Date ? desired.start : (desired.startMs != null ? new Date(desired.startMs) : null);

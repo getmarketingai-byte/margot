@@ -566,7 +566,7 @@ function _clean_timeMapCal(timemap_cal, arrEventNames, startDate, endDate) {
  * @param {Date} startDate - Range start.
  * @param {Date} endDate - Range end.
  * @param {Array<{title: string, start: Date, end: Date, key: string, free?: boolean}>} desiredEvents - Desired events; each must have key for matching.
- * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void, maxCreates?: number, onEventSynced?: (Calendar, CalendarEvent, Object, boolean) => void }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep). onEventSynced is called after create/update with (calendar, event, desired, wasCreated).
+ * @param {{ keyFromExisting: (CalendarEvent) => string, keyFromExistingWithList?: (CalendarEvent, CalendarEvent[]) => string, setFree?: (Calendar, CalendarEvent) => void, maxCreates?: number, onEventSynced?: (Calendar, CalendarEvent, Object, boolean) => void, preserveExisting?: (CalendarEvent) => boolean }} options - keyFromExisting(ev) returns key; if keyFromExistingWithList(ev, list) is set, it is used instead (so keys can be stable per night for Sleep). onEventSynced is called after create/update with (calendar, event, desired, wasCreated). preserveExisting(ev) when true skips deleting that event when it is not desired; for duplicate keys, keeps the preserved event over a non-preserved one.
  * @returns {{created: number, updated: number, deleted: number, skippedCreates: number}}
  */
 function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEvents, options) {
@@ -575,6 +575,7 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
   var setFree = options.setFree;
   var maxCreates = options.maxCreates;
   var onEventSynced = options.onEventSynced;
+  var preserveExisting = options.preserveExisting;
   var existingList = calendar.getEvents(startDate, endDate, { search: eventTag });
   var existingByKey = {};
   var stats = { created: 0, updated: 0, deleted: 0, skippedCreates: 0 };
@@ -584,10 +585,25 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
     var k = keyFromExistingWithList ? keyFromExistingWithList(ev, existingList) : keyFromExisting(ev);
     if (k == null || k === "") continue;
     if (existingByKey[k]) {
+      var existingDup = existingByKey[k];
       if (ev.getEndTime().getTime() >= nowMs) {
-        ev.deleteEvent();
-        stats.deleted++;
-        if (stats.deleted % SYNC_THROTTLE_EVERY_N === 0) Utilities.sleep(SYNC_THROTTLE_MS);
+        var evPreserve = preserveExisting && preserveExisting(ev);
+        var exPreserve = preserveExisting && preserveExisting(existingDup);
+        if (evPreserve && !exPreserve) {
+          existingDup.deleteEvent();
+          stats.deleted++;
+          if (stats.deleted % SYNC_THROTTLE_EVERY_N === 0) Utilities.sleep(SYNC_THROTTLE_MS);
+          existingByKey[k] = ev;
+        } else if (!evPreserve) {
+          ev.deleteEvent();
+          stats.deleted++;
+          if (stats.deleted % SYNC_THROTTLE_EVERY_N === 0) Utilities.sleep(SYNC_THROTTLE_MS);
+        } else {
+          // Both marked preserve (or only existing): drop duplicate (second occurrence).
+          ev.deleteEvent();
+          stats.deleted++;
+          if (stats.deleted % SYNC_THROTTLE_EVERY_N === 0) Utilities.sleep(SYNC_THROTTLE_MS);
+        }
       }
       continue;
     }
@@ -618,9 +634,10 @@ function _syncCalendarEvents(calendar, eventTag, startDate, endDate, desiredEven
   // (historical records), e.g. last night's sleep - keep those for the calendar record.
   for (var key in existingByKey) {
     if (!desiredByKey[key]) {
-      var ev = existingByKey[key];
-      if (ev.getEndTime().getTime() < nowMs) continue;  // preserve past events
-      ev.deleteEvent();
+      var evDel = existingByKey[key];
+      if (evDel.getEndTime().getTime() < nowMs) continue;  // preserve past events
+      if (preserveExisting && preserveExisting(evDel)) continue;
+      evDel.deleteEvent();
       stats.deleted++;
       throttle();
     }

@@ -87,6 +87,8 @@ const SLEEP_TRAVEL_BUFFER_ROUND_MINUTES = 15;
 const SLEEP_MIN_BLOCK_HOURS = 4;
 const SLEEP_EVENT_TAG = "[SLEEP]";
 const SLEEP_OVERRIDE_TAG = "[OVERRIDE]";
+/** User-recorded sleep at bedtime; must not be removed or overwritten by automation. */
+const SLEEP_ACTUAL_TAG = "[Actual]";
 const SLEEP_EXTPROP_AUTO_START = "sleepAutoStart";
 const SLEEP_EXTPROP_AUTO_END = "sleepAutoEnd";
 const SLEEP_DRIVE_OUTBOUND_PREFIX = "[Drive] To:";
