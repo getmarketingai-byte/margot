@@ -113,6 +113,8 @@ const MAX_RUNTIME_COMBINED_PHASE_MS = 2 * 60 * 1000;
 const TRAVEL_DAYS_PER_CHUNK = 30;
 const SLEEP_DAYS_PER_CHUNK = 30;
 const TIMEMAP_DAYS_PER_CHUNK = Math.ceil(SCHEDULING_WINDOW / 2);
+/** Milliseconds reserved for the calendar sync phase so planning cannot consume the entire run (sync had no deadline and caused 6m timeouts). */
+const TIMEMAP_SYNC_RESERVE_MS = 2 * 60 * 1000;
 
 // Timemap: behaviour beyond weather forecast and for office.
 /** Use sunrise–sunset for [Outside] on days beyond the weather forecast (assume nice weather). */

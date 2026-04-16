@@ -924,8 +924,17 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   var endDayExclusive = Math.min(offset + count, SCHEDULING_WINDOW);
   var maxRuntimeMs = runOptions && runOptions.maxRuntimeMs ? runOptions.maxRuntimeMs : null;
   var runStartMs = Date.now();
+  var safetyBufferMs = 30 * 1000;
+  var scriptLimitMs =
+    (typeof SCRIPT_RUNTIME_LIMIT_MINUTES !== "undefined" ? SCRIPT_RUNTIME_LIMIT_MINUTES : 6) * 60 * 1000 - safetyBufferMs;
+  var totalBudgetMs = maxRuntimeMs != null ? Math.min(maxRuntimeMs, scriptLimitMs) : scriptLimitMs;
+  var reserveCap = typeof TIMEMAP_SYNC_RESERVE_MS !== "undefined" ? TIMEMAP_SYNC_RESERVE_MS : 2 * 60 * 1000;
+  var syncReserveMs = Math.min(reserveCap, Math.max(45 * 1000, totalBudgetMs - 60 * 1000));
+  var planningHorizonMs = Math.max(60 * 1000, totalBudgetMs - syncReserveMs);
+  var planningDeadlineMs = runStartMs + planningHorizonMs;
+  var syncDeadlineMs = runStartMs + totalBudgetMs;
   // #region agent log
-  _timeMapDebugLog("gym-debug", "H2", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:range", "TimeMap run window parameters", { offset: offset, count: count, endDayExclusive: endDayExclusive, schedulingWindow: SCHEDULING_WINDOW, maxRuntimeMs: maxRuntimeMs });
+  _timeMapDebugLog("gym-debug", "H2", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:range", "TimeMap run window parameters", { offset: offset, count: count, endDayExclusive: endDayExclusive, schedulingWindow: SCHEDULING_WINDOW, maxRuntimeMs: maxRuntimeMs, totalBudgetMs: totalBudgetMs, planningDeadlineMs: planningDeadlineMs, syncDeadlineMs: syncDeadlineMs });
   // #endregion
   // #region agent log
   _timeMapDebugLog("gym-debug", "H10", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:timezone", "Timezone configuration cross-check", {
@@ -975,8 +984,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
 
   var lastProcessedDay = offset - 1;
   for (var i = offset; i < endDayExclusive; i++) {
-    if (maxRuntimeMs != null && (Date.now() - runStartMs) >= maxRuntimeMs) break;
-    lastProcessedDay = i;
+    if (Date.now() >= planningDeadlineMs) break;
 
     var dayStart = new Date(todayStart.getTime());
     dayStart.setDate(todayStart.getDate() + i);
@@ -1001,6 +1009,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
       skedpalMultiDaySkipped: 0
     };
     var busy = _timeMapCollectBusyIntervals(dayStartMs, dayEndMs, excluded, allCalendars, busyDebugMeta);
+    if (Date.now() >= planningDeadlineMs) break;
     var mergedBusy = _timeMapMergeIntervals(busy);
     var freeGaps = _timeMapFreeGaps(dayStartMs, dayEndMs, mergedBusy);
     if (sleepCal) {
@@ -1127,6 +1136,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
         key: String(bl.startMs) + "_" + bl.title
       });
     }
+    lastProcessedDay = i;
   }
 
   if (lastProcessedDay < offset) {
@@ -1136,8 +1146,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
     // #endregion
     return;
   }
-  if (maxRuntimeMs != null && lastProcessedDay < endDayExclusive - 1) {
-    console.warn("addEvents_TimeMapBlocks: runtime guard reached; synced up to day index " + lastProcessedDay + ".");
+  if (lastProcessedDay < endDayExclusive - 1) {
+    console.warn("addEvents_TimeMapBlocks: planning stopped early (time budget); will sync through day index " + lastProcessedDay + " only.");
   }
 
   var syncStart = new Date(todayStart.getTime());
@@ -1206,6 +1216,10 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
 
   // Sync calendar day-by-day (all event types for day D before day D+1) so partial progress is preserved if rate limits hit.
   for (var di = offset; di <= lastProcessedDay; di++) {
+    if (Date.now() >= syncDeadlineMs) {
+      console.warn("addEvents_TimeMapBlocks: sync phase stopped early at day index " + di + " (time budget). Remaining days will update on the next run.");
+      break;
+    }
     var syncDayStart = new Date(todayStart.getTime());
     syncDayStart.setDate(todayStart.getDate() + di);
     syncDayStart.setHours(0, 0, 0, 0);
@@ -1401,5 +1415,5 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
 
 /** Convenience trigger entry point for only TimeMap blocks + Gym. */
 function update_Master_TimeMap_TimeMapBlocks() {
-  addEvents_TimeMapBlocks(0, SCHEDULING_WINDOW, { maxRuntimeMs: 5 * 60 * 1000 });
+  addEvents_TimeMapBlocks(0, SCHEDULING_WINDOW, { maxRuntimeMs: MAX_RUNTIME_PER_RUN_MS });
 }
