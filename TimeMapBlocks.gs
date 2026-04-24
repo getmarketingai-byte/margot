@@ -614,6 +614,101 @@ function _timeMapAllocateSequentialBlocksAcrossGaps(usable, durationsMinutes) {
 }
 
 /**
+ * Maps a virtual minute range [vStartMin, vEndMin) — measured along the concatenation of usable
+ * gaps — to wall-clock {startMs, endMs} segments. Splits at gap boundaries.
+ */
+function _timeMapVirtualMinutesToWallSegments(usable, vStartMin, vEndMin) {
+  var out = [];
+  if (!usable || usable.length === 0 || !(vEndMin > vStartMin)) return out;
+  var vCursor = 0;
+  for (var i = 0; i < usable.length; i++) {
+    var gapMinutes = Math.floor((usable[i].endMs - usable[i].startMs) / 60000);
+    if (gapMinutes <= 0) continue;
+    var vGapStart = vCursor;
+    var vGapEnd = vCursor + gapMinutes;
+    vCursor = vGapEnd;
+    var overlapStart = Math.max(vStartMin, vGapStart);
+    var overlapEnd = Math.min(vEndMin, vGapEnd);
+    if (overlapEnd <= overlapStart) continue;
+    var segStartMs = usable[i].startMs + (overlapStart - vGapStart) * 60000;
+    var segEndMs = usable[i].startMs + (overlapEnd - vGapStart) * 60000;
+    out.push({ startMs: segStartMs, endMs: segEndMs });
+  }
+  return out;
+}
+
+/**
+ * Builds cumulative "Deep work" + "Play" blocks along the merged virtual timeline.
+ * Map 1 spans [0, d1+d2+d3), map 2 spans [d1, d1+d2+d3), map 3 spans [d1+d2, d1+d2+d3);
+ * map 4 spans [d1+d2+d3, T). Each virtual range is clipped to real gaps, so gym-split days
+ * may emit multiple segments per title.
+ */
+function _timeMapBuildCumulativeBlocksFromGaps(usable, durationsMinutes) {
+  var titles = _timeMapBlockTitles();
+  var minBlockMs = TIMEMAP_MIN_BLOCK_MINUTES * 60 * 1000;
+  var d1 = durationsMinutes[0];
+  var d2 = durationsMinutes[1];
+  var d3 = durationsMinutes[2];
+  var d4 = durationsMinutes[3];
+  var deepEnd = d1 + d2 + d3;
+  var totalEnd = deepEnd + d4;
+
+  var virtualRanges = [
+    { title: titles[0], vStart: 0,        vEnd: deepEnd },
+    { title: titles[1], vStart: d1,       vEnd: deepEnd },
+    { title: titles[2], vStart: d1 + d2,  vEnd: deepEnd },
+    { title: titles[3], vStart: deepEnd,  vEnd: totalEnd }
+  ];
+
+  var out = [];
+  for (var r = 0; r < virtualRanges.length; r++) {
+    var range = virtualRanges[r];
+    if (range.vEnd <= range.vStart) continue;
+    var segs = _timeMapVirtualMinutesToWallSegments(usable, range.vStart, range.vEnd);
+    for (var s = 0; s < segs.length; s++) {
+      if (segs[s].endMs - segs[s].startMs < minBlockMs) continue;
+      out.push({ title: range.title, startMs: segs[s].startMs, endMs: segs[s].endMs });
+    }
+  }
+  return out;
+}
+
+/**
+ * Cumulative entry point: normalises gaps, picks duration profile (same scaling as sequential),
+ * and delegates to _timeMapBuildCumulativeBlocksFromGaps. Sub-minimum days fall back to the
+ * legacy overlap-from-end layout so very short days remain bounded and predictable.
+ */
+function _timeMapBuildCumulativeDailyBlocks(gaps) {
+  var minMs = TIMEMAP_MIN_BLOCK_MINUTES * 60 * 1000;
+  var usable = gaps
+    .filter(function (g) { return (g.endMs - g.startMs) >= minMs; })
+    .sort(function (a, b) { return a.startMs - b.startMs; });
+  if (usable.length === 0) return [];
+
+  var totalMinutes = 0;
+  for (var i = 0; i < usable.length; i++) {
+    totalMinutes += Math.floor((usable[i].endMs - usable[i].startMs) / 60000);
+  }
+  if (totalMinutes < TIMEMAP_MIN_BLOCK_MINUTES) return [];
+
+  var totalMinMinutes = _timeMapTotalMinMinutes();
+  if (totalMinutes < totalMinMinutes) {
+    var windowStartMs = usable[0].startMs;
+    var windowEndMs = usable[usable.length - 1].endMs;
+    var overlapBlocks = _timeMapBuildOverlapFromEndBlocks(windowStartMs, windowEndMs);
+    return _timeMapClipBlocksToGaps(overlapBlocks, usable, minMs);
+  }
+
+  var durations;
+  if (totalMinutes >= 14 * 60) {
+    durations = [TIMEMAP_1_HOURS * 60, TIMEMAP_2_HOURS * 60, TIMEMAP_3_HOURS * 60, TIMEMAP_4_HOURS * 60];
+  } else {
+    durations = _timeMapScaledDurations(totalMinutes);
+  }
+  return _timeMapBuildCumulativeBlocksFromGaps(usable, durations);
+}
+
+/**
  * Builds block events when there are multiple free gaps (e.g. gym splits the day).
  * Allocates the four maps in order across gaps in time order so afternoon/evening gaps get blocks too.
  */
@@ -721,6 +816,7 @@ function _timeMapDesiredEventsOverlappingDay(desired, dayStartMs, dayEndMs) {
  */
 function _timeMapComputeDailyBlocks(freeGaps) {
   if (!freeGaps || freeGaps.length === 0) return [];
+  if (TIMEMAP_CUMULATIVE_DEEP_WORK) return _timeMapBuildCumulativeDailyBlocks(freeGaps);
   if (freeGaps.length > 1) return _timeMapBuildMultiGapBlocks(freeGaps);
   return _timeMapBuildSingleGapBlocks(freeGaps[0].startMs, freeGaps[0].endMs);
 }

@@ -68,6 +68,14 @@ const TIMEMAP_SCOUTHALL_LOCATION_MATCH = "waverleyvalley scout group";
 const TIMEMAP_TREAT_SKEDPAL_AS_BUSY = true;
 const GYM_SOURCE_SKEDPAL = true;
 const TIMEMAP_DEBUG_NO_WRITES = false;
+/**
+ * When true, maps 1–3 form a single cumulative "Deep work" span and map 4 is "Play".
+ * Map 1 covers the entire deep-work span, map 2 the later two thirds, map 3 the final third
+ * (overlapping events) so higher-value zones can schedule into any deep-work time while lower
+ * zones are bounded. Map 4 keeps its exclusive tail. Sub-minimum days fall back to the legacy
+ * overlap-from-end layout.
+ */
+const TIMEMAP_CUMULATIVE_DEEP_WORK = false;
 
 // Sleep configuration.
 const SLEEP_DURATION_HOURS = 8;
