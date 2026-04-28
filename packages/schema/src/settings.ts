@@ -43,8 +43,9 @@ export const calendarSourceSchema = z.object({
    */
   busyMode: calendarBusyModeSchema.optional(),
   /**
-   * Goal that must be scheduled inside this source's free windows when
-   * `busyMode` is `invert-free-busy`.
+   * Weekly-plan entry id used when `busyMode` is `invert-free-busy`: the planner
+   * stores a labeled segment so free time on this calendar is exposed like other
+   * time-map data (not a user-authored commitment goal).
    */
   availabilityGoalId: z.string().min(1).optional(),
   countAsBusy: z.boolean().default(true),

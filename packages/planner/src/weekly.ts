@@ -107,7 +107,7 @@ export interface AllocateInput {
   busy: readonly BusyEvent[];
   /**
    * Optional per-goal windows where that goal is allowed to be placed.
-   * Used by "invert-free-busy" calendar sources (friend availability).
+   * Used by "invert-free-busy" calendar sources (free/busy inverted into allowed windows).
    */
   goalAvailabilityWindows?: Record<string, Interval[]>;
   settings: UserSettings;

@@ -86,7 +86,8 @@ const SPECIAL_GOAL_LABELS: Record<SpecialGoalType, string> = {
   "morning-routine": "Morning routine",
   "shutdown-routine": "Shutdown routine",
   gym: "Gym",
-  errands: "Errands"
+  errands: "Errands",
+  "inverted-timemap": "Calendar time map"
 };
 
 /**

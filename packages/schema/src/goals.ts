@@ -70,7 +70,9 @@ export const specialGoalType = z.enum([
   "morning-routine",
   "shutdown-routine",
   "gym",
-  "errands"
+  "errands",
+  /** Synthetic row for invert-free-busy calendar sources (readout, not a commitment). */
+  "inverted-timemap"
 ]);
 export type SpecialGoalType = z.infer<typeof specialGoalType>;
 

@@ -85,7 +85,7 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   const displayName = String(formData.get("displayName") ?? "").trim();
   const color = String(formData.get("color") ?? "");
   const busyMode = String(formData.get("busyMode") ?? "busy-only") as BusyHandlingMode;
-  const invertedGoalTitleRaw = String(formData.get("invertedGoalTitle") ?? "").trim();
+  const invertedTimemapLabelRaw = String(formData.get("invertedTimemapLabel") ?? "").trim();
   if (!externalId) return;
 
   const settings = await loadSettings(userId);
@@ -99,10 +99,10 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   let availabilityGoalId = source.availabilityGoalId;
   if (busyMode === "invert-free-busy") {
     const fallbackTitle = displayName ? `${displayName} available` : "";
-    availabilityGoalId = await ensureInvertedGoal({
+    availabilityGoalId = await ensureInvertedTimemapPlanEntry({
       userId,
       timezone: settings.timezone,
-      title: invertedGoalTitleRaw || fallbackTitle,
+      title: invertedTimemapLabelRaw || fallbackTitle,
       existingGoalId: source.availabilityGoalId
     });
   } else {
@@ -126,7 +126,7 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   revalidatePath("/dashboard/calendars");
 }
 
-interface EnsureInvertedGoalArgs {
+interface EnsureInvertedTimemapPlanEntryArgs {
   userId: string;
   timezone: string;
   title: string;
@@ -140,7 +140,9 @@ function thisMondayIso(): string {
   return mon.toISOString().slice(0, 10);
 }
 
-async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string | undefined> {
+async function ensureInvertedTimemapPlanEntry(
+  args: EnsureInvertedTimemapPlanEntryArgs
+): Promise<string | undefined> {
   if (!db) return args.existingGoalId;
   const title = args.title.trim();
   if (!title) return args.existingGoalId;
@@ -168,6 +170,7 @@ async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string 
   const goal = {
     id: crypto.randomUUID(),
     title,
+    specialGoalType: "inverted-timemap" as const,
     energyMode: "neutral" as const,
     energyPolarity: "neutral" as const,
     attentionMode: "unspecified" as const,
@@ -297,7 +300,7 @@ export default async function CalendarsPage() {
                     displayName={c.summary}
                     defaultColor={colorValue}
                     defaultBusyMode={busyMode}
-                    defaultInvertedGoalTitle={linkedGoalTitle}
+                    defaultInvertedTimemapLabel={linkedGoalTitle}
                   />
                 ) : null}
               </li>
