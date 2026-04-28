@@ -21,6 +21,7 @@ import {
 import { computeGoalRollups } from "@/lib/review-rollup";
 import { computeSystemBlocks } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
+import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
@@ -200,7 +201,11 @@ export default async function PlanPage() {
       system: "weather" as const
     }));
   const systemBlocksForCalendar = [...systemBlocks, ...nextWeekSystemBlocks, ...weatherPreviewBlocks];
-  const proposedForCalendar = [...allocation.blocks, ...allocationNextWeek.blocks];
+  const proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
+    [...allocation.blocks, ...allocationNextWeek.blocks],
+    plan,
+    settings.calendars.sources
+  );
 
   const scheduledByGoal: Record<string, number> = {};
   const effectiveTargetByGoal: Record<string, number> = {};

@@ -25,8 +25,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const billing = await loadBillingState(session.user.id);
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 pb-28 pt-6 sm:max-w-4xl lg:max-w-6xl xl:max-w-7xl">
-      <header className="mb-6 flex items-center justify-between">
+    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 pb-8 pt-6 sm:max-w-4xl lg:max-w-6xl xl:max-w-7xl">
+      <header className="mb-4 flex items-center justify-between">
         <Link href="/dashboard/plan" className="text-sm font-semibold tracking-tight">
           Calendar Automations
         </Link>
@@ -39,20 +39,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
         />
       </header>
 
-      <BillingBanner state={billing} />
-
-      <main className="flex-1">{children}</main>
-
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-10 mx-auto w-full max-w-3xl border-t border-ink-200 bg-white/95 backdrop-blur dark:border-ink-600 dark:bg-ink-900/90 sm:max-w-4xl lg:max-w-6xl xl:max-w-7xl"
+        className="-mx-4 sticky top-0 z-10 mb-4 border-b border-ink-200 bg-white/95 px-4 backdrop-blur dark:border-ink-600 dark:bg-ink-900/90"
       >
-        <ul className="flex justify-around px-2">
+        <ul className="flex justify-around gap-1 sm:gap-2">
           {PRIMARY_NAV.map((item) => (
             <li key={item.href} className="shrink-0">
               <Link
                 href={item.href}
-                className="block px-3 py-3 text-xs font-medium text-ink-600 hover:text-ink-900 dark:text-ink-200 dark:hover:text-ink-100"
+                className="block px-2 py-2.5 text-xs font-medium text-ink-600 hover:text-ink-900 sm:px-3 sm:text-sm dark:text-ink-200 dark:hover:text-ink-100"
               >
                 {item.label}
               </Link>
@@ -60,6 +56,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
           ))}
         </ul>
       </nav>
+
+      <BillingBanner state={billing} />
+
+      <main className="flex-1">{children}</main>
     </div>
   );
 }

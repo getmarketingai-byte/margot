@@ -11,8 +11,7 @@ interface AccountMenuProps {
 /**
  * Compact account dropdown anchored to the dashboard header. Replaces the
  * older inline "Sign out" form and absorbs the secondary nav items
- * (Settings, Constraints, Feeds, Billing) so the bottom nav can stay focused
- * on the three primary destinations.
+ * (Settings, Feeds, Billing) so the top primary nav stays focused on core pages.
  */
 export function AccountMenu({ links, signOut }: AccountMenuProps) {
   const [open, setOpen] = useState(false);

@@ -36,6 +36,8 @@ export function FrameworkSchedulerToggles(props: {
   ppf: boolean;
   hpp: boolean;
   save: (framework: SchedulerFrameworkKey, enabled: boolean) => Promise<void>;
+  /** Standalone section (default) vs compact row for embedding beside board tabs. */
+  variant?: "section" | "inline";
 }) {
   const [wheel, setWheel] = useState(props.wheel);
   const [ppf, setPpf] = useState(props.ppf);
@@ -73,6 +75,40 @@ export function FrameworkSchedulerToggles(props: {
       }
     });
   };
+
+  if (props.variant === "inline") {
+    return (
+      <div
+        className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-2"
+        role="group"
+        aria-label="Balance layers in the allocator"
+      >
+        <span className="text-xs font-medium text-ink-600 dark:text-ink-200">In scheduler</span>
+        <div className="flex flex-wrap gap-2">
+          {ROWS.map((row) => {
+            const checked = valueForKey(row.key);
+            const short =
+              row.key === "wheel" ? "Wheel" : row.key === "ppf" ? "PPF" : "HP6";
+            return (
+              <label
+                key={row.key}
+                title={row.description}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-ink-200 bg-ink-50/50 px-2.5 py-1 text-xs dark:border-ink-600 dark:bg-ink-900/30"
+              >
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 shrink-0 rounded border-ink-300 text-accent focus:ring-accent"
+                  checked={checked}
+                  onChange={(e) => toggle(row.key, e.target.checked)}
+                />
+                <span className="font-medium text-ink-800 dark:text-ink-100">{short}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <section className="card flex flex-col gap-3" aria-labelledby="scheduler-frameworks-heading">

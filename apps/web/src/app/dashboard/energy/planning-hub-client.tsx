@@ -92,10 +92,7 @@ interface BoardConfig {
   key: FrameworkKey;
   title: string;
   description: string;
-  /** When false, the board is disabled with an optional hint (e.g. PPF until mix is saved in Scheduling rules). */
   enabled: boolean;
-  /** Hint text shown when disabled. */
-  disabledHint?: string;
   columns: BoardColumn[];
   columnOf: (goal: WeeklyGoal) => string;
   patchFor: (columnId: string) => Partial<Omit<WeeklyGoal, "id">>;
@@ -124,9 +121,8 @@ interface PlanningHubClientProps {
  *
  *   1. Weekly intentions card — short reflection prompts that anchor the week.
  *   2. Long-horizon vision — PPF-aligned text persisted on user settings.
- *   3. Scheduler frameworks — which balance layers the allocator enforces.
- *   4. Framework picker — toggles which kanban board is visible right now.
- *   5. Active board — drag goals between columns to set the framework tag.
+ *   3. Framework boards — tags for each goal plus allocator toggles for Wheel / PPF / HP6 layers.
+ *   4. Active board — drag goals between columns to set the framework tag.
  *   6. Placement tie-break — rank the four placement signals.
  */
 export function PlanningHubClient(props: PlanningHubClientProps) {
@@ -159,16 +155,7 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     [wheelAreas]
   );
 
-  const boards = useMemo<BoardConfig[]>(
-    () =>
-      buildBoardRegistry({
-        wheelAreas,
-        wheelEnabled: wheelSchedulerEnabled,
-        ppfEnabled: ppfSchedulerEnabled,
-        hp6Enabled: hppSchedulerEnabled
-      }),
-    [wheelAreas, wheelSchedulerEnabled, ppfSchedulerEnabled, hppSchedulerEnabled]
-  );
+  const boards = useMemo<BoardConfig[]>(() => buildBoardRegistry({ wheelAreas }), [wheelAreas]);
 
   const [activeBoardKey, setActiveBoardKey] = useState<FrameworkKey>("commitment");
   const activeBoard = boards.find((b) => b.key === activeBoardKey) ?? boards[0]!;
@@ -195,17 +182,14 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
 
       <VisionCard initial={initialVision} save={saveVision} />
 
-      <FrameworkSchedulerToggles
-        wheel={wheelSchedulerEnabled}
-        ppf={ppfSchedulerEnabled}
-        hpp={hppSchedulerEnabled}
-        save={saveFrameworkScheduler}
-      />
-
-      <FrameworkPicker
+      <FrameworkBoardsPlanningSection
         boards={boards}
-        activeKey={activeBoard.key}
-        onChange={setActiveBoardKey}
+        activeBoardKey={activeBoard.key}
+        onBoardChange={setActiveBoardKey}
+        wheelSchedulerEnabled={wheelSchedulerEnabled}
+        ppfSchedulerEnabled={ppfSchedulerEnabled}
+        hppSchedulerEnabled={hppSchedulerEnabled}
+        saveFrameworkScheduler={saveFrameworkScheduler}
       />
 
       {goals.length === 0 ? (
@@ -502,72 +486,71 @@ function VisionCard({
   );
 }
 
-/* ─────────────────────────── Framework picker ────────────────────────────── */
+/* ─────────────────────────── Framework boards + scheduler layers ─────────── */
 
-function FrameworkPicker({
-  boards,
-  activeKey,
-  onChange
-}: {
+function FrameworkBoardsPlanningSection(props: {
   boards: ReadonlyArray<BoardConfig>;
-  activeKey: FrameworkKey;
-  onChange: (key: FrameworkKey) => void;
+  activeBoardKey: FrameworkKey;
+  onBoardChange: (key: FrameworkKey) => void;
+  wheelSchedulerEnabled: boolean;
+  ppfSchedulerEnabled: boolean;
+  hppSchedulerEnabled: boolean;
+  saveFrameworkScheduler: PlanningHubClientProps["saveFrameworkScheduler"];
 }) {
   return (
-    <nav
-      aria-label="Framework boards"
-      className="card flex flex-col gap-2"
+    <section
+      className="card flex flex-col gap-4"
+      aria-labelledby="framework-boards-hub-heading"
     >
       <div>
-        <h2 className="text-sm font-semibold">Framework boards</h2>
-        <p className="text-xs text-ink-400">
-          One board per framework. Drag a goal between columns to update its tag — boards for Wheel,
-          PPF, and HP6 follow the switches in{" "}
-          <span className="font-medium text-ink-600 dark:text-ink-200">Frameworks in the scheduler</span>{" "}
-          above; floors and mix numbers live in{" "}
+        <h2 id="framework-boards-hub-heading" className="text-sm font-semibold">
+          Framework boards
+        </h2>
+        <p className="mt-1 text-xs text-ink-400">
+          Pick a board to tag goals (commitment, energy, work layer, Wheel, PPF, HP6). Checking a
+          layer under <span className="font-medium text-ink-600 dark:text-ink-200">In scheduler</span>{" "}
+          lets the allocator enforce that layer&apos;s rules from{" "}
           <a className="underline" href="#scheduling-constraints">
             Scheduling rules
-          </a>
-          .
+          </a>{" "}
+          — you can tag first and turn scheduling on when you&apos;re ready.
         </p>
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {boards.map((board) => {
-          const active = board.key === activeKey;
-          const baseClasses =
-            "rounded-full border px-2.5 py-1 text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent";
-          if (!board.enabled) {
+      <FrameworkSchedulerToggles
+        variant="inline"
+        wheel={props.wheelSchedulerEnabled}
+        ppf={props.ppfSchedulerEnabled}
+        hpp={props.hppSchedulerEnabled}
+        save={props.saveFrameworkScheduler}
+      />
+      <nav
+        aria-label="Choose framework board"
+        className="border-t border-ink-200 pt-3 dark:border-ink-600"
+      >
+        <div className="flex flex-wrap gap-1.5">
+          {props.boards.map((board) => {
+            const active = board.key === props.activeBoardKey;
+            const baseClasses =
+              "rounded-full border px-2.5 py-1 text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent";
             return (
               <button
                 key={board.key}
                 type="button"
-                onClick={() => onChange(board.key)}
+                onClick={() => props.onBoardChange(board.key)}
                 aria-pressed={active}
-                title={board.disabledHint}
-                className={`${baseClasses} border-dashed border-ink-200 text-ink-400 dark:border-ink-600`}
+                className={`${baseClasses} ${
+                  active
+                    ? "border-accent bg-accent text-accent-fg"
+                    : "border-ink-200 text-ink-600 hover:border-accent/40 dark:border-ink-600 dark:text-ink-200"
+                }`}
               >
                 {board.title}
               </button>
             );
-          }
-          return (
-            <button
-              key={board.key}
-              type="button"
-              onClick={() => onChange(board.key)}
-              aria-pressed={active}
-              className={`${baseClasses} ${
-                active
-                  ? "border-accent bg-accent text-accent-fg"
-                  : "border-ink-200 text-ink-600 hover:border-accent/40 dark:border-ink-600 dark:text-ink-200"
-              }`}
-            >
-              {board.title}
-            </button>
-          );
-        })}
-      </div>
-    </nav>
+          })}
+        </div>
+      </nav>
+    </section>
   );
 }
 
@@ -624,15 +607,6 @@ function FrameworkBoard({ board, goals, wheelLabel, onPatch }: FrameworkBoardPro
     if (board.columnOf(goal) === overId) return;
     onPatch(goalId, board.patchFor(overId));
   };
-
-  if (!board.enabled) {
-    return (
-      <section className="card">
-        <h2 className="text-sm font-semibold">{board.title}</h2>
-        <p className="mt-1 text-xs text-ink-400">{board.disabledHint}</p>
-      </section>
-    );
-  }
 
   return (
     <section className="flex flex-col gap-3">
@@ -781,15 +755,9 @@ function BoardGoalCard({
 /* ─────────────────────────── Board registry ──────────────────────────────── */
 
 function buildBoardRegistry({
-  wheelAreas,
-  wheelEnabled,
-  ppfEnabled,
-  hp6Enabled
+  wheelAreas
 }: {
   wheelAreas: ReadonlyArray<{ id: string; label: string }>;
-  wheelEnabled: boolean;
-  ppfEnabled: boolean;
-  hp6Enabled: boolean;
 }): BoardConfig[] {
   const boards: BoardConfig[] = [
     {
@@ -856,10 +824,8 @@ function buildBoardRegistry({
     key: "wheel",
     title: "Wheel of Life",
     description:
-      "Each life area floor is enforced by the allocator when Wheel is on in the scheduler and floors are set in Scheduling rules. Drop a goal onto an area to set its wheel tag.",
-    enabled: wheelEnabled,
-    disabledHint:
-      "Turn on Wheel of Life in Frameworks in the scheduler above, then set area floors in Scheduling rules.",
+      "Tag each goal to a life area. When Wheel is checked under In scheduler and floors are set in Scheduling rules, the allocator respects those floors.",
+    enabled: true,
     columns: [
       ...wheelAreas.map((a) => ({ id: a.id, title: a.label })),
       { id: "__none__", title: "Unassigned" }
@@ -872,10 +838,8 @@ function buildBoardRegistry({
     key: "ppfPillar",
     title: "PPF pillar",
     description:
-      "Personal / Professional / Financial — Natalie Dawson's three buckets. Drives the PPF mix metrics.",
-    enabled: ppfEnabled,
-    disabledHint:
-      "Turn on PPF in Frameworks in the scheduler above to classify goals by pillar (and set mix in Scheduling rules when you want enforcement).",
+      "Personal / Professional / Financial — Natalie Dawson's three buckets. When PPF is checked under In scheduler, mix metrics and touch rules from Scheduling rules apply.",
+    enabled: true,
     columns: [
       { id: "personal", title: "Personal" },
       { id: "professional", title: "Professional" },
@@ -891,10 +855,9 @@ function buildBoardRegistry({
   boards.push({
     key: "ppfHorizon",
     title: "PPF horizon",
-    description: "Which time horizon does this goal serve — 1, 3, or 5 years out?",
-    enabled: ppfEnabled,
-    disabledHint:
-      "Turn on PPF in Frameworks in the scheduler above to classify goals by pillar (and set mix in Scheduling rules when you want enforcement).",
+    description:
+      "Which time horizon does this goal serve — 1, 3, or 5 years out? PPF scheduler rules apply when PPF is checked under In scheduler.",
+    enabled: true,
     columns: [
       { id: "y1", title: "1 year" },
       { id: "y3", title: "3 years" },
@@ -909,10 +872,8 @@ function buildBoardRegistry({
     key: "hp6",
     title: "HP6 habit",
     description:
-      "Tag goals against Brendon Burchard's six high-performance habits. When HP6 is on in the scheduler, minimum touches from Scheduling rules apply.",
-    enabled: hp6Enabled,
-    disabledHint:
-      "Turn on HP6 habits in Frameworks in the scheduler above, then set monthly minimums in Scheduling rules.",
+      "Tag goals against Brendon Burchard's six high-performance habits. When HP6 is checked under In scheduler, minimum touches from Scheduling rules apply.",
+    enabled: true,
     columns: [
       ...HP6_KEYS.map((h) => ({ id: h, title: HP6_LABELS[h] })),
       { id: "__none__", title: "Unassigned" }
