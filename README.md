@@ -35,7 +35,9 @@ pnpm install
 cp apps/web/.env.example apps/web/.env.local
 # fill in DATABASE_URL, AUTH_SECRET, GOOGLE_CLIENT_ID/SECRET, INNGEST keys,
 # STRIPE keys, TOKEN_ENCRYPTION_KEY (openssl rand -base64 32), CRON_SECRET
+# generate SQL migration files in apps/web/drizzle/
 pnpm db:generate
+# apply SQL migrations from apps/web/drizzle/
 pnpm db:migrate
 pnpm dev
 ```

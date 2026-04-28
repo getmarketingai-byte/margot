@@ -10,7 +10,7 @@
     "lint": "next lint --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx ./src/lib/db/migrate.ts",
+    "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

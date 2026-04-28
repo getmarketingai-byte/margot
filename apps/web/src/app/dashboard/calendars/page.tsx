@@ -35,10 +35,14 @@ async function toggleCalendar(formData: FormData): Promise<void> {
 export default async function CalendarsPage() {
   const session = await auth();
   const userId = session!.user!.id!;
-  const [settings, calendars] = await Promise.all([
-    loadSettings(userId),
-    listGoogleCalendars(userId).catch(() => [])
-  ]);
+  const settings = await loadSettings(userId);
+  let calendars: Awaited<ReturnType<typeof listGoogleCalendars>> = [];
+  let calendarsLoadError = false;
+  try {
+    calendars = await listGoogleCalendars(userId);
+  } catch {
+    calendarsLoadError = true;
+  }
   const selected = new Set(
     settings.calendars.sources.filter((s) => s.provider === "google").map((s) => s.externalId)
   );
@@ -52,7 +56,13 @@ export default async function CalendarsPage() {
         </p>
       </header>
 
-      {calendars.length === 0 ? (
+      {calendarsLoadError ? (
+        <p className="card text-sm">
+          We could not load your Google calendars. You are signed in, but your Google account tokens
+          could not be read. Run DB migrations for the same production `DATABASE_URL`, then sign out
+          and sign in again.
+        </p>
+      ) : calendars.length === 0 ? (
         <p className="card text-sm">
           No calendars found. Sign in with Google with calendar.readonly scopes and reload.
         </p>
