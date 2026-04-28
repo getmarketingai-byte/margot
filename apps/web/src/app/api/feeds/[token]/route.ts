@@ -10,6 +10,10 @@ import { renderIcs } from "@calendar-automations/planner";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { findFeedByToken, filterEventsForFeed } from "@/lib/feeds";
+import {
+  FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS,
+  runRegenerateForUser
+} from "@/lib/regenerate-user-snapshot";
 import { loadLatestSnapshot } from "@/lib/snapshots";
 import { hasActiveSubscription } from "@/lib/subscription";
 
@@ -32,7 +36,21 @@ export async function GET(
   const user = userRows[0];
   const subscribed = hasActiveSubscription(user?.subscriptionStatus ?? "none");
 
-  const snapshot = await loadLatestSnapshot(feed.userId);
+  let snapshot = await loadLatestSnapshot(feed.userId);
+  if (subscribed && db) {
+    const stale =
+      !snapshot ||
+      Date.now() - snapshot.generatedAt >= FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS;
+    if (stale) {
+      try {
+        await runRegenerateForUser(feed.userId);
+        snapshot = await loadLatestSnapshot(feed.userId);
+      } catch (err) {
+        console.error("feed-triggered regenerate failed", { userId: feed.userId, err });
+      }
+    }
+  }
+
   const events = snapshot ? filterEventsForFeed(snapshot.events, feed.feed) : [];
 
   // When subscription lapses, return a single explanatory event rather than 404
@@ -62,7 +80,7 @@ export async function GET(
     status: 200,
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
-      "Cache-Control": "public, max-age=60, s-maxage=60",
+      "Cache-Control": "private, max-age=0, must-revalidate",
       "Last-Modified": new Date(snapshot?.generatedAt ?? Date.now()).toUTCString()
     }
   });

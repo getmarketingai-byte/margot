@@ -2,7 +2,7 @@
  * Vercel Cron entrypoint — fans out regenerate events for every user. Uses the
  * shared CRON_SECRET so only Vercel's cron infrastructure can trigger it.
  *
- * Schedule is configured in vercel.json (every 30 min by default).
+ * Schedule is configured in vercel.json (daily on Hobby; feeds also refresh on client fetch).
  */
 
 import { NextRequest, NextResponse } from "next/server";
