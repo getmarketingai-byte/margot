@@ -23,6 +23,14 @@ export const dayOfWeek = z.enum([
 ]);
 export type DayOfWeek = z.infer<typeof dayOfWeek>;
 
+export const specialGoalType = z.enum([
+  "morning-routine",
+  "shutdown-routine",
+  "gym",
+  "errands"
+]);
+export type SpecialGoalType = z.infer<typeof specialGoalType>;
+
 export const weeklyGoalSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -59,7 +67,12 @@ export const weeklyGoalSchema = z.object({
   /** Exclusive latest hour (0-24). */
   latestHour: z.number().int().min(0).max(24).optional(),
   /** Free-form anchor hint, e.g. "after-work", "morning". Display-only for v1. */
-  anchor: z.string().optional()
+  anchor: z.string().optional(),
+  /**
+   * Optional semantic type used by the UI for routine presets that map to
+   * existing timemap/sleep/travel patterns.
+   */
+  specialGoalType: specialGoalType.optional()
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
 

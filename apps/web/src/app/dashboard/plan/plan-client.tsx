@@ -14,9 +14,11 @@ import type {
   DayOfWeek,
   EnergyMode,
   PpfPillarKey,
+  SpecialGoalType,
   WeeklyGoal
 } from "@calendar-automations/schema";
 import {
+  SPECIAL_GOAL_PRESETS,
   STARTER_GOALS,
   chipsForGoal,
   formatMinutes,
@@ -62,6 +64,23 @@ function ensureGoalShape(input: GoalInput): GoalInput {
     ...input,
     energyMode: input.energyMode ?? "neutral",
     ppfHorizon: input.ppfHorizon ?? "unspecified"
+  };
+}
+
+function applySpecialGoalPreset(current: GoalDraft, type?: SpecialGoalType): GoalDraft {
+  const withoutPreset: GoalDraft = {
+    ...current,
+    specialGoalType: undefined,
+    anchor: undefined,
+    earliestHour: undefined,
+    latestHour: undefined
+  };
+  if (!type) return withoutPreset;
+  const preset = SPECIAL_GOAL_PRESETS.find((p) => p.type === type);
+  if (!preset) return withoutPreset;
+  return {
+    ...withoutPreset,
+    ...preset.draft
   };
 }
 
@@ -249,6 +268,7 @@ function QuickAdd({
   const [title, setTitle] = useState("");
   const [draft, setDraft] = useState<GoalDraft>(emptyDraft);
   const [open, setOpen] = useState(false);
+  const [specialType, setSpecialType] = useState<SpecialGoalType | "">("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const submit = (event?: FormEvent) => {
@@ -258,6 +278,7 @@ function QuickAdd({
     onAdd(trimmed, draft);
     setTitle("");
     setDraft(emptyDraft());
+    setSpecialType("");
     setOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
@@ -277,6 +298,27 @@ function QuickAdd({
     <form onSubmit={submit} className="card flex flex-col gap-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="flex flex-1 flex-wrap items-center gap-2">
+          <select
+            value={specialType}
+            onChange={(e) => {
+              const nextType = (e.target.value || "") as SpecialGoalType | "";
+              setSpecialType(nextType);
+              if (nextType) {
+                const preset = SPECIAL_GOAL_PRESETS.find((p) => p.type === nextType);
+                if (preset && !title.trim()) setTitle(preset.title);
+              }
+              setDraft((prev) => applySpecialGoalPreset(prev, nextType || undefined));
+            }}
+            className="field w-full sm:w-auto"
+            aria-label="Special goal type"
+          >
+            <option value="">Special goal type</option>
+            {SPECIAL_GOAL_PRESETS.map((preset) => (
+              <option key={preset.type} value={preset.type}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
           <input
             ref={inputRef}
             value={title}
@@ -528,6 +570,10 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.dayOfWeek !== undefined) draft.dayOfWeek = goal.dayOfWeek;
   if (goal.wheelAreaId !== undefined) draft.wheelAreaId = goal.wheelAreaId;
   if (goal.ppfPillar !== undefined) draft.ppfPillar = goal.ppfPillar;
+  if (goal.earliestHour !== undefined) draft.earliestHour = goal.earliestHour;
+  if (goal.latestHour !== undefined) draft.latestHour = goal.latestHour;
+  if (goal.anchor !== undefined) draft.anchor = goal.anchor;
+  if (goal.specialGoalType !== undefined) draft.specialGoalType = goal.specialGoalType;
   return draft;
 }
 
@@ -646,6 +692,23 @@ function OptionsEditor({
           <option value="hyperfocus">Deep focus (morning)</option>
           <option value="neutral">Neutral</option>
           <option value="hyperaware">Scanning (afternoon)</option>
+        </select>
+      </Field>
+      <Field label="Special goal type (optional)" hint="Routine/timemap-aware preset.">
+        <select
+          value={draft.specialGoalType ?? ""}
+          onChange={(e) => {
+            const nextType = (e.target.value || undefined) as SpecialGoalType | undefined;
+            update(applySpecialGoalPreset(draft, nextType));
+          }}
+          className="field"
+        >
+          <option value="">None</option>
+          {SPECIAL_GOAL_PRESETS.map((preset) => (
+            <option key={preset.type} value={preset.type}>
+              {preset.label}
+            </option>
+          ))}
         </select>
       </Field>
       {wheelAreas.length > 0 && (

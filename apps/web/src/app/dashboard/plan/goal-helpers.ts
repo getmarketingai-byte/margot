@@ -10,6 +10,7 @@
 import type {
   EnergyMode,
   PpfPillarKey,
+  SpecialGoalType,
   WeeklyGoal
 } from "@calendar-automations/schema";
 import { normaliseGoalTime } from "@calendar-automations/schema";
@@ -23,7 +24,8 @@ export type ChipKind =
   | "day"
   | "energy"
   | "wheel"
-  | "ppf";
+  | "ppf"
+  | "special";
 
 export interface Chip {
   /** Stable identifier used as React key and for drawer focus. */
@@ -54,6 +56,13 @@ const PPF_LABELS: Record<PpfPillarKey, string> = {
   financial: "Financial"
 };
 
+const SPECIAL_GOAL_LABELS: Record<SpecialGoalType, string> = {
+  "morning-routine": "Morning routine",
+  "shutdown-routine": "Shutdown routine",
+  gym: "Gym",
+  errands: "Errands"
+};
+
 /**
  * Translate a minute count into a friendly "5h", "30m", "1h 30m" string.
  */
@@ -75,6 +84,12 @@ export function formatMinutes(min: number): string {
  */
 export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => string): Chip[] {
   const chips: Chip[] = [];
+  if (goal.specialGoalType) {
+    chips.push({
+      key: "special",
+      label: SPECIAL_GOAL_LABELS[goal.specialGoalType] ?? goal.specialGoalType
+    });
+  }
   if (goal.minMinutesPerDay !== undefined) {
     chips.push({ key: "min-day", label: `≥ ${formatMinutes(goal.minMinutesPerDay)}/day` });
   } else if (goal.minMinutesPerWeek !== undefined) {
@@ -103,6 +118,68 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   }
   return chips;
 }
+
+export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
+  type: SpecialGoalType;
+  label: string;
+  title: string;
+  description: string;
+  draft: Pick<
+    WeeklyGoal,
+    "specialGoalType" | "anchor" | "earliestHour" | "latestHour" | "energyMode"
+  >;
+}> = [
+  {
+    type: "morning-routine",
+    label: "Morning routine",
+    title: "Morning routine",
+    description: "Run after sleep and early in the day.",
+    draft: {
+      specialGoalType: "morning-routine",
+      anchor: "after-sleep",
+      earliestHour: 5,
+      latestHour: 11,
+      energyMode: "neutral"
+    }
+  },
+  {
+    type: "shutdown-routine",
+    label: "Shutdown routine",
+    title: "Shutdown routine",
+    description: "Run before sleep near end-of-day.",
+    draft: {
+      specialGoalType: "shutdown-routine",
+      anchor: "before-sleep",
+      earliestHour: 18,
+      latestHour: 24,
+      energyMode: "hyperaware"
+    }
+  },
+  {
+    type: "gym",
+    label: "Gym",
+    title: "Gym",
+    description: "Run around your preferred training windows.",
+    draft: {
+      specialGoalType: "gym",
+      anchor: "gym-preferred-window",
+      earliestHour: 6,
+      latestHour: 20,
+      energyMode: "hyperfocus"
+    }
+  },
+  {
+    type: "errands",
+    label: "Errands",
+    title: "Errands",
+    description: "Run around drive events and transitions.",
+    draft: {
+      specialGoalType: "errands",
+      anchor: "around-drive-events",
+      energyMode: "hyperaware"
+    }
+  }
+];
 
 /**
  * Live time-budget chip math, mirroring the allocator at a high level for the

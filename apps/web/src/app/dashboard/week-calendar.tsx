@@ -24,10 +24,16 @@ interface WeekCalendarProps {
   startHour?: number;
   /** Last hour shown on the grid, exclusive (default 22). */
   endHour?: number;
+  /**
+   * Compact mode shrinks horizontal density so the grid fits inside narrow
+   * side rails (Perfect Week's right-rail preview at lg+). Vertical density
+   * stays the same so block heights remain readable.
+   */
+  compact?: boolean;
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const PX_PER_HOUR = 40;
+const PX_PER_HOUR = 36;
 
 interface PositionedBlock {
   dayIndex: number; // 0=Mon ... 6=Sun
@@ -147,10 +153,16 @@ export function WeekCalendar({
   busy,
   proposed,
   startHour = 6,
-  endHour = 22
+  endHour = 22,
+  compact = false
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
+  const minWidthClass = compact ? "min-w-[420px]" : "min-w-[640px]";
+  const timeColClass = compact ? "w-8" : "w-12";
+  const gridColsClass = compact
+    ? "grid-cols-[2rem_repeat(7,minmax(0,1fr))]"
+    : "grid-cols-[3rem_repeat(7,minmax(0,1fr))]";
 
   // Build positioned arrays once, dropping events outside the window.
   const busyPositions = busy
@@ -184,8 +196,8 @@ export function WeekCalendar({
         <Legend />
       </div>
       <div className="overflow-x-auto">
-        <div className="grid min-w-[700px] grid-cols-[3rem_repeat(7,minmax(0,1fr))] gap-1">
-          <div />
+        <div className={`grid ${minWidthClass} ${gridColsClass} gap-1`}>
+          <div className={timeColClass} />
           {DAY_LABELS.map((d, i) => (
             <DayHeader key={d} label={d} dayIndex={i} weekStartMs={weekStartMs} timezone={timezone} />
           ))}

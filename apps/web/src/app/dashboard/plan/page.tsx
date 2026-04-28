@@ -70,43 +70,93 @@ export default async function PlanPage() {
         />
       ) : null}
 
-      <PlanClient
-        initialGoals={plan.goals}
-        freeMinutesThisWeek={allocation.metrics.utilisation.availableMinutes}
-        wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
-        scheduledByGoal={scheduledByGoal}
-        effectiveTargetByGoal={effectiveTargetByGoal}
-      />
-
-      {allocation.metrics.notScheduled.length > 0 && (
-        <section className="card border-amber-300/40">
-          <h2 className="text-sm font-semibold">Not scheduled this week</h2>
-          <p className="text-xs text-ink-400">
-            With strict mode on, these goals didn&apos;t fit. Either soften their floors or
-            switch to proportional in Constraints.
-          </p>
-          <ul className="mt-2 list-disc pl-5 text-sm">
-            {allocation.metrics.notScheduled.map((n) => (
-              <li key={n.goalId}>{n.title}</li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <details className="card" open>
-        <summary className="cursor-pointer text-sm font-semibold">Preview this week</summary>
-        <p className="mt-1 text-xs text-ink-400">
-          Existing events from your connected calendars sit behind the proposed blocks below.
-        </p>
-        <div className="mt-3">
-          <WeekCalendar
-            weekStartMs={weekStartMs}
-            timezone={settings.timezone}
-            busy={busy}
-            proposed={allocation.blocks}
+      {/* Two-column on lg+: goals on the left, sticky calendar preview on the right. */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div className="flex flex-col gap-5">
+          <PlanClient
+            initialGoals={plan.goals}
+            freeMinutesThisWeek={allocation.metrics.utilisation.availableMinutes}
+            wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
+            scheduledByGoal={scheduledByGoal}
+            effectiveTargetByGoal={effectiveTargetByGoal}
           />
+
+          {allocation.metrics.notScheduled.length > 0 && (
+            <section className="card border-amber-300/40">
+              <h2 className="text-sm font-semibold">Not scheduled this week</h2>
+              <p className="text-xs text-ink-400">
+                With strict mode on, these goals didn&apos;t fit. Either soften their floors or
+                switch to proportional in Constraints.
+              </p>
+              <ul className="mt-2 list-disc pl-5 text-sm">
+                {allocation.metrics.notScheduled.map((n) => (
+                  <li key={n.goalId}>{n.title}</li>
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
-      </details>
+
+        {/*
+          On large screens this column becomes a sticky right rail so the
+          calendar stays visible while the goals list scrolls. On small
+          screens it stacks below the goals as a collapsible details block.
+        */}
+        <aside className="lg:sticky lg:top-6 lg:self-start">
+          <div className="hidden lg:block">
+            <CalendarPreview
+              weekStartMs={weekStartMs}
+              timezone={settings.timezone}
+              busy={busy}
+              proposed={allocation.blocks}
+              compact
+            />
+          </div>
+          <details className="card lg:hidden" open>
+            <summary className="cursor-pointer text-sm font-semibold">Preview this week</summary>
+            <p className="mt-1 text-xs text-ink-400">
+              Existing events from your connected calendars sit behind the proposed blocks below.
+            </p>
+            <div className="mt-3">
+              <WeekCalendar
+                weekStartMs={weekStartMs}
+                timezone={settings.timezone}
+                busy={busy}
+                proposed={allocation.blocks}
+              />
+            </div>
+          </details>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function CalendarPreview({
+  weekStartMs,
+  timezone,
+  busy,
+  proposed,
+  compact
+}: {
+  weekStartMs: number;
+  timezone: string;
+  busy: Parameters<typeof WeekCalendar>[0]["busy"];
+  proposed: Parameters<typeof WeekCalendar>[0]["proposed"];
+  compact: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="px-1 text-xs text-ink-400">
+        Existing events sit behind the proposed blocks.
+      </div>
+      <WeekCalendar
+        weekStartMs={weekStartMs}
+        timezone={timezone}
+        busy={busy}
+        proposed={proposed}
+        compact={compact}
+      />
     </div>
   );
 }
