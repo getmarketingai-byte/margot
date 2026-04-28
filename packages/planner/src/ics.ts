@@ -82,7 +82,7 @@ function escapeText(text: string): string {
  */
 function foldLine(line: string): string {
   // RFC 5545 counts octets (bytes), not JS UTF-16 code units.
-  if (Buffer.byteLength(line, "utf8") <= 75) return line;
+  if (utf8ByteLength(line) <= 75) return line;
   const segments: string[] = [];
   let current = "";
   let currentBytes = 0;
@@ -90,7 +90,7 @@ function foldLine(line: string): string {
   const maxBytesContinuation = 74; // continuation has one leading space
 
   for (const char of line) {
-    const charBytes = Buffer.byteLength(char, "utf8");
+    const charBytes = utf8ByteLength(char);
     const maxBytes = segments.length === 0 ? maxBytesFirst : maxBytesContinuation;
     if (currentBytes + charBytes > maxBytes) {
       segments.push(segments.length === 0 ? current : ` ${current}`);
@@ -105,6 +105,10 @@ function foldLine(line: string): string {
     segments.push(segments.length === 0 ? current : ` ${current}`);
   }
   return segments.join("\r\n");
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
 }
 
 function sanitiseUidToken(token: string): string {
