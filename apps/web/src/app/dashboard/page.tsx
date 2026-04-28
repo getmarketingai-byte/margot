@@ -183,8 +183,8 @@ export default async function DashboardHome() {
               Connect a calendar
             </Link>
           )}
-          <Link href="/dashboard/feeds" className="btn-secondary">
-            Get iCal URL
+          <Link href="/dashboard/calendars#ical-feeds" className="btn-secondary">
+            Manage iCal URLs
           </Link>
         </div>
       </section>

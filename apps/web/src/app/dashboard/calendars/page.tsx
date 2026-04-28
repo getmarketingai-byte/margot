@@ -1,5 +1,7 @@
 import { auth } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
+import { generateFeedToken } from "@/lib/feed-token";
+import { ensureFeedToken, type FeedKind } from "@/lib/feeds";
 import { listGoogleCalendars } from "@/lib/google-calendar";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
@@ -9,7 +11,9 @@ import {
   type WeeklyPlan
 } from "@calendar-automations/schema";
 import { eq } from "drizzle-orm";
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
+import { CalendarOptionsForm } from "../calendar-options-form";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +23,14 @@ interface GoalOption {
   id: string;
   title: string;
 }
+
+const FEEDS: { kind: FeedKind; name: string; description: string }[] = [
+  { kind: "all", name: "Everything", description: "All generated events in one feed." },
+  { kind: "weekly", name: "Perfect Week goals", description: "Goal blocks + non-negotiable segments." },
+  { kind: "timemap", name: "Time map", description: "Routine and time-map events." },
+  { kind: "sleep", name: "Sleep", description: "Computed sleep blocks." },
+  { kind: "travel", name: "Travel", description: "Drive blocks generated from event locations." }
+];
 
 async function loadGoalOptions(userId: string): Promise<GoalOption[]> {
   if (!db) return [];
@@ -72,13 +84,10 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   const externalId = String(formData.get("externalId") ?? "");
   const color = String(formData.get("color") ?? "");
   const busyMode = String(formData.get("busyMode") ?? "busy-only") as BusyHandlingMode;
-  const availabilityGoalIdRaw = String(formData.get("availabilityGoalId") ?? "").trim();
-  const availabilityGoalId = availabilityGoalIdRaw ? availabilityGoalIdRaw : undefined;
+  const invertedGoalTitleRaw = String(formData.get("invertedGoalTitle") ?? "").trim();
   if (!externalId) return;
 
   const settings = await loadSettings(userId);
-  const goalOptions = await loadGoalOptions(userId);
-  const validGoalIds = new Set(goalOptions.map((goal) => goal.id));
   const sources = [...settings.calendars.sources];
   const index = sources.findIndex((s) => s.externalId === externalId && s.provider === "google");
   if (index < 0) return;
@@ -86,11 +95,19 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   const source = sources[index]!;
   const nextColor = color.trim();
   const colorValue = nextColor ? nextColor : undefined;
+  let availabilityGoalId = source.availabilityGoalId;
+  if (busyMode === "invert-free-busy") {
+    availabilityGoalId = await ensureInvertedGoal({
+      userId,
+      timezone: settings.timezone,
+      title: invertedGoalTitleRaw,
+      existingGoalId: source.availabilityGoalId
+    });
+  } else {
+    availabilityGoalId = undefined;
+  }
   const mode: BusyHandlingMode =
-    busyMode === "invert-free-busy" &&
-    (!availabilityGoalId || !validGoalIds.has(availabilityGoalId))
-      ? "busy-only"
-      : busyMode;
+    busyMode === "invert-free-busy" && !availabilityGoalId ? "busy-only" : busyMode;
 
   const updated: CalendarSource = {
     ...source,
@@ -104,7 +121,90 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   sources[index] = normaliseCalendarSource(updated);
 
   await saveSettings(userId, { ...settings, calendars: { ...settings.calendars, sources } });
+  if (busyMode === "invert-free-busy") revalidatePath("/dashboard/plan");
   revalidatePath("/dashboard/calendars");
+}
+
+interface EnsureInvertedGoalArgs {
+  userId: string;
+  timezone: string;
+  title: string;
+  existingGoalId?: string;
+}
+
+function thisMondayIso(): string {
+  const now = new Date();
+  const dow = (now.getUTCDay() + 6) % 7;
+  const mon = new Date(now.getTime() - dow * 24 * 60 * 60 * 1000);
+  return mon.toISOString().slice(0, 10);
+}
+
+async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string | undefined> {
+  if (!db) return args.existingGoalId;
+  const title = args.title.trim();
+  if (!title) return args.existingGoalId;
+
+  const rows = await db
+    .select()
+    .from(schema.weeklyPlans)
+    .where(eq(schema.weeklyPlans.userId, args.userId))
+    .limit(1);
+  const row = rows[0];
+  const weekStart = thisMondayIso();
+  const base: WeeklyPlan = row
+    ? ({
+        ...(row.data as WeeklyPlan),
+        id: row.id,
+        weekStart,
+        timezone: args.timezone,
+        overrides: (row.data as WeeklyPlan).overrides ?? []
+      } as WeeklyPlan)
+    : { id: crypto.randomUUID(), weekStart, timezone: args.timezone, goals: [], overrides: [] };
+
+  const existing = base.goals.find((goal) => goal.title.trim().toLowerCase() === title.toLowerCase());
+  if (existing) return existing.id;
+
+  const goal = {
+    id: crypto.randomUUID(),
+    title,
+    energyMode: "neutral" as const,
+    ppfHorizon: "unspecified" as const
+  };
+  const next: WeeklyPlan = { ...base, goals: [...base.goals, goal] };
+  if (row) {
+    await db
+      .update(schema.weeklyPlans)
+      .set({ data: next, weekStart: next.weekStart, timezone: next.timezone, updatedAt: new Date() })
+      .where(eq(schema.weeklyPlans.id, row.id));
+  } else {
+    await db.insert(schema.weeklyPlans).values({
+      id: next.id,
+      userId: args.userId,
+      weekStart: next.weekStart,
+      timezone: next.timezone,
+      data: next
+    });
+  }
+  return goal.id;
+}
+
+async function rotateFeed(formData: FormData): Promise<void> {
+  "use server";
+  const session = await auth();
+  if (!session?.user?.id) return;
+  const kind = String(formData.get("kind") ?? "all") as FeedKind;
+  const name = String(formData.get("name") ?? "feed");
+  await ensureFeedToken(session.user.id, kind, name, generateFeedToken);
+  revalidatePath("/dashboard/calendars");
+  revalidatePath("/dashboard/feeds");
+}
+
+async function feedUrl(userId: string, kind: FeedKind, name: string): Promise<string> {
+  const token = await ensureFeedToken(userId, kind, name, generateFeedToken);
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  return `${proto}://${host}/api/feeds/${token}.ics`;
 }
 
 export default async function CalendarsPage() {
@@ -135,6 +235,9 @@ export default async function CalendarsPage() {
     if (a.primary !== b.primary) return a.primary ? -1 : 1;
     return a.summary.localeCompare(b.summary);
   });
+  const feedRows = await Promise.all(
+    FEEDS.map(async (feed) => ({ ...feed, url: await feedUrl(userId, feed.kind, feed.name) }))
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -165,7 +268,8 @@ export default async function CalendarsPage() {
               ? (calendarBusyModeForSource(normalized) as BusyHandlingMode)
               : "busy-only";
             const colorValue = source?.color ?? c.backgroundColor ?? "#9aa0a6";
-            const availabilityGoalId = normalized?.availabilityGoalId ?? "";
+            const linkedGoalTitle =
+              goalOptions.find((goal) => goal.id === normalized?.availabilityGoalId)?.title ?? "";
             return (
               <li key={c.id} className="card flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-3">
@@ -183,57 +287,54 @@ export default async function CalendarsPage() {
                 </div>
 
                 {isSelected ? (
-                  <form action={updateCalendarOptions} className="flex flex-wrap items-end gap-3">
-                    <input type="hidden" name="externalId" value={c.id} />
-                    <label className="flex flex-col gap-1 text-xs text-ink-500">
-                      Display color
-                      <input
-                        type="color"
-                        name="color"
-                        defaultValue={colorValue}
-                        className="h-9 w-14 rounded border border-ink-200 bg-transparent p-1 dark:border-ink-700"
-                      />
-                    </label>
-                    <label className="flex min-w-56 flex-col gap-1 text-xs text-ink-500">
-                      Free/busy handling
-                      <select
-                        name="busyMode"
-                        defaultValue={busyMode}
-                        className="h-9 rounded border border-ink-200 bg-white px-2 text-sm text-ink-900 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100"
-                      >
-                        <option value="busy-only">Only events marked busy block time</option>
-                        <option value="all-events">All events block time</option>
-                        <option value="invert-free-busy">
-                          Inverted free/busy (goal must fit this calendar&apos;s free time)
-                        </option>
-                        <option value="ignore">Ignore this calendar for planning</option>
-                      </select>
-                    </label>
-                    <label className="flex min-w-56 flex-col gap-1 text-xs text-ink-500">
-                      Goal for inverted mode
-                      <select
-                        name="availabilityGoalId"
-                        defaultValue={availabilityGoalId}
-                        className="h-9 rounded border border-ink-200 bg-white px-2 text-sm text-ink-900 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100"
-                      >
-                        <option value="">Pick a goal</option>
-                        {goalOptions.map((goal) => (
-                          <option key={goal.id} value={goal.id}>
-                            {goal.title}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button type="submit" className="btn-secondary">
-                      Save options
-                    </button>
-                  </form>
+                  <CalendarOptionsForm
+                    action={updateCalendarOptions}
+                    externalId={c.id}
+                    defaultColor={colorValue}
+                    defaultBusyMode={busyMode}
+                    defaultInvertedGoalTitle={linkedGoalTitle}
+                  />
                 ) : null}
               </li>
             );
           })}
         </ul>
       )}
+
+      <section id="ical-feeds" className="flex flex-col gap-2">
+        <header className="mt-2">
+          <h2 className="text-xl font-semibold">iCal feeds</h2>
+          <p className="text-sm text-ink-600 dark:text-ink-200">
+            Subscribe to these URLs in Apple Calendar, Google Calendar (<em>From URL</em>), or
+            Outlook. Most clients refresh every 5-60 minutes.
+          </p>
+        </header>
+        <ul className="flex flex-col gap-2">
+          {feedRows.map((feed) => (
+            <li key={feed.kind} className="card">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">{feed.name}</div>
+                  <div className="text-xs text-ink-400">{feed.description}</div>
+                </div>
+                <form action={rotateFeed}>
+                  <input type="hidden" name="kind" value={feed.kind} />
+                  <input type="hidden" name="name" value={feed.name} />
+                  <button type="submit" className="btn-secondary text-xs">
+                    Rotate
+                  </button>
+                </form>
+              </div>
+              <input
+                readOnly
+                className="field mt-2 select-all font-mono text-xs"
+                value={feed.url}
+                aria-label={`${feed.name} ICS URL`}
+              />
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }

@@ -14,7 +14,7 @@ const PRIMARY_NAV = [
 const ACCOUNT_LINKS = [
   { href: "/dashboard/settings", label: "Settings" },
   { href: "/dashboard/constraints", label: "Constraints" },
-  { href: "/dashboard/feeds", label: "iCal feeds" },
+  { href: "/dashboard/calendars#ical-feeds", label: "iCal feeds" },
   { href: "/dashboard/billing", label: "Billing" }
 ];
 
