@@ -7,6 +7,8 @@ import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
+import { computeSystemBlocks } from "@/lib/week-blocks";
+import { createLegResolver } from "@/lib/routing";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
@@ -41,9 +43,13 @@ async function updateRoutines(formData: FormData): Promise<void> {
   const settings = await loadSettings(userId);
   const morningEnabled = formData.get("morning_enabled") === "on";
   const shutdownEnabled = formData.get("shutdown_enabled") === "on";
-  const minutes = Math.max(
+  const morningMinutes = Math.max(
     0,
-    Math.min(180, Number(formData.get("routine_minutes") ?? settings.timemap.morningRoutine.minutes))
+    Math.min(180, Number(formData.get("morning_minutes") ?? settings.timemap.morningRoutine.minutes))
+  );
+  const shutdownMinutes = Math.max(
+    0,
+    Math.min(180, Number(formData.get("shutdown_minutes") ?? settings.timemap.shutdownRoutine.minutes))
   );
 
   await saveSettings(userId, {
@@ -53,12 +59,12 @@ async function updateRoutines(formData: FormData): Promise<void> {
       morningRoutine: {
         ...settings.timemap.morningRoutine,
         enabled: morningEnabled,
-        minutes
+        minutes: morningMinutes
       },
       shutdownRoutine: {
         ...settings.timemap.shutdownRoutine,
         enabled: shutdownEnabled,
-        minutes
+        minutes: shutdownMinutes
       }
     }
   });
@@ -76,12 +82,16 @@ export default async function PlanPage() {
 
   const weekStartMs = localMondayMidnightMs(settings.timezone);
   const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
-  const busy = await fetchGoogleBusy(
+  const nextWeekStartMs = weekEndMs;
+  const nextWeekEndMs = nextWeekStartMs + 7 * 24 * 60 * 60 * 1000;
+  const busyAll = await fetchGoogleBusy(
     userId,
     settings.calendars.sources,
     weekStartMs,
-    weekEndMs
+    nextWeekEndMs
   ).catch(() => []);
+  const busy = busyAll.filter((e) => e.endMs > weekStartMs && e.startMs < weekEndMs);
+  const busyNextWeek = busyAll.filter((e) => e.endMs > nextWeekStartMs && e.startMs < nextWeekEndMs);
   // System blocks (sleep + travel) reserve time around real events. They're
   // merged into the busy stream so goals don't land on top of them, and
   // surfaced separately to the calendar for distinct visual styling.
@@ -92,6 +102,20 @@ export default async function PlanPage() {
     busy,
     overrides: overridesFromPlan(plan)
   });
+  const nextWeekResolver = createLegResolver({
+    travel: settings.travel,
+    cache: settings.travelCache
+  });
+  const nextWeekSystemBlocks = await computeSystemBlocks(
+    nextWeekStartMs,
+    busyNextWeek,
+    settings.sleep,
+    settings.travel,
+    settings.gym,
+    settings.timezone,
+    nextWeekResolver,
+    settings.timemap
+  );
   const allocation = allocateWeek({
     plan,
     busy: [...busy, ...systemBlocks],
@@ -99,6 +123,16 @@ export default async function PlanPage() {
     weekStartMs,
     weekEndMs
   });
+  const allocationNextWeek = allocateWeek({
+    plan,
+    busy: [...busyNextWeek, ...nextWeekSystemBlocks],
+    settings,
+    weekStartMs: nextWeekStartMs,
+    weekEndMs: nextWeekEndMs
+  });
+  const busyForCalendar = [...busy, ...busyNextWeek];
+  const systemBlocksForCalendar = [...systemBlocks, ...nextWeekSystemBlocks];
+  const proposedForCalendar = [...allocation.blocks, ...allocationNextWeek.blocks];
 
   const scheduledByGoal: Record<string, number> = {};
   const effectiveTargetByGoal: Record<string, number> = {};
@@ -123,7 +157,7 @@ export default async function PlanPage() {
           Morning and shutdown routines are reserved around sleep and block planner time-map slots
           from being placed in the same window.
         </p>
-        <form action={updateRoutines} className="mt-3 grid gap-3 sm:grid-cols-3">
+        <form action={updateRoutines} className="mt-3 grid gap-3 sm:grid-cols-4">
           <label className="flex items-center gap-2 text-xs">
             <input
               type="checkbox"
@@ -141,21 +175,30 @@ export default async function PlanPage() {
             <span>Enable shutdown routine</span>
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            Duration (minutes)
+            Morning minutes
             <input
               type="number"
-              name="routine_minutes"
+              name="morning_minutes"
               min={0}
               max={180}
               step={5}
-              defaultValue={Math.max(
-                settings.timemap.morningRoutine.minutes,
-                settings.timemap.shutdownRoutine.minutes
-              )}
+              defaultValue={settings.timemap.morningRoutine.minutes}
               className="field"
             />
           </label>
-          <div className="sm:col-span-3">
+          <label className="flex flex-col gap-1 text-xs">
+            Shutdown minutes
+            <input
+              type="number"
+              name="shutdown_minutes"
+              min={0}
+              max={180}
+              step={5}
+              defaultValue={settings.timemap.shutdownRoutine.minutes}
+              className="field"
+            />
+          </label>
+          <div className="sm:col-span-4">
             <button type="submit" className="btn-primary w-full text-xs">
               Save routines
             </button>
@@ -210,9 +253,9 @@ export default async function PlanPage() {
                 <CalendarPreview
                   weekStartMs={weekStartMs}
                   timezone={settings.timezone}
-                  busy={busy}
-                  system={systemBlocks}
-                  proposed={allocation.blocks}
+                  busy={busyForCalendar}
+                  system={systemBlocksForCalendar}
+                  proposed={proposedForCalendar}
                   compact
                 />
               </div>
@@ -222,9 +265,9 @@ export default async function PlanPage() {
                   <RangeToggleCalendar
                     weekStartMs={weekStartMs}
                     timezone={settings.timezone}
-                    busy={busy}
-                    system={systemBlocks}
-                    proposed={allocation.blocks}
+                    busy={busyForCalendar}
+                    system={systemBlocksForCalendar}
+                    proposed={proposedForCalendar}
                   />
                 </div>
               </details>

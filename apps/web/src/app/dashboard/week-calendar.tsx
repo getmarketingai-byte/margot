@@ -11,6 +11,7 @@
 
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
 import type { SystemBlock } from "@/lib/week-blocks";
+import { DraggableSystemBlock } from "./draggable-system-block";
 
 interface WeekCalendarProps {
   /** Monday 00:00 of the week being rendered, expressed as epoch ms. */
@@ -184,6 +185,8 @@ export function WeekCalendar({
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
+  const windowStart = startHour * 60;
+  const windowEnd = endHour * 60;
   const minWidthClass = compact ? "min-w-[420px]" : "min-w-[640px]";
   const timeColClass = compact ? "w-8" : "w-12";
   const days = (dayIndices && dayIndices.length > 0 ? [...dayIndices] : [0, 1, 2, 3, 4, 5, 6]).filter(
@@ -191,6 +194,12 @@ export function WeekCalendar({
   );
   const dayCols = days.length || 7;
   const gridTemplateColumns = `${compact ? "2rem" : "3rem"} repeat(${dayCols}, minmax(0, 1fr))`;
+  const nowParts = partsInTimezone(Date.now(), timezone);
+  const weekParts = partsInTimezone(weekStartMs, timezone);
+  const todayOffset = daysBetween(weekParts, nowParts);
+  const nowMinuteOfDay = nowParts.hour * 60 + nowParts.minute;
+  const nowMinuteClamped = Math.max(windowStart, Math.min(windowEnd, nowMinuteOfDay));
+  const elapsedTodayPx = ((nowMinuteClamped - windowStart) / 60) * PX_PER_HOUR;
 
   // Build positioned arrays once, dropping events outside the window.
   const busyPositions: PositionedBlock[] = [];
@@ -200,16 +209,37 @@ export function WeekCalendar({
     );
   }
 
-  const systemPositions: Array<PositionedBlock & { kind: SystemBlock["system"] }> = [];
+  const systemPositions: Array<
+    PositionedBlock & {
+      kind: SystemBlock["system"];
+      override?: SystemBlock["override"];
+      sourceStartMs: number;
+      sourceEndMs: number;
+    }
+  > = [];
   for (const b of system) {
     const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
-    for (const s of slices) systemPositions.push({ ...s, kind: b.system });
+    for (const s of slices) {
+      systemPositions.push({
+        ...s,
+        kind: b.system,
+        override: b.override,
+        sourceStartMs: b.startMs,
+        sourceEndMs: b.endMs
+      });
+    }
   }
 
-  const proposedPositions: Array<PositionedBlock & { isSegment: boolean }> = [];
+  const proposedPositions: Array<PositionedBlock & { isSegment: boolean; color: string }> = [];
   for (const b of proposed) {
     const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
-    for (const s of slices) proposedPositions.push({ ...s, isSegment: Boolean(b.segment) });
+    for (const s of slices) {
+      proposedPositions.push({
+        ...s,
+        isSegment: Boolean(b.segment),
+        color: goalColor(b.goalId || b.title)
+      });
+    }
   }
 
   const hasSleep = systemPositions.some((p) => p.kind === "sleep");
@@ -243,6 +273,18 @@ export function WeekCalendar({
               style={{ height: gridHeight }}
             >
               <HourGridLines startHour={startHour} endHour={endHour} />
+              {dayIdx < todayOffset ? (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 bg-ink-300/25 dark:bg-ink-900/45"
+                />
+              ) : dayIdx === todayOffset && nowMinuteOfDay > windowStart ? (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 top-0 bg-ink-300/25 dark:bg-ink-900/45"
+                  style={{ height: Math.min(gridHeight, Math.max(0, elapsedTodayPx)) }}
+                />
+              ) : null}
               {busyPositions
                 .filter((p) => p.dayIndex === dayIdx)
                 .map((p, i) => (
@@ -251,7 +293,7 @@ export function WeekCalendar({
               {systemPositions
                 .filter((p) => p.dayIndex === dayIdx)
                 .map((p, i) => (
-                  <SystemBlockView key={`s${i}`} block={p} />
+                  <SystemBlockSlice key={`s${i}`} block={p} pxPerHour={PX_PER_HOUR} />
                 ))}
               {proposedPositions
                 .filter((p) => p.dayIndex === dayIdx)
@@ -386,10 +428,22 @@ function BusyBlock({ block }: { block: PositionedBlock }) {
   );
 }
 
-function SystemBlockView({
-  block
+/**
+ * Dispatch slice rendering. Sleep + routine blocks with override metadata
+ * become interactive draggable elements; travel blocks (and any sleep slice
+ * without override metadata, e.g. split halves) stay as static divs.
+ */
+function SystemBlockSlice({
+  block,
+  pxPerHour
 }: {
-  block: PositionedBlock & { kind: SystemBlock["system"] };
+  block: PositionedBlock & {
+    kind: SystemBlock["system"];
+    override?: SystemBlock["override"];
+    sourceStartMs: number;
+    sourceEndMs: number;
+  };
+  pxPerHour: number;
 }) {
   // Sleep gets a calm violet; travel gets a warm amber; routines get a soft
   // emerald. All three sit between the grey "existing" layer and the solid
@@ -401,6 +455,23 @@ function SystemBlockView({
       : block.kind === "travel"
         ? "bg-amber-200/70 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100"
         : "bg-emerald-200/70 text-emerald-900 dark:bg-emerald-500/30 dark:text-emerald-100";
+
+  if (block.override) {
+    return (
+      <DraggableSystemBlock
+        topPx={block.topPx}
+        heightPx={block.heightPx}
+        pxPerHour={pxPerHour}
+        title={block.title}
+        styles={styles}
+        startMs={block.sourceStartMs}
+        endMs={block.sourceEndMs}
+        overrideKind={block.override.kind}
+        overrideKey={block.override.key}
+        isOverridden={block.override.isOverridden}
+      />
+    );
+  }
   return (
     <div
       title={block.title}
@@ -415,19 +486,32 @@ function SystemBlockView({
 function ProposedBlock({
   block
 }: {
-  block: PositionedBlock & { isSegment: boolean };
+  block: PositionedBlock & { isSegment: boolean; color: string };
 }) {
   return (
     <div
       title={`${block.title} (proposed)`}
-      className={`absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-accent-fg shadow-sm ${
-        block.isSegment ? "bg-accent/70" : "bg-accent"
-      }`}
-      style={{ top: block.topPx, height: block.heightPx }}
+      className="absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm"
+      style={{
+        top: block.topPx,
+        height: block.heightPx,
+        backgroundColor: block.color,
+        opacity: block.isSegment ? 0.72 : 1
+      }}
     >
       <span className="line-clamp-2 leading-tight">{block.title}</span>
     </div>
   );
+}
+
+function goalColor(key: string): string {
+  // Stable per-goal hue so the same goal keeps the same color across renders.
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 68% 56%)`;
 }
 
 function formatHour(h: number): string {

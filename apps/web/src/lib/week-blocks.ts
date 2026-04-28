@@ -54,6 +54,18 @@ export interface SystemBlock extends BusyEvent {
     | "drive-direct"
     | "morning"
     | "shutdown";
+  /**
+   * Override metadata for sleep + routine blocks. When present the calendar
+   * renders an interactive draggable block that calls `setBlockOverride` /
+   * `clearBlockOverride` on release. Travel blocks omit this.
+   */
+  override?: {
+    kind: "sleep" | "routine";
+    /** Identifies the original computed block — see `BlockOverride.key`. */
+    key: string;
+    /** True when the user has dragged this block away from its natural time. */
+    isOverridden: boolean;
+  };
 }
 
 /* ─────────────────────────────── Travel ──────────────────────────────────── */
@@ -475,7 +487,11 @@ export function computeSleepBlocks(
       targetEndMs,
       override: override ? { startMs: override.startMs, endMs: override.endMs } : undefined
     });
-    for (const p of placed) {
+    // Only the primary (non-split) night block is overridable — split fallbacks
+    // are an emergency placement and dragging one half doesn't make sense.
+    const primaryIdx = placed.findIndex((p) => !p.split);
+    for (let pi = 0; pi < placed.length; pi++) {
+      const p = placed[pi]!;
       const variant: SystemBlock["variant"] = p.split
         ? "split"
         : p.underMinimum
@@ -491,6 +507,13 @@ export function computeSleepBlocks(
         system: "sleep"
       };
       if (variant) block.variant = variant;
+      if (pi === primaryIdx) {
+        block.override = {
+          kind: "sleep",
+          key: String(d),
+          isOverridden: Boolean(override)
+        };
+      }
       out.push(block);
     }
   }
@@ -532,10 +555,15 @@ export function computeRoutineBlocks(
   const shutdownMs = shutdown.enabled ? shutdown.minutes * MINUTE_MS : 0;
   if (morningMs <= 0 && shutdownMs <= 0) return out;
 
-  let nightIdx = 0;
+  // Routine indices are tied to the sleep block's night index (extracted
+  // from the sleepBlock sourceId pattern `sleep-${d}-...`). This keeps
+  // override keys stable across re-renders even if e.g. a night was
+  // skipped (past-night) earlier in the list.
   for (const s of sleepBlocks) {
     if (s.system !== "sleep") continue;
-    const idx = nightIdx++;
+    if (!s.override) continue; // split halves don't get routines wrapping them
+    const idx = Number(s.override.key);
+    if (!Number.isFinite(idx)) continue;
 
     if (morningMs > 0) {
       const overrideKey = `morning-${idx}`;
@@ -555,7 +583,12 @@ export function computeRoutineBlocks(
           busy: true,
           source: "internal",
           system: "routine",
-          variant: "morning"
+          variant: "morning",
+          override: {
+            kind: "routine",
+            key: overrideKey,
+            isOverridden: Boolean(override)
+          }
         });
       }
     }
@@ -578,7 +611,12 @@ export function computeRoutineBlocks(
           busy: true,
           source: "internal",
           system: "routine",
-          variant: "shutdown"
+          variant: "shutdown",
+          override: {
+            kind: "routine",
+            key: overrideKey,
+            isOverridden: Boolean(override)
+          }
         });
       }
     }

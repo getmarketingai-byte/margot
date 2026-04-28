@@ -27,6 +27,7 @@ import { createOpenRouteServiceProvider, type RoutingProviderClient } from "./op
 
 const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PROVIDER_LOOKAHEAD_MS = 7 * DAY_MS;
 
 export interface ResolveRequest {
   origin: string;
@@ -87,6 +88,7 @@ interface ResolverOptions {
 export function createLegResolver(options: ResolverOptions): LegResolver {
   const { travel, cache } = options;
   const nowMs = options.nowMs ?? Date.now();
+  const providerCutoffMs = nowMs + PROVIDER_LOOKAHEAD_MS;
   const fallbackMin = travel.fallbackDurationMinutes;
   const staleMs = travel.routingStaleAfterDays * DAY_MS;
   const callBudget = travel.routingMaxCallsPerRender;
@@ -128,12 +130,18 @@ export function createLegResolver(options: ResolverOptions): LegResolver {
 
       // 2. Stale-or-missing queue, sorted soonest-first so urgent legs
       //    get the budget when it's tight.
+      //
+      //    OpenRouteService quota guard:
+      //    only consider provider calls for legs whose priority time falls
+      //    within the next 7 days; later legs intentionally remain fallback.
       const staleQueue: ResolveRequest[] = [];
       for (const req of unique.values()) {
         const key = legKey(req.origin, req.dest);
         const state = legs.get(key);
         if (state) result.set(key, state.durationMin);
-        if (!isFresh(state)) staleQueue.push(req);
+        const withinProviderLookahead =
+          req.priorityTimeMs !== undefined && req.priorityTimeMs <= providerCutoffMs;
+        if (!isFresh(state) && withinProviderLookahead) staleQueue.push(req);
       }
       staleQueue.sort((a, b) => (a.priorityTimeMs ?? Infinity) - (b.priorityTimeMs ?? Infinity));
 
