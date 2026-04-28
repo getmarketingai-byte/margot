@@ -43,15 +43,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const user = userRows[0];
       if (!user) break;
       const status = sub.status as SubscriptionStatus;
+      const periodEndUnix = sub.items.data[0]?.current_period_end;
       await db
         .update(schema.users)
         .set({
           subscriptionStatus: status,
           subscriptionId: sub.id,
           subscriptionPriceId: sub.items.data[0]?.price.id ?? null,
-          subscriptionPeriodEnd: sub.current_period_end
-            ? new Date(sub.current_period_end * 1000)
-            : null
+          subscriptionPeriodEnd:
+            periodEndUnix != null ? new Date(periodEndUnix * 1000) : null
         })
         .where(eq(schema.users.id, user.id));
       break;
