@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@auth/drizzle-adapter": "1.7.4",
+    "@calendar-automations/marketing": "workspace:*",
     "@calendar-automations/planner": "workspace:*",
     "@calendar-automations/schema": "workspace:*",
     "@neondatabase/serverless": "0.10.4",

@@ -4,7 +4,11 @@ const nextConfig = {
   experimental: {
     typedRoutes: false
   },
-  transpilePackages: ["@calendar-automations/schema", "@calendar-automations/planner"]
+  transpilePackages: [
+    "@calendar-automations/schema",
+    "@calendar-automations/planner",
+    "@calendar-automations/marketing"
+  ]
 };
 
 export default nextConfig;

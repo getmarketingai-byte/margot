@@ -1,0 +1,26 @@
+{
+  "name": "@calendar-automations/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "calendar-automations-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node ./dist/index.js",
+    "dev": "tsx ./src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@calendar-automations/marketing": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "4.19.2",
+    "typescript": "5.6.3"
+  }
+}

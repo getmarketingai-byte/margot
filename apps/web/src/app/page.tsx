@@ -1,44 +1,59 @@
 import Link from "next/link";
+import {
+  ARTICLES,
+  FAQ,
+  FEATURES,
+  FEED_BEHAVIOR,
+  OAUTH_SCOPES,
+  PRODUCT,
+  SITE_URL
+} from "@/lib/marketing";
+import {
+  faqPageLd,
+  organizationLd,
+  webApplicationLd,
+  websiteLd
+} from "@/lib/json-ld";
+import { JsonLd } from "@/components/json-ld";
+import type { Metadata } from "next";
 
-const features = [
-  {
-    title: "Time-mapped weeks",
-    body: "Read your existing Google Calendar, find the gaps, and generate Needle-Mover, Execute, Ops, and Play bands for the next 60 days."
+export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
+  title: `${PRODUCT.name} — ${PRODUCT.tagline}`,
+  description: PRODUCT.shortDescription,
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: PRODUCT.name,
+    description: PRODUCT.shortDescription,
+    url: SITE_URL,
+    siteName: PRODUCT.name,
+    type: "website"
   },
-  {
-    title: "Energy-aware ordering",
-    body: "Tag goals as hyperfocus, hyperaware, or neutral. The allocator places deep work first and protects you from afternoons of pure scanning."
-  },
-  {
-    title: "Wheel of Life balance",
-    body: "Set weekly minimums per area so neglected domains get guaranteed slots — no week disappears under work pressure."
-  },
-  {
-    title: "PPF mix targets",
-    body: "Personal, Professional, Financial — keep all three buckets touched every week with simple percentage and touch-count rules."
-  },
-  {
-    title: "HP6 + HPP rhythms",
-    body: "Morning bookends, evening scorecards, weekly reviews and monthly strategy reminders — wire them in your way."
-  },
-  {
-    title: "Mobile-first",
-    body: "Built to be configured on a phone in a few minutes; subscription iCal URLs sync to Apple, Google, and Outlook calendars automatically."
+  twitter: {
+    card: "summary_large_image",
+    title: PRODUCT.name,
+    description: PRODUCT.shortDescription
   }
-];
+};
+
+const TOP_FAQ = FAQ.slice(0, 4);
 
 export default function LandingPage() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col gap-12 px-5 pb-16 pt-10 sm:max-w-3xl">
+      <JsonLd
+        data={[
+          organizationLd(),
+          websiteLd(),
+          webApplicationLd(),
+          faqPageLd(TOP_FAQ)
+        ]}
+      />
+
       <header className="flex flex-col gap-4">
-        <span className="text-xs uppercase tracking-widest text-ink-400">Calendar Automations</span>
-        <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">
-          Plan a perfect week. Subscribe to it from any calendar.
-        </h1>
-        <p className="text-ink-600 dark:text-ink-200 sm:text-lg">
-          Connect Google Calendar, set your goals and balance targets, and we publish a private iCal
-          feed of the week you intended to live — energy curve and all.
-        </p>
+        <span className="text-xs uppercase tracking-widest text-ink-400">{PRODUCT.name}</span>
+        <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">{PRODUCT.tagline}</h1>
+        <p className="text-ink-600 dark:text-ink-200 sm:text-lg">{PRODUCT.shortDescription}</p>
         <div className="flex flex-wrap gap-3">
           <Link href="/api/auth/signin" className="btn-primary">
             Sign in with Google
@@ -46,11 +61,39 @@ export default function LandingPage() {
           <Link href="/dashboard" className="btn-secondary">
             Open dashboard
           </Link>
+          <Link href="/faq" className="btn-secondary">
+            FAQ
+          </Link>
         </div>
       </header>
 
-      <section className="grid gap-4 sm:grid-cols-2">
-        {features.map((f) => (
+      <section
+        aria-label="What it does in one minute"
+        className="card flex flex-col gap-3"
+      >
+        <h2 className="text-base font-semibold">What it does, in plain terms</h2>
+        <ul className="flex flex-col gap-2 text-sm text-ink-600 dark:text-ink-200">
+          <li>
+            Reads up to 60 days of your existing Google Calendar over read-only OAuth and finds the
+            free gaps.
+          </li>
+          <li>
+            Allocates your weekly goals into those gaps with energy-aware ordering, Wheel of Life
+            balance, and PPF mix targets.
+          </li>
+          <li>
+            Publishes the planned blocks as a private iCal feed at{" "}
+            <code>{FEED_BEHAVIOR.pathPattern}</code> that you subscribe to from any calendar app.
+          </li>
+          <li>
+            Never writes events to your calendar in v1. The OAuth scopes are{" "}
+            <code>calendar.readonly</code> and <code>calendar.calendarlist.readonly</code>.
+          </li>
+        </ul>
+      </section>
+
+      <section aria-label="Capabilities" className="grid gap-4 sm:grid-cols-2">
+        {FEATURES.map((f) => (
           <article key={f.title} className="card">
             <h2 className="text-base font-semibold">{f.title}</h2>
             <p className="mt-2 text-sm text-ink-600 dark:text-ink-200">{f.body}</p>
@@ -58,8 +101,37 @@ export default function LandingPage() {
         ))}
       </section>
 
+      <section aria-label="Frequently asked" className="flex flex-col gap-3">
+        <h2 className="text-base font-semibold">Frequently asked</h2>
+        <div className="flex flex-col gap-3">
+          {TOP_FAQ.map((entry) => (
+            <details key={entry.question} className="card">
+              <summary className="cursor-pointer text-sm font-semibold">{entry.question}</summary>
+              <p className="mt-2 text-sm text-ink-600 dark:text-ink-200">{entry.answer}</p>
+            </details>
+          ))}
+        </div>
+        <Link href="/faq" className="text-sm font-medium text-accent">
+          See all questions →
+        </Link>
+      </section>
+
+      <section aria-label="Pillar articles" className="flex flex-col gap-3">
+        <h2 className="text-base font-semibold">Read more</h2>
+        <ul className="grid gap-3 sm:grid-cols-2">
+          {ARTICLES.map((a) => (
+            <li key={a.slug}>
+              <Link href={`/learn/${a.slug}`} className="card flex h-full flex-col gap-2">
+                <span className="text-sm font-semibold">{a.title}</span>
+                <span className="text-xs text-ink-600 dark:text-ink-200">{a.description}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </section>
+
       <footer className="text-xs text-ink-400">
-        Migration target for the legacy Apps Script project.
+        Read-only OAuth scopes: {OAUTH_SCOPES.join(", ")}.
       </footer>
     </main>
   );
