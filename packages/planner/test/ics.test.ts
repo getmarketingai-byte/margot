@@ -46,6 +46,35 @@ describe("renderIcs", () => {
     expect(ics).toContain("SUMMARY:Hello\\, world\\; goodbye");
     expect(ics).toContain("TRANSP:TRANSPARENT");
   });
+
+  it("drops invalid events where end <= start", () => {
+    const start = Date.UTC(2026, 3, 27, 9, 0, 0);
+    const ics = renderIcs(
+      [
+        {
+          uid: "bad",
+          kind: "weekly-goal",
+          title: "Invalid",
+          startMs: start,
+          endMs: start,
+          busy: true,
+          tags: []
+        },
+        {
+          uid: "ok",
+          kind: "weekly-goal",
+          title: "Valid",
+          startMs: start,
+          endMs: start + 30 * 60 * 1000,
+          busy: true,
+          tags: []
+        }
+      ],
+      { calendarName: "Plan", domain: "test.local" }
+    );
+    expect(ics).not.toContain("UID:bad@test.local");
+    expect(ics).toContain("UID:ok@test.local");
+  });
 });
 
 describe("buildStableUid", () => {

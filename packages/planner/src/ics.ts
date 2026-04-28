@@ -33,6 +33,7 @@ export function renderIcs(events: readonly GeneratedEvent[], opts: IcsOptions): 
     lines.push(`X-PUBLISHED-TTL:PT${opts.refreshIntervalMinutes}M`);
   }
   for (const ev of events) {
+    if (!isRenderableEvent(ev)) continue;
     pushEvent(lines, ev, opts);
   }
   lines.push("END:VCALENDAR");
@@ -40,9 +41,9 @@ export function renderIcs(events: readonly GeneratedEvent[], opts: IcsOptions): 
 }
 
 function pushEvent(lines: string[], ev: GeneratedEvent, opts: IcsOptions): void {
-  const dom = opts.domain ?? "calendar-automations";
+  const dom = sanitiseUidToken(opts.domain ?? "calendar-automations");
   lines.push("BEGIN:VEVENT");
-  lines.push(`UID:${ev.uid}@${dom}`);
+  lines.push(`UID:${sanitiseUidToken(ev.uid)}@${dom}`);
   lines.push(`DTSTAMP:${formatUtcStamp(Date.now())}`);
   lines.push(`DTSTART:${formatUtcStamp(ev.startMs)}`);
   lines.push(`DTEND:${formatUtcStamp(ev.endMs)}`);
@@ -80,16 +81,44 @@ function escapeText(text: string): string {
  * followed by a single space at the start of the continuation line.
  */
 function foldLine(line: string): string {
-  if (line.length <= 75) return line;
+  // RFC 5545 counts octets (bytes), not JS UTF-16 code units.
+  if (Buffer.byteLength(line, "utf8") <= 75) return line;
   const segments: string[] = [];
-  let remaining = line;
-  segments.push(remaining.slice(0, 75));
-  remaining = remaining.slice(75);
-  while (remaining.length > 0) {
-    segments.push(" " + remaining.slice(0, 74));
-    remaining = remaining.slice(74);
+  let current = "";
+  let currentBytes = 0;
+  const maxBytesFirst = 75;
+  const maxBytesContinuation = 74; // continuation has one leading space
+
+  for (const char of line) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    const maxBytes = segments.length === 0 ? maxBytesFirst : maxBytesContinuation;
+    if (currentBytes + charBytes > maxBytes) {
+      segments.push(segments.length === 0 ? current : ` ${current}`);
+      current = char;
+      currentBytes = charBytes;
+      continue;
+    }
+    current += char;
+    currentBytes += charBytes;
+  }
+  if (current.length > 0) {
+    segments.push(segments.length === 0 ? current : ` ${current}`);
   }
   return segments.join("\r\n");
+}
+
+function sanitiseUidToken(token: string): string {
+  return String(token)
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._@-]/g, "")
+    .slice(0, 200);
+}
+
+function isRenderableEvent(ev: GeneratedEvent): boolean {
+  if (!ev?.uid || !ev?.title) return false;
+  if (!Number.isFinite(ev.startMs) || !Number.isFinite(ev.endMs)) return false;
+  return ev.endMs > ev.startMs;
 }
 
 /**
