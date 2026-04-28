@@ -8,10 +8,13 @@
  */
 
 import type {
+  AttentionMode,
   EnergyMode,
+  EnergyPolarity,
   PpfPillarKey,
   SpecialGoalType,
-  WeeklyGoal
+  WeeklyGoal,
+  WorkLayer
 } from "@calendar-automations/schema";
 import { normaliseGoalTime } from "@calendar-automations/schema";
 
@@ -23,6 +26,9 @@ export type ChipKind =
   | "frequency"
   | "day"
   | "energy"
+  | "polarity"
+  | "attention"
+  | "layer"
   | "wheel"
   | "ppf"
   | "special";
@@ -38,6 +44,26 @@ const ENERGY_LABELS: Record<EnergyMode, string> = {
   hyperfocus: "Deep focus",
   neutral: "Neutral",
   hyperaware: "Scanning"
+};
+
+export const ENERGY_POLARITY_LABELS: Record<EnergyPolarity, string> = {
+  energise: "Energises",
+  drain: "Drains",
+  neutral: "Neutral energy"
+};
+
+export const ATTENTION_MODE_LABELS: Record<AttentionMode, string> = {
+  hyperfocus: "Hyper focus",
+  hyperaware: "Hyper awareness",
+  unspecified: "Attention: any"
+};
+
+export const WORK_LAYER_LABELS: Record<WorkLayer, string> = {
+  "needle-mover": "Needle mover",
+  execution: "Execution",
+  ops: "Ops / future",
+  play: "Play",
+  unspecified: "Layer: any"
 };
 
 const DAY_LABELS: Record<string, string> = {
@@ -116,6 +142,21 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   }
   if (goal.energyMode && goal.energyMode !== "neutral") {
     chips.push({ key: "energy", label: ENERGY_LABELS[goal.energyMode] });
+  }
+  if (goal.energyPolarity && goal.energyPolarity !== "neutral") {
+    chips.push({
+      key: "polarity",
+      label: ENERGY_POLARITY_LABELS[goal.energyPolarity]
+    });
+  }
+  if (goal.attentionMode && goal.attentionMode !== "unspecified") {
+    chips.push({
+      key: "attention",
+      label: ATTENTION_MODE_LABELS[goal.attentionMode]
+    });
+  }
+  if (goal.workLayer && goal.workLayer !== "unspecified") {
+    chips.push({ key: "layer", label: WORK_LAYER_LABELS[goal.workLayer] });
   }
   if (goal.wheelAreaId) {
     const label = wheelLabel?.(goal.wheelAreaId) ?? goal.wheelAreaId;

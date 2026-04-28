@@ -32,11 +32,13 @@ import type {
   WheelSettings
 } from "@calendar-automations/schema";
 import type {
+  AttentionMode,
   DayOfWeek,
   EnergyMode,
   NormalisedGoalTime,
   WeeklyGoal,
-  WeeklyPlan
+  WeeklyPlan,
+  WorkLayer
 } from "@calendar-automations/schema";
 import { normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
@@ -431,6 +433,9 @@ function wheelTopUpGoals(
         minMinutesPerWeek: gap,
         priority: 2,
         energyMode: "neutral",
+        energyPolarity: "neutral",
+        attentionMode: "unspecified",
+        workLayer: "unspecified",
         wheelAreaId: area.id,
         ppfHorizon: "unspecified"
       });
@@ -496,7 +501,19 @@ function allocateGoal(
         ? intersectWithAvailability(day.gaps, availabilityWindows, day.startMs, day.endMs)
         : day.gaps;
       if (candidateGaps.length === 0) continue;
-      const slot = pickGapForGoal(candidateGaps, goal, dayHeadroom, energy, tz);
+      // Energy-suggestion pass needs to see only blocks already placed on the
+      // current day so adjacency scoring doesn't reach across day boundaries.
+      const placedToday = blocks.filter(
+        (b) => b.startMs >= day.startMs && b.endMs <= day.endMs
+      );
+      const slot = pickGapForGoal(
+        candidateGaps,
+        goal,
+        dayHeadroom,
+        energy,
+        tz,
+        placedToday
+      );
       if (!slot) continue;
       const wantThisDay = Math.min(remainingMinutes, perDayBudget, dayHeadroom);
       const usedMinutes = Math.min(wantThisDay, slot.minutes);
@@ -554,7 +571,8 @@ function pickGapForGoal(
   goal: WeeklyGoal,
   perDay: number,
   energy: EnergyOrderingSettings,
-  tz: string
+  tz: string,
+  placedToday: readonly AllocatedBlock[] = []
 ): { gap: Interval; minutes: number } | null {
   const earliest = goal.earliestHour ?? 0;
   const latest = goal.latestHour ?? 24;
@@ -566,7 +584,13 @@ function pickGapForGoal(
     const lengthMin = Math.floor((g.endMs - g.startMs) / MS_PER_MIN);
     if (lengthMin < 15) continue;
     const energyScore = scoreGapForEnergy(g, goal.energyMode, energy, tz);
-    candidates.push({ gap: g, minutes: Math.min(perDay, lengthMin), score: energyScore });
+    const suggestionScore =
+      energy.mode === "ignore" ? 0 : scoreEnergyAwareness(g, goal, tz, placedToday);
+    candidates.push({
+      gap: g,
+      minutes: Math.min(perDay, lengthMin),
+      score: energyScore + suggestionScore
+    });
   }
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => b.score - a.score);
@@ -585,6 +609,100 @@ function scoreGapForEnergy(
   if (mode === "hyperfocus") return -Math.abs(startHour - 9);
   if (mode === "hyperaware") return -Math.abs(startHour - 15);
   return -Math.abs(startHour - 12);
+}
+
+/**
+ * Tunable weights for the energy-aware suggestion layer.
+ *
+ * These intentionally use small magnitudes so the dominant signal stays the
+ * existing `energyMode` placement curve. The new manual classification
+ * (`attentionMode`, `workLayer`, `energyPolarity`) only nudges placement and
+ * breaks ties — it never overrides hard constraints like day-pinning,
+ * earliest/latest hour, or per-day caps.
+ */
+export const ENERGY_SUGGESTION_WEIGHTS = {
+  /** Per-hour distance penalty when a goal carries an attentionMode. */
+  attentionPenaltyPerHour: 0.4,
+  /** Per-hour distance penalty for the matched work-layer target hour. */
+  workLayerPenaltyPerHour: 0.3,
+  /** Penalty applied when a "drain" block would land next to another drain. */
+  drainAdjacencyPenalty: 4,
+  /** Bonus applied when an "energise" block batches with another energise. */
+  energiseAdjacencyBonus: 1,
+  /** Two blocks within this many minutes of each other count as adjacent. */
+  drainAdjacencyWindowMin: 60
+} as const;
+
+const ATTENTION_TARGET_HOUR: Record<AttentionMode, number | null> = {
+  hyperfocus: 9,
+  hyperaware: 15,
+  unspecified: null
+};
+
+const WORK_LAYER_TARGET_HOUR: Record<WorkLayer, number | null> = {
+  "needle-mover": 9,
+  execution: 11,
+  ops: 14,
+  play: 18,
+  unspecified: null
+};
+
+/**
+ * Compute the additive suggestion-pass score for placing `goal` at `gap`.
+ *
+ * Combines three nudges:
+ *   1. attentionMode → preferred hour (hyperfocus morning, hyperaware afternoon)
+ *   2. workLayer     → preferred hour (needle-mover early, play evening)
+ *   3. energyPolarity → adjacency to already-placed drain/energise blocks
+ *
+ * Returns a score whose magnitude is dwarfed by `scoreGapForEnergy` so legacy
+ * placement behaviour is preserved when the new fields are unspecified.
+ */
+function scoreEnergyAwareness(
+  gap: Interval,
+  goal: WeeklyGoal,
+  tz: string,
+  placedToday: readonly AllocatedBlock[]
+): number {
+  let score = 0;
+  const startHour = hourInTz(gap.startMs, tz);
+
+  const attentionTarget = ATTENTION_TARGET_HOUR[goal.attentionMode ?? "unspecified"];
+  if (attentionTarget !== null) {
+    score -=
+      ENERGY_SUGGESTION_WEIGHTS.attentionPenaltyPerHour *
+      Math.abs(startHour - attentionTarget);
+  }
+
+  const layerTarget = WORK_LAYER_TARGET_HOUR[goal.workLayer ?? "unspecified"];
+  if (layerTarget !== null) {
+    score -=
+      ENERGY_SUGGESTION_WEIGHTS.workLayerPenaltyPerHour *
+      Math.abs(startHour - layerTarget);
+  }
+
+  const polarity = goal.energyPolarity ?? "neutral";
+  if (polarity === "drain" || polarity === "energise") {
+    const windowMs = ENERGY_SUGGESTION_WEIGHTS.drainAdjacencyWindowMin * MS_PER_MIN;
+    for (const placed of placedToday) {
+      if (placed.segment) continue;
+      // Adjacency = the placed block ends within the window before this gap
+      // starts, or starts within the window after the gap ends.
+      const closeBefore = gap.startMs - placed.endMs;
+      const closeAfter = placed.startMs - gap.endMs;
+      const isAdjacent =
+        (closeBefore >= 0 && closeBefore <= windowMs) ||
+        (closeAfter >= 0 && closeAfter <= windowMs);
+      if (!isAdjacent) continue;
+      if (polarity === "drain") {
+        score -= ENERGY_SUGGESTION_WEIGHTS.drainAdjacencyPenalty;
+      } else {
+        score += ENERGY_SUGGESTION_WEIGHTS.energiseAdjacencyBonus;
+      }
+    }
+  }
+
+  return score;
 }
 
 function placeBlockInGap(

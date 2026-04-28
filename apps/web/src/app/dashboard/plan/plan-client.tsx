@@ -58,6 +58,9 @@ const DAY_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
 function emptyDraft(): GoalDraft {
   return {
     energyMode: "neutral",
+    energyPolarity: "neutral",
+    attentionMode: "unspecified",
+    workLayer: "unspecified",
     ppfHorizon: "unspecified"
   };
 }
@@ -66,6 +69,9 @@ function ensureGoalShape(input: GoalInput): GoalInput {
   return {
     ...input,
     energyMode: input.energyMode ?? "neutral",
+    energyPolarity: input.energyPolarity ?? "neutral",
+    attentionMode: input.attentionMode ?? "unspecified",
+    workLayer: input.workLayer ?? "unspecified",
     ppfHorizon: input.ppfHorizon ?? "unspecified"
   };
 }
@@ -138,6 +144,9 @@ export function PlanClient({
       title,
       ...draft,
       energyMode: draft.energyMode ?? "neutral",
+      energyPolarity: draft.energyPolarity ?? "neutral",
+      attentionMode: draft.attentionMode ?? "unspecified",
+      workLayer: draft.workLayer ?? "unspecified",
       ppfHorizon: draft.ppfHorizon ?? "unspecified"
     };
     setGoals((prev) => [...prev, optimistic]);
@@ -609,6 +618,9 @@ function IconButton({
 function extractDraft(goal: WeeklyGoal): GoalDraft {
   const draft: GoalDraft = {
     energyMode: goal.energyMode ?? "neutral",
+    energyPolarity: goal.energyPolarity ?? "neutral",
+    attentionMode: goal.attentionMode ?? "unspecified",
+    workLayer: goal.workLayer ?? "unspecified",
     ppfHorizon: goal.ppfHorizon ?? "unspecified"
   };
   if (goal.minMinutesPerWeek !== undefined) draft.minMinutesPerWeek = goal.minMinutesPerWeek;
@@ -1079,6 +1091,9 @@ function EmptyState({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => voi
             onClick={() =>
               onAdd(s.title, {
                 energyMode: s.energy ?? "neutral",
+                energyPolarity: "neutral",
+                attentionMode: "unspecified",
+                workLayer: "unspecified",
                 ppfHorizon: "unspecified"
               })
             }

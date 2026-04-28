@@ -169,6 +169,9 @@ async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string 
     id: crypto.randomUUID(),
     title,
     energyMode: "neutral" as const,
+    energyPolarity: "neutral" as const,
+    attentionMode: "unspecified" as const,
+    workLayer: "unspecified" as const,
     ppfHorizon: "unspecified" as const
   };
   const next: WeeklyPlan = { ...base, goals: [...base.goals, goal] };

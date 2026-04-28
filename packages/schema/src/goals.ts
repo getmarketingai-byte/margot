@@ -12,6 +12,49 @@ import { hp6HabitKey, ppfHorizonKey, ppfPillarKey } from "./settings";
 export const energyMode = z.enum(["hyperfocus", "hyperaware", "neutral"]);
 export type EnergyMode = z.infer<typeof energyMode>;
 
+/**
+ * Manual classification of how a goal affects the user's energy budget.
+ *
+ * - "energise" goals add energy (e.g. play, exercise, meaningful contribution).
+ * - "drain"    goals deplete energy (e.g. heavy ops, taxing meetings).
+ * - "neutral"  is the default for unclassified goals.
+ *
+ * Used by the second-page Energy board and consumed by the suggestion layer
+ * to avoid stacking too many "drain" goals back-to-back.
+ */
+export const energyPolarity = z.enum(["energise", "drain", "neutral"]);
+export type EnergyPolarity = z.infer<typeof energyPolarity>;
+
+/**
+ * Andrew Bustamante's hyper focus / hyper awareness distinction, surfaced as
+ * a manual goal-level tag. This is intentionally separate from the existing
+ * `energyMode` field (which the allocator already biases windows for):
+ * `energyMode` is implicit and editable inline, while `attentionMode` is the
+ * explicit framework selector on the Energy board. Either may be left
+ * unspecified.
+ */
+export const attentionMode = z.enum(["hyperfocus", "hyperaware", "unspecified"]);
+export type AttentionMode = z.infer<typeof attentionMode>;
+
+/**
+ * The four-layer work taxonomy the user wants to batch around:
+ *   1. needle-mover   — deep, high-leverage work
+ *   2. execution      — shipping the next concrete steps
+ *   3. ops            — operations / future-building / housekeeping
+ *   4. play           — recovery, fun, creative roaming
+ *
+ * Mirrors the legacy timemap band ids so users can think in the same
+ * vocabulary across both the time-map and goal-classification surfaces.
+ */
+export const workLayer = z.enum([
+  "needle-mover",
+  "execution",
+  "ops",
+  "play",
+  "unspecified"
+]);
+export type WorkLayer = z.infer<typeof workLayer>;
+
 export const dayOfWeek = z.enum([
   "monday",
   "tuesday",
@@ -63,6 +106,21 @@ export const weeklyGoalSchema = z.object({
    */
   priority: z.number().int().min(1).max(5).default(3).optional(),
   energyMode: energyMode.default("neutral"),
+  /**
+   * Manual energy-polarity classification (energise vs drain). Defaults to
+   * "neutral" so goals created before this field existed round-trip cleanly.
+   */
+  energyPolarity: energyPolarity.default("neutral"),
+  /**
+   * Manual hyper-focus vs hyper-awareness selection. Distinct from the
+   * implicit `energyMode` chip; defaults to "unspecified".
+   */
+  attentionMode: attentionMode.default("unspecified"),
+  /**
+   * Manual four-layer work classification (needle-mover / execution / ops /
+   * play). Defaults to "unspecified" for back-compat with prior plans.
+   */
+  workLayer: workLayer.default("unspecified"),
   wheelAreaId: z.string().optional(),
   ppfPillar: ppfPillarKey.optional(),
   ppfHorizon: ppfHorizonKey.default("unspecified"),

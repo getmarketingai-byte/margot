@@ -526,3 +526,149 @@ describe("allocateWeek", () => {
     }
   });
 });
+
+describe("allocateWeek energy-aware suggestion pass", () => {
+  const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+
+  it("does not regress legacy plans that omit the new classification fields", () => {
+    const result = allocateWeek({
+      plan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    // Friday-pinned dinner still lands on Friday; deep coding still gets minutes.
+    const dinnerBlocks = result.blocks.filter((b) => b.goalId === "g3");
+    for (const block of dinnerBlocks) {
+      const dayIdx = Math.floor((block.startMs - weekStartMs) / DAY_MS);
+      expect(dayIdx).toBe(4);
+    }
+    expect(result.metrics.perGoal["g1"]!.scheduledMinutes).toBeGreaterThan(0);
+  });
+
+  it("nudges needle-mover hyper-focus goals toward earlier morning windows", () => {
+    // Same morning vs evening gap setup as the play test — but here the
+    // hyper-focus + needle-mover combination should land in the morning gap.
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      const dayStart = weekStartMs + d * DAY_MS;
+      busy.push({ id: `pre-${d}`, startMs: dayStart, endMs: dayStart + 8 * HOUR_MS, busy: true });
+      busy.push({ id: `mid-${d}`, startMs: dayStart + 11 * HOUR_MS, endMs: dayStart + 17 * HOUR_MS, busy: true });
+      busy.push({ id: `post-${d}`, startMs: dayStart + 21 * HOUR_MS, endMs: dayStart + 24 * HOUR_MS, busy: true });
+    }
+    const result = allocateWeek({
+      plan: {
+        id: "needle",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "needle-mover-goal",
+            title: "Needle mover",
+            minMinutesPerWeek: 120,
+            maxMinutesPerWeek: 120,
+            maxMinutesPerDay: 60,
+            frequencyPerWeek: 2,
+            energyMode: "neutral",
+            energyPolarity: "energise",
+            attentionMode: "hyperfocus",
+            workLayer: "needle-mover",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const blocks = result.blocks.filter((b) => b.goalId === "needle-mover-goal");
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      const startHour = ((block.startMs - weekStartMs) % DAY_MS) / HOUR_MS;
+      expect(startHour).toBeLessThan(11);
+    }
+  });
+
+  it("biases play-layer goals toward late-day windows when multiple gaps exist", () => {
+    // Each day has two discrete free gaps: a morning slot (8-11) and an
+    // evening slot (17-21). Play workLayer should prefer the evening slot
+    // even though the existing 'neutral' energyMode would otherwise lean
+    // toward the morning gap (closer to its noon target).
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      const dayStart = weekStartMs + d * DAY_MS;
+      busy.push({ id: `pre-${d}`, startMs: dayStart, endMs: dayStart + 8 * HOUR_MS, busy: true });
+      busy.push({ id: `mid-${d}`, startMs: dayStart + 11 * HOUR_MS, endMs: dayStart + 17 * HOUR_MS, busy: true });
+      busy.push({ id: `post-${d}`, startMs: dayStart + 21 * HOUR_MS, endMs: dayStart + 24 * HOUR_MS, busy: true });
+    }
+    const result = allocateWeek({
+      plan: {
+        id: "play",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "play-goal",
+            title: "Play",
+            minMinutesPerWeek: 60,
+            maxMinutesPerWeek: 60,
+            maxMinutesPerDay: 60,
+            frequencyPerWeek: 1,
+            energyMode: "neutral",
+            energyPolarity: "energise",
+            attentionMode: "unspecified",
+            workLayer: "play",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const blocks = result.blocks.filter((b) => b.goalId === "play-goal");
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      const startHour = ((block.startMs - weekStartMs) % DAY_MS) / HOUR_MS;
+      expect(startHour).toBeGreaterThanOrEqual(17);
+    }
+  });
+
+  it("ignores suggestion biases when energy ordering mode is 'ignore'", () => {
+    const result = allocateWeek({
+      plan: {
+        id: "ignore-mode",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "needle",
+            title: "Needle",
+            minMinutesPerWeek: 60,
+            frequencyPerWeek: 1,
+            energyMode: "neutral",
+            energyPolarity: "neutral",
+            attentionMode: "hyperfocus",
+            workLayer: "needle-mover",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings({
+        energyOrdering: { mode: "ignore", preferredSequence: ["hyperfocus", "neutral", "hyperaware"] }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    // With ignore-mode, the allocator picks the earliest available gap
+    // (00:00 UTC on the first allowed day) regardless of the new fields.
+    const blocks = result.blocks.filter((b) => b.goalId === "needle");
+    expect(blocks.length).toBeGreaterThan(0);
+    const earliest = Math.min(...blocks.map((b) => b.startMs));
+    expect(earliest).toBe(weekStartMs);
+  });
+});
