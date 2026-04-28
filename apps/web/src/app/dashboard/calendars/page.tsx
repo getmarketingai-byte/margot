@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { generateFeedToken } from "@/lib/feed-token";
 import { ensureFeedToken, type FeedKind } from "@/lib/feeds";
@@ -50,7 +50,7 @@ async function loadGoalOptions(userId: string): Promise<GoalOption[]> {
 
 async function toggleCalendar(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const externalId = String(formData.get("externalId") ?? "");
@@ -78,7 +78,7 @@ async function toggleCalendar(formData: FormData): Promise<void> {
 
 async function updateCalendarOptions(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const externalId = String(formData.get("externalId") ?? "");
@@ -194,7 +194,7 @@ async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string 
 
 async function rotateFeed(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const kind = String(formData.get("kind") ?? "all") as FeedKind;
   const name = String(formData.get("name") ?? "feed");
@@ -212,7 +212,7 @@ async function feedUrl(userId: string, kind: FeedKind, name: string): Promise<st
 }
 
 export default async function CalendarsPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const goalOptions = await loadGoalOptions(userId);

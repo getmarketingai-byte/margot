@@ -1,6 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { routingProviderSchema } from "@calendar-automations/schema";
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { PRODUCT } from "@/lib/marketing";
 import { FeedbackForm } from "./feedback-form";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 async function updateBasics(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -35,7 +35,7 @@ async function updateBasics(formData: FormData): Promise<void> {
 
 async function updateTravel(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -75,7 +75,7 @@ async function updateTravel(formData: FormData): Promise<void> {
 
 async function updateWeather(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -117,7 +117,7 @@ async function updateWeather(formData: FormData): Promise<void> {
 }
 
 export default async function SettingsPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
 

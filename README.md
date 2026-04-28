@@ -71,3 +71,17 @@ settings schema migration.
 Push to a Vercel project; configure the env vars from `.env.example`. The Cron
 schedule lives in `apps/web/vercel.json`. Stripe webhook endpoint:
 `/api/stripe/webhook`. Inngest endpoint: `/api/inngest`.
+
+### Preview auto-login
+
+Vercel Preview deployments can skip Google OAuth and auto-login as a fixed
+account. Set these env vars on the **Preview** environment only (Project
+Settings → Environment Variables → Preview):
+
+- `PREVIEW_AUTH_ENABLED=true`
+- `PREVIEW_AUTH_USER_EMAIL=<email of an existing user row>`
+
+The bypass only activates when `VERCEL_ENV === "preview"` AND the opt-in flag is
+true AND the email matches a user in the DB. Vercel never sets `VERCEL_ENV` to
+`"preview"` on production deploys, so production stays on real Auth.js sign-in
+even if these variables are accidentally promoted.

@@ -10,7 +10,7 @@ import {
   weeklyGoalSchema,
   weeklyPlanSchema
 } from "@calendar-automations/schema";
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
 
@@ -80,7 +80,7 @@ async function savePlan(userId: string, plan: WeeklyPlan): Promise<void> {
  * action signature stable as we add new optional fields to `WeeklyGoal`.
  */
 export async function addGoal(input: Omit<WeeklyGoal, "id">): Promise<{ id: string }> {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) throw new Error("unauthorised");
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -99,7 +99,7 @@ export async function addGoal(input: Omit<WeeklyGoal, "id">): Promise<{ id: stri
  * omits is treated as "clear that field" — chip removal is just an update.
  */
 export async function updateGoal(id: string, input: Omit<WeeklyGoal, "id">): Promise<void> {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) throw new Error("unauthorised");
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -113,7 +113,7 @@ export async function updateGoal(id: string, input: Omit<WeeklyGoal, "id">): Pro
 }
 
 export async function removeGoal(id: string): Promise<void> {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) throw new Error("unauthorised");
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -129,7 +129,7 @@ export async function removeGoal(id: string): Promise<void> {
  * in the array are dropped (useful when reorder fires alongside a delete).
  */
 export async function reorderGoals(orderedIds: readonly string[]): Promise<void> {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) throw new Error("unauthorised");
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -155,7 +155,7 @@ export async function reorderGoals(orderedIds: readonly string[]): Promise<void>
 export async function setBlockOverride(
   override: Omit<BlockOverride, "setAt">
 ): Promise<void> {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) throw new Error("unauthorised");
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -179,7 +179,7 @@ export async function clearBlockOverride(
   kind: BlockOverride["kind"],
   key: string
 ): Promise<void> {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) throw new Error("unauthorised");
   const userId = session.user.id;
   const settings = await loadSettings(userId);

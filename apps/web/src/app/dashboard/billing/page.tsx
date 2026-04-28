@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { loadBillingState } from "@/lib/billing-state-server";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +30,7 @@ function describeMode(mode: string, days: number): string {
 }
 
 export default async function BillingPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const billing = await loadBillingState(userId);
   const isSubscribed =

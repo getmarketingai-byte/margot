@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import type { Hp6HabitKey, PpfPillarKey } from "@calendar-automations/schema";
 
@@ -17,7 +17,7 @@ const HP6: { key: Hp6HabitKey; label: string }[] = [
 
 async function updateWheel(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -39,7 +39,7 @@ async function updateWheel(formData: FormData): Promise<void> {
 
 async function updatePpf(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -57,7 +57,7 @@ async function updatePpf(formData: FormData): Promise<void> {
 
 async function updateHpp(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -77,7 +77,7 @@ async function updateHpp(formData: FormData): Promise<void> {
 
 async function updateEnergy(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -91,7 +91,7 @@ async function updateEnergy(formData: FormData): Promise<void> {
 
 async function updateAllocator(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -108,7 +108,7 @@ async function updateAllocator(formData: FormData): Promise<void> {
 
 async function updateAllocationMode(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -124,7 +124,7 @@ async function updateAllocationMode(formData: FormData): Promise<void> {
 }
 
 export default async function ConstraintsPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { auth, signOut } from "@/lib/auth";
+import { authOrPreview, signOut } from "@/lib/auth";
 import { loadBillingState } from "@/lib/billing-state-server";
 import { AccountMenu } from "./account-menu";
 import { BillingBanner } from "./billing-banner";
@@ -19,7 +19,7 @@ const ACCOUNT_LINKS = [
 ];
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) redirect("/api/auth/signin?callbackUrl=/dashboard");
   const billing = await loadBillingState(session.user.id);
 

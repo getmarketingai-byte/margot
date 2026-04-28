@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { type WeeklyPlan } from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
@@ -38,7 +38,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
 
 async function updateRoutines(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -76,7 +76,7 @@ async function updateRoutines(formData: FormData): Promise<void> {
 }
 
 export default async function PlanPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);

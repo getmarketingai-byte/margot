@@ -13,7 +13,7 @@
 
 import { eq } from "drizzle-orm";
 import { type WeeklyPlan } from "@calendar-automations/schema";
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
@@ -40,7 +40,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
 }
 
 export default async function EnergyPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
