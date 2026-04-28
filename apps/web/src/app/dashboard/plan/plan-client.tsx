@@ -24,6 +24,8 @@ import {
   formatMinutes,
   summariseAllocation
 } from "./goal-helpers";
+import { goalColorFromKey } from "@/lib/goal-colors";
+import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
 import { addGoal, removeGoal, reorderGoals, updateGoal } from "./actions";
 
 type GoalDraft = Omit<WeeklyGoal, "id" | "title">;
@@ -92,6 +94,7 @@ export function PlanClient({
   effectiveTargetByGoal
 }: PlanClientProps) {
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
+  const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
   const [, startTransition] = useTransition();
 
   // Keep local state synced if the server re-renders with different props
@@ -105,6 +108,16 @@ export function PlanClient({
       setGoals(initialGoals);
     }
   }, [initialGoals]);
+
+  useEffect(() => {
+    const onFocusGoal = (event: Event) => {
+      const detail = (event as CustomEvent<GoalFocusDetail>).detail;
+      if (!detail?.goalId) return;
+      setFocusRequest({ goalId: detail.goalId, nonce: Date.now() });
+    };
+    window.addEventListener(GOAL_FOCUS_EVENT, onFocusGoal);
+    return () => window.removeEventListener(GOAL_FOCUS_EVENT, onFocusGoal);
+  }, []);
 
   const summary = useMemo(
     () => summariseAllocation(goals, freeMinutesThisWeek),
@@ -204,6 +217,8 @@ export function PlanClient({
               onMoveUp={() => handleReorder(idx, Math.max(0, idx - 1))}
               onMoveDown={() => handleReorder(idx, Math.min(goals.length - 1, idx + 1))}
               onDropAt={(toIdx) => handleReorder(idx, toIdx)}
+              focusedGoalId={focusRequest?.goalId}
+              focusNonce={focusRequest?.nonce}
             />
           ))}
         </ul>
@@ -376,7 +391,9 @@ function GoalRow({
   onDelete,
   onMoveUp,
   onMoveDown,
-  onDropAt
+  onDropAt,
+  focusedGoalId,
+  focusNonce
 }: {
   goal: WeeklyGoal;
   index: number;
@@ -390,13 +407,23 @@ function GoalRow({
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDropAt: (toIdx: number) => void;
+  focusedGoalId?: string;
+  focusNonce?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editTitle, setEditTitle] = useState(goal.title);
   const [draftDirty, setDraftDirty] = useState<GoalDraft | null>(null);
   const [dragOver, setDragOver] = useState<"top" | "bottom" | null>(null);
+  const goalColor = goalColorFromKey(goal.id || goal.title);
+  const rowRef = useRef<HTMLLIElement | null>(null);
 
   useEffect(() => setEditTitle(goal.title), [goal.title]);
+  useEffect(() => {
+    if (!focusNonce) return;
+    if (focusedGoalId !== goal.id) return;
+    setExpanded(true);
+    rowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusNonce, focusedGoalId, goal.id]);
 
   const chips = chipsForGoal(goal, wheelLabel);
 
@@ -439,9 +466,11 @@ function GoalRow({
 
   return (
     <li
+      ref={rowRef}
       className={`card relative flex flex-col gap-2 ${
         dragOver === "top" ? "border-t-accent border-t-2" : ""
       } ${dragOver === "bottom" ? "border-b-accent border-b-2" : ""}`}
+      style={{ borderLeftColor: goalColor, borderLeftWidth: 4 }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -464,7 +493,14 @@ function GoalRow({
             className="flex flex-1 flex-wrap items-center gap-2 text-left"
             aria-expanded={expanded}
           >
-            <span className="text-sm font-medium">{goal.title}</span>
+            <span
+              aria-hidden
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: goalColor }}
+            />
+            <span className="text-sm font-medium" style={{ color: goalColor }}>
+              {goal.title}
+            </span>
             {chips.length === 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
                 Equal share

@@ -4,6 +4,8 @@
 
 :root {
   color-scheme: light dark;
+  --calendar-proposed-saturation: 68%;
+  --calendar-proposed-lightness: 56%;
 }
 
 html,
@@ -19,6 +21,11 @@ body {
 @media (prefers-color-scheme: dark) {
   body {
     @apply bg-ink-900 text-ink-100;
+  }
+
+  :root {
+    --calendar-proposed-saturation: 56%;
+    --calendar-proposed-lightness: 44%;
   }
 }
 

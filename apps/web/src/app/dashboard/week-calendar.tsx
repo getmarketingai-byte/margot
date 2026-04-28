@@ -11,6 +11,8 @@
 
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
 import type { SystemBlock } from "@/lib/week-blocks";
+import { goalColorFromKey } from "@/lib/goal-colors";
+import { dispatchGoalFocus } from "@/lib/goal-focus";
 import { DraggableSystemBlock } from "./draggable-system-block";
 
 interface WeekCalendarProps {
@@ -230,14 +232,17 @@ export function WeekCalendar({
     }
   }
 
-  const proposedPositions: Array<PositionedBlock & { isSegment: boolean; color: string }> = [];
+  const proposedPositions: Array<
+    PositionedBlock & { isSegment: boolean; color: string; goalId?: string }
+  > = [];
   for (const b of proposed) {
     const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
     for (const s of slices) {
       proposedPositions.push({
         ...s,
         isSegment: Boolean(b.segment),
-        color: goalColor(b.goalId || b.title)
+        color: goalColorFromKey(b.goalId || b.title),
+        goalId: b.goalId
       });
     }
   }
@@ -459,11 +464,11 @@ function SystemBlockSlice({
       <div
         title={block.title}
         aria-label="Outside window"
-        className="absolute left-0.5 rounded-full border border-sky-400/80 bg-sky-300/70 dark:border-sky-300/80 dark:bg-sky-400/45"
+        className="pointer-events-none absolute left-1.5 z-30 rounded-full border border-sky-400/90 bg-sky-300/80 shadow-[0_0_0_1px_rgba(255,255,255,0.45)] dark:border-sky-300/90 dark:bg-sky-400/55 dark:shadow-[0_0_0_1px_rgba(15,23,42,0.65)]"
         style={{
           top: block.topPx,
           height: block.heightPx,
-          width: 4,
+          width: 5,
           backgroundImage:
             "repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 2px, rgba(255,255,255,0.05) 2px 4px)"
         }}
@@ -511,12 +516,32 @@ function SystemBlockSlice({
 function ProposedBlock({
   block
 }: {
-  block: PositionedBlock & { isSegment: boolean; color: string };
+  block: PositionedBlock & { isSegment: boolean; color: string; goalId?: string };
 }) {
+  const goalId = block.goalId;
+  const selectable = Boolean(goalId);
   return (
     <div
       title={`${block.title} (proposed)`}
-      className="absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm"
+      className={`absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
+        selectable ? "cursor-pointer" : ""
+      }`}
+      role={selectable ? "button" : undefined}
+      tabIndex={selectable ? 0 : undefined}
+      aria-label={selectable ? `${block.title}. Open matching goal.` : undefined}
+      onClick={
+        selectable && goalId ? () => dispatchGoalFocus(goalId) : undefined
+      }
+      onKeyDown={
+        selectable && goalId
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                dispatchGoalFocus(goalId);
+              }
+            }
+          : undefined
+      }
       style={{
         top: block.topPx,
         height: block.heightPx,
@@ -527,16 +552,6 @@ function ProposedBlock({
       <span className="line-clamp-2 leading-tight">{block.title}</span>
     </div>
   );
-}
-
-function goalColor(key: string): string {
-  // Stable per-goal hue so the same goal keeps the same color across renders.
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash * 31 + key.charCodeAt(i)) | 0;
-  }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue} 68% 56%)`;
 }
 
 function formatHour(h: number): string {
