@@ -138,32 +138,6 @@ export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
   >;
 }> = [
   {
-    type: "morning-routine",
-    label: "Morning routine",
-    title: "Morning routine",
-    description: "Run after sleep and early in the day.",
-    draft: {
-      specialGoalType: "morning-routine",
-      anchor: "after-sleep",
-      earliestHour: 5,
-      latestHour: 11,
-      energyMode: "neutral"
-    }
-  },
-  {
-    type: "shutdown-routine",
-    label: "Shutdown routine",
-    title: "Shutdown routine",
-    description: "Run before sleep near end-of-day.",
-    draft: {
-      specialGoalType: "shutdown-routine",
-      anchor: "before-sleep",
-      earliestHour: 18,
-      latestHour: 24,
-      energyMode: "hyperaware"
-    }
-  },
-  {
     type: "gym",
     label: "Gym",
     title: "Gym",

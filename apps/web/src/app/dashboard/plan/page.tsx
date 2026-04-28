@@ -3,21 +3,22 @@ import { type WeeklyPlan } from "@calendar-automations/schema";
 import { allocateWeek } from "@calendar-automations/planner";
 import { auth } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
-import { loadSettings } from "@/lib/settings-store";
+import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
-import { computeSystemBlocks } from "@/lib/week-blocks";
+import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
 import { RangeToggleCalendar } from "./range-toggle-calendar";
+import { revalidatePath } from "next/cache";
 
 export const dynamic = "force-dynamic";
 
 async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
   if (!db) {
-    return { id: "dev", weekStart, timezone, goals: [] };
+    return { id: "dev", weekStart, timezone, goals: [], overrides: [] };
   }
   const rows = await db
     .select()
@@ -26,10 +27,45 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return { id: crypto.randomUUID(), weekStart, timezone, goals: [] };
+    return { id: crypto.randomUUID(), weekStart, timezone, goals: [], overrides: [] };
   }
   const stored = row.data as WeeklyPlan;
-  return { ...stored, id: row.id, weekStart, timezone };
+  return { ...stored, id: row.id, weekStart, timezone, overrides: stored.overrides ?? [] };
+}
+
+async function updateRoutines(formData: FormData): Promise<void> {
+  "use server";
+  const session = await auth();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const morningEnabled = formData.get("morning_enabled") === "on";
+  const shutdownEnabled = formData.get("shutdown_enabled") === "on";
+  const minutes = Math.max(
+    0,
+    Math.min(180, Number(formData.get("routine_minutes") ?? settings.timemap.morningRoutine.minutes))
+  );
+
+  await saveSettings(userId, {
+    ...settings,
+    timemap: {
+      ...settings.timemap,
+      morningRoutine: {
+        ...settings.timemap.morningRoutine,
+        enabled: morningEnabled,
+        minutes
+      },
+      shutdownRoutine: {
+        ...settings.timemap.shutdownRoutine,
+        enabled: shutdownEnabled,
+        minutes
+      }
+    }
+  });
+
+  revalidatePath("/dashboard/plan");
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/constraints");
 }
 
 export default async function PlanPage() {
@@ -49,14 +85,13 @@ export default async function PlanPage() {
   // System blocks (sleep + travel) reserve time around real events. They're
   // merged into the busy stream so goals don't land on top of them, and
   // surfaced separately to the calendar for distinct visual styling.
-  const systemBlocks = computeSystemBlocks(
+  const systemBlocks = await buildSystemBlocks({
+    userId,
+    settings,
     weekStartMs,
     busy,
-    settings.sleep,
-    settings.travel,
-    settings.timezone,
-    settings.timemap
-  );
+    overrides: overridesFromPlan(plan)
+  });
   const allocation = allocateWeek({
     plan,
     busy: [...busy, ...systemBlocks],
@@ -81,6 +116,52 @@ export default async function PlanPage() {
           time.
         </p>
       </header>
+
+      <section className="card">
+        <div className="text-sm font-semibold">Daily routines</div>
+        <p className="mt-1 text-xs text-ink-400">
+          Morning and shutdown routines are reserved around sleep and block planner time-map slots
+          from being placed in the same window.
+        </p>
+        <form action={updateRoutines} className="mt-3 grid gap-3 sm:grid-cols-3">
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              name="morning_enabled"
+              defaultChecked={settings.timemap.morningRoutine.enabled}
+            />
+            <span>Enable morning routine</span>
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              name="shutdown_enabled"
+              defaultChecked={settings.timemap.shutdownRoutine.enabled}
+            />
+            <span>Enable shutdown routine</span>
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Duration (minutes)
+            <input
+              type="number"
+              name="routine_minutes"
+              min={0}
+              max={180}
+              step={5}
+              defaultValue={Math.max(
+                settings.timemap.morningRoutine.minutes,
+                settings.timemap.shutdownRoutine.minutes
+              )}
+              className="field"
+            />
+          </label>
+          <div className="sm:col-span-3">
+            <button type="submit" className="btn-primary w-full text-xs">
+              Save routines
+            </button>
+          </div>
+        </form>
+      </section>
 
       {allocation.metrics.overcommitted ? (
         <Overcommitted

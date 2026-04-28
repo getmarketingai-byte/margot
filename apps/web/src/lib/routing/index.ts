@@ -110,20 +110,26 @@ export function createLegResolver(options: ResolverOptions): LegResolver {
     async resolveMany(requests) {
       const result = new Map<string, number | null>();
 
-      // 1. Short-circuit: fixed legs (e.g. gym) skip everything.
-      const remaining: ResolveRequest[] = [];
+      // 1. Dedupe by legKey, keeping the earliest priority. Fixed legs
+      //    (gym) short-circuit straight to the result map without ever
+      //    touching cache or provider.
+      const unique = new Map<string, ResolveRequest>();
       for (const req of requests) {
         const key = legKey(req.origin, req.dest);
         if (req.fixedMinutes != null) {
           result.set(key, req.fixedMinutes);
           continue;
         }
-        remaining.push(req);
+        const existing = unique.get(key);
+        const reqPriority = req.priorityTimeMs ?? Infinity;
+        const exPriority = existing?.priorityTimeMs ?? Infinity;
+        if (!existing || reqPriority < exPriority) unique.set(key, req);
       }
 
-      // 2. Identify stale-or-missing legs, sorted by priority.
+      // 2. Stale-or-missing queue, sorted soonest-first so urgent legs
+      //    get the budget when it's tight.
       const staleQueue: ResolveRequest[] = [];
-      for (const req of remaining) {
+      for (const req of unique.values()) {
         const key = legKey(req.origin, req.dest);
         const state = legs.get(key);
         if (state) result.set(key, state.durationMin);
@@ -179,8 +185,8 @@ export function createLegResolver(options: ResolverOptions): LegResolver {
         }
       }
 
-      // 4. Anything still missing falls back to the configured default.
-      for (const req of remaining) {
+      // 4. Anything still missing falls back to "use config fallback".
+      for (const req of unique.values()) {
         const key = legKey(req.origin, req.dest);
         if (!result.has(key)) result.set(key, null);
       }

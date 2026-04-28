@@ -40,6 +40,13 @@ export interface PlaceSleepOptions {
    * for backward compatibility.
    */
   targetEndMs?: number;
+  /**
+   * User-supplied override for this night. When present the placer returns
+   * `[startMs, endMs]` verbatim, skipping the target/search/split logic.
+   * The downstream routine pass uses the override result as the anchor for
+   * morning/shutdown routines, so dragging sleep automatically moves them.
+   */
+  override?: { startMs: number; endMs: number };
 }
 
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -59,6 +66,25 @@ export function placeSleepBlock(
   sleep: SleepSettings,
   options: PlaceSleepOptions = {}
 ): PlacedSleep[] {
+  // 0. Override short-circuit: a drag override wins over every other
+  //    placement rule. We honour the user's hand-placed sleep verbatim,
+  //    even if it falls outside the search window or overlaps busy time —
+  //    they explicitly asked for it. Routines anchor on this result.
+  if (options.override) {
+    const { startMs, endMs } = options.override;
+    if (endMs > startMs) {
+      const desiredMs = sleep.durationHours * MS_PER_HOUR;
+      return [
+        {
+          startMs,
+          endMs,
+          split: false,
+          underMinimum: endMs - startMs < desiredMs
+        }
+      ];
+    }
+  }
+
   const merged = collectBusyIntervals(busy, windowStartMs, windowEndMs);
   const desiredMs = sleep.durationHours * MS_PER_HOUR;
   const minMs = sleep.minBlockHours * MS_PER_HOUR;

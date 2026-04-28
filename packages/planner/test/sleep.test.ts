@@ -119,4 +119,38 @@ describe("placeSleepBlock", () => {
     expect(result[0]!.endMs).toBe(NIGHT_END);
     expect(result[0]!.startMs).toBe(NIGHT_END - 8 * HOUR);
   });
+
+  it("returns a drag override verbatim, ignoring busy and target", () => {
+    // Override 22:00 day 0 → 06:00 day 1 (8h), even with a conflicting busy
+    // event smack in the middle. The user explicitly asked for it.
+    const conflict = ev(24 * HOUR + 1 * HOUR, 24 * HOUR + 3 * HOUR, "Late shift");
+    const override = { startMs: 22 * HOUR, endMs: 24 * HOUR + 6 * HOUR };
+    const result = placeSleepBlock(NIGHT_START, NIGHT_END, [conflict], baseSleep, {
+      targetEndMs: IDEAL_WAKE,
+      override
+    });
+    expect(result).toEqual([
+      {
+        startMs: override.startMs,
+        endMs: override.endMs,
+        split: false,
+        underMinimum: false
+      }
+    ]);
+  });
+
+  it("flags an underMinimum override when shorter than durationHours", () => {
+    const override = { startMs: 23 * HOUR, endMs: 24 * HOUR + 4 * HOUR }; // 5h
+    const result = placeSleepBlock(NIGHT_START, NIGHT_END, [], baseSleep, { override });
+    expect(result[0]!.underMinimum).toBe(true);
+  });
+
+  it("ignores an empty override and falls through to the target search", () => {
+    const override = { startMs: 0, endMs: 0 };
+    const result = placeSleepBlock(NIGHT_START, NIGHT_END, [], baseSleep, {
+      targetEndMs: IDEAL_WAKE,
+      override
+    });
+    expect(result[0]!.endMs).toBe(IDEAL_WAKE);
+  });
 });

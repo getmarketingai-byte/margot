@@ -154,11 +154,36 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   return result;
 }
 
+/**
+ * User-supplied overrides for system-generated blocks (sleep + routines).
+ *
+ * Stored on the WeeklyPlan rather than on UserSettings so a fresh week
+ * starts clean. Keys identify the original computed block:
+ *   - kind="sleep"    → key is the night index "0".."6"
+ *   - kind="routine"  → key is "morning-${idx}" or "shutdown-${idx}"
+ *
+ * `source` distinguishes a UI drag ("drag") from a recorded actual time
+ * captured externally ("actual"). Both are honoured the same way by the
+ * planner today; the distinction is preserved so future syncback can
+ * surface user edits versus measurements.
+ */
+export const blockOverrideSchema = z.object({
+  kind: z.enum(["sleep", "routine"]),
+  key: z.string().min(1),
+  startMs: z.number().int(),
+  endMs: z.number().int(),
+  source: z.enum(["drag", "actual"]).default("drag"),
+  setAt: z.number().int()
+});
+export type BlockOverride = z.infer<typeof blockOverrideSchema>;
+
 export const weeklyPlanSchema = z.object({
   id: z.string().min(1),
   /** Monday 00:00 in user TZ. ISO date (YYYY-MM-DD). */
   weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   timezone: z.string(),
-  goals: z.array(weeklyGoalSchema).default([])
+  goals: z.array(weeklyGoalSchema).default([]),
+  /** User-supplied drag overrides for sleep + routine blocks. */
+  overrides: z.array(blockOverrideSchema).default([])
 });
 export type WeeklyPlan = z.infer<typeof weeklyPlanSchema>;

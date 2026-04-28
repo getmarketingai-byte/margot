@@ -8,7 +8,7 @@ import { loadSettings } from "@/lib/settings-store";
 import { loadLatestSnapshot } from "@/lib/snapshots";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
-import { computeSystemBlocks } from "@/lib/week-blocks";
+import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
 import { formatMinutes } from "./plan/goal-helpers";
 import { WeekCalendar } from "./week-calendar";
 
@@ -16,16 +16,16 @@ export const dynamic = "force-dynamic";
 
 async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
-  if (!db) return { id: "dev", weekStart, timezone, goals: [] };
+  if (!db) return { id: "dev", weekStart, timezone, goals: [], overrides: [] };
   const rows = await db
     .select()
     .from(schema.weeklyPlans)
     .where(eq(schema.weeklyPlans.userId, userId))
     .limit(1);
   const row = rows[0];
-  if (!row) return { id: crypto.randomUUID(), weekStart, timezone, goals: [] };
+  if (!row) return { id: crypto.randomUUID(), weekStart, timezone, goals: [], overrides: [] };
   const stored = row.data as WeeklyPlan;
-  return { ...stored, id: row.id, weekStart, timezone };
+  return { ...stored, id: row.id, weekStart, timezone, overrides: stored.overrides ?? [] };
 }
 
 function isoWeekdayIndexNow(timezone: string): number {
@@ -62,14 +62,13 @@ export default async function DashboardHome() {
     weekStartMs,
     weekEndMs
   ).catch(() => []);
-  const systemBlocks = computeSystemBlocks(
+  const systemBlocks = await buildSystemBlocks({
+    userId,
+    settings,
     weekStartMs,
     busy,
-    settings.sleep,
-    settings.travel,
-    settings.timezone,
-    settings.timemap
-  );
+    overrides: overridesFromPlan(planWithTz)
+  });
   const allocation = allocateWeek({
     plan: planWithTz,
     busy: [...busy, ...systemBlocks],

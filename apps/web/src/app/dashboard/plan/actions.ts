@@ -3,8 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import {
+  type BlockOverride,
   type WeeklyGoal,
   type WeeklyPlan,
+  blockOverrideSchema,
   weeklyGoalSchema,
   weeklyPlanSchema
 } from "@calendar-automations/schema";
@@ -29,7 +31,7 @@ function thisMondayIso(): string {
 async function loadOrCreatePlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = thisMondayIso();
   if (!db) {
-    return { id: "dev", weekStart, timezone, goals: [] };
+    return { id: "dev", weekStart, timezone, goals: [], overrides: [] };
   }
   const rows = await db
     .select()
@@ -38,11 +40,13 @@ async function loadOrCreatePlan(userId: string, timezone: string): Promise<Weekl
     .limit(1);
   const row = rows[0];
   const baseGoals = row ? (row.data as WeeklyPlan).goals : [];
+  const baseOverrides = row ? ((row.data as WeeklyPlan).overrides ?? []) : [];
   const plan: WeeklyPlan = {
     id: row?.id ?? crypto.randomUUID(),
     weekStart,
     timezone,
-    goals: baseGoals
+    goals: baseGoals,
+    overrides: baseOverrides
   };
   if (row && (row.data as WeeklyPlan).weekStart !== weekStart) {
     await db
@@ -135,6 +139,54 @@ export async function reorderGoals(orderedIds: readonly string[]): Promise<void>
     .map((id) => byId.get(id))
     .filter((g): g is WeeklyGoal => g !== undefined);
   weeklyPlanSchema.parse(plan);
+  await savePlan(userId, plan);
+  revalidatePath("/dashboard/plan");
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Persist a drag override for a sleep or routine block. Overrides live on
+ * the WeeklyPlan rather than UserSettings so a fresh week starts clean.
+ *
+ * The `key` uniquely identifies the original computed block (`"0".."6"` for
+ * sleep nights, `"morning-${i}"` / `"shutdown-${i}"` for routines). Setting
+ * an override with the same key replaces the previous one.
+ */
+export async function setBlockOverride(
+  override: Omit<BlockOverride, "setAt">
+): Promise<void> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+
+  const parsed = blockOverrideSchema.parse({ ...override, setAt: Date.now() });
+  // Drag overrides supersede any prior override on the same key. A `kind`
+  // mismatch on the same key is treated as a fresh override (the new kind
+  // wins) — this should only happen if the schema changes.
+  const filtered = plan.overrides.filter(
+    (o) => !(o.kind === parsed.kind && o.key === parsed.key)
+  );
+  plan.overrides = [...filtered, parsed];
+  await savePlan(userId, plan);
+  revalidatePath("/dashboard/plan");
+  revalidatePath("/dashboard");
+}
+
+/** Remove an override by `kind` + `key`. No-op if no matching override exists. */
+export async function clearBlockOverride(
+  kind: BlockOverride["kind"],
+  key: string
+): Promise<void> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  const before = plan.overrides.length;
+  plan.overrides = plan.overrides.filter((o) => !(o.kind === kind && o.key === key));
+  if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
   revalidatePath("/dashboard/plan");
   revalidatePath("/dashboard");
