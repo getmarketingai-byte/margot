@@ -10,6 +10,7 @@ import { computeSystemBlocks } from "@/lib/week-blocks";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
+import { RangeToggleCalendar } from "./range-toggle-calendar";
 
 export const dynamic = "force-dynamic";
 
@@ -136,11 +137,8 @@ export default async function PlanPage() {
               </div>
               <details className="card lg:hidden" open>
                 <summary className="cursor-pointer text-sm font-semibold">Preview this week</summary>
-                <p className="mt-1 text-xs text-ink-400">
-                  Existing events sit behind sleep, travel, and your proposed goal blocks.
-                </p>
                 <div className="mt-3">
-                  <WeekCalendar
+                  <RangeToggleCalendar
                     weekStartMs={weekStartMs}
                     timezone={settings.timezone}
                     busy={busy}
@@ -173,19 +171,14 @@ function CalendarPreview({
   compact: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="px-1 text-xs text-ink-400">
-        Existing events sit behind sleep, travel, and your proposed goal blocks.
-      </div>
-      <WeekCalendar
-        weekStartMs={weekStartMs}
-        timezone={timezone}
-        busy={busy}
-        system={system}
-        proposed={proposed}
-        compact={compact}
-      />
-    </div>
+    <RangeToggleCalendar
+      weekStartMs={weekStartMs}
+      timezone={timezone}
+      busy={busy}
+      system={system ?? []}
+      proposed={proposed}
+      compact={compact}
+    />
   );
 }
 

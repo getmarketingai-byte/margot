@@ -108,7 +108,8 @@ export default async function DashboardHome() {
       endMs: b.endMs
     }))
   ]
-    .filter((e) => e.endMs > now)
+    // "What's next" should only show future starts, not earlier-day items.
+    .filter((e) => e.startMs >= now)
     .sort((a, b) => a.startMs - b.startMs)
     .filter((e, i, arr) => i === 0 || !(e.startMs === arr[i - 1]!.startMs && e.title === arr[i - 1]!.title))
     .slice(0, 3);

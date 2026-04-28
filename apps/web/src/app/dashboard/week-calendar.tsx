@@ -37,17 +37,16 @@ interface WeekCalendarProps {
    * stays the same so block heights remain readable.
    */
   compact?: boolean;
-  /** Subset of day indexes to render (Mon=0 ... Sun=6). Defaults to all days. */
+  /** Subset of day offsets from week start to render (0=Mon, 7=next Mon). */
   dayIndices?: readonly number[];
   /** Heading label for the calendar card. */
   title?: string;
 }
 
-const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const PX_PER_HOUR = 30;
 
 interface PositionedBlock {
-  dayIndex: number; // 0=Mon ... 6=Sun
+  dayIndex: number; // 0=Mon ... 6=Sun, can extend beyond 6 for rolling views.
   topPx: number;
   heightPx: number;
   title: string;
@@ -134,7 +133,7 @@ function position(
   // expressed in minutes-from-startDay00:00.
   let cursor = startMinuteOfDay;
   let dayIndex = startDayIndex;
-  while (cursor < endMinuteAbs && dayIndex >= 0 && dayIndex <= 6) {
+  while (cursor < endMinuteAbs && dayIndex >= 0) {
     const dayBoundary = dayIndex === startDayIndex ? 1440 : (dayIndex - startDayIndex + 1) * 1440;
     const nextBoundary = Math.min(endMinuteAbs, dayBoundary);
     // Convert the absolute-from-startDay minutes into minutes-of-this-day.
@@ -188,12 +187,10 @@ export function WeekCalendar({
   const minWidthClass = compact ? "min-w-[420px]" : "min-w-[640px]";
   const timeColClass = compact ? "w-8" : "w-12";
   const days = (dayIndices && dayIndices.length > 0 ? [...dayIndices] : [0, 1, 2, 3, 4, 5, 6]).filter(
-    (d) => d >= 0 && d <= 6
+    (d) => d >= 0
   );
   const dayCols = days.length || 7;
-  const gridColsClass = compact
-    ? `grid-cols-[2rem_repeat(${dayCols},minmax(0,1fr))]`
-    : `grid-cols-[3rem_repeat(${dayCols},minmax(0,1fr))]`;
+  const gridTemplateColumns = `${compact ? "2rem" : "3rem"} repeat(${dayCols}, minmax(0, 1fr))`;
 
   // Build positioned arrays once, dropping events outside the window.
   const busyPositions: PositionedBlock[] = [];
@@ -226,12 +223,11 @@ export function WeekCalendar({
         <Legend hasSleep={hasSleep} hasTravel={hasTravel} hasRoutine={hasRoutine} />
       </div>
       <div className="overflow-x-auto">
-        <div className={`grid ${minWidthClass} ${gridColsClass} gap-1`}>
+        <div className={`grid ${minWidthClass} gap-1`} style={{ gridTemplateColumns }}>
           <div className={timeColClass} />
           {days.map((dayIdx) => (
             <DayHeader
               key={dayIdx}
-              label={DAY_LABELS[dayIdx] ?? ""}
               dayIndex={dayIdx}
               weekStartMs={weekStartMs}
               timezone={timezone}
@@ -315,12 +311,10 @@ function Legend({
 }
 
 function DayHeader({
-  label,
   dayIndex,
   weekStartMs,
   timezone
 }: {
-  label: string;
   dayIndex: number;
   weekStartMs: number;
   timezone: string;
@@ -329,7 +323,7 @@ function DayHeader({
   const parts = partsInTimezone(dayMs, timezone);
   return (
     <div className="text-center text-xs">
-      <div className="font-semibold">{label}</div>
+      <div className="font-semibold">{parts.weekday}</div>
       <div className="text-ink-400">{parts.day}</div>
     </div>
   );

@@ -102,6 +102,9 @@ export type SleepSettings = z.infer<typeof sleepSettingsSchema>;
 
 /* ─────────────────────────────── 4. Travel ───────────────────────────────── */
 
+export const routingProviderSchema = z.enum(["openrouteservice", "disabled"]);
+export type RoutingProvider = z.infer<typeof routingProviderSchema>;
+
 export const travelSettingsSchema = z.object({
   arriveMinutesBefore: positiveInt.default(15),
   minHomeMinutes: positiveInt.default(30),
@@ -116,9 +119,51 @@ export const travelSettingsSchema = z.object({
     "video call"
   ]),
   homeAddress: z.string().optional(),
-  driveEventTag: z.string().default("[Drive]")
+  driveEventTag: z.string().default("[Drive]"),
+  /**
+   * Routing provider used to resolve real drive durations. When "disabled",
+   * every drive falls back to `fallbackDurationMinutes`. The actual API key
+   * is read from server-side env vars (`OPENROUTESERVICE_API_KEY`) and
+   * intentionally NOT stored in user settings.
+   */
+  routingProvider: routingProviderSchema.default("disabled"),
+  /**
+   * Maximum number of provider calls allowed per page render. Caps cost on
+   * the free tier and matches the legacy quota-budget loop in Travel.gs.
+   */
+  routingMaxCallsPerRender: positiveInt.default(20),
+  /**
+   * Stale-cache threshold in days. Cached leg durations older than this get
+   * priority for refresh. Mirrors `TRAVEL_RECHECK_STALE_MS` from Config.gs.
+   */
+  routingStaleAfterDays: positiveInt.default(3)
 });
 export type TravelSettings = z.infer<typeof travelSettingsSchema>;
+
+/* ──────────────── 4b. Travel cache (durations + geocodes) ────────────────── */
+
+export const travelLegStateSchema = z.object({
+  durationMin: positiveNumber,
+  lastCheckedMs: z.number().int(),
+  /** True when the value came from `fallbackDurationMinutes`, not from the provider. */
+  usedFallback: z.boolean().default(false)
+});
+export type TravelLegState = z.infer<typeof travelLegStateSchema>;
+
+export const geocodeCacheEntrySchema = z.object({
+  lat: z.number(),
+  lng: z.number(),
+  fetchedAtMs: z.number().int()
+});
+export type GeocodeCacheEntry = z.infer<typeof geocodeCacheEntrySchema>;
+
+export const travelCacheSchema = z.object({
+  /** Map of "{originKey}\n{destKey}" → leg state. Keys are canonical (trimmed lowercase). */
+  legs: z.record(z.string(), travelLegStateSchema).default({}),
+  /** Map of canonical address string → cached geocode. */
+  geocodes: z.record(z.string(), geocodeCacheEntrySchema).default({})
+});
+export type TravelCache = z.infer<typeof travelCacheSchema>;
 
 /* ─────────────────────────────── 5. Gym ──────────────────────────────────── */
 
@@ -362,7 +407,8 @@ export const userSettingsSchema = z.object({
   hpp: hppRhythmSettingsSchema.default({} as never),
   consistency: consistencySettingsSchema.default({} as never),
   energyOrdering: energyOrderingSchema.default({} as never),
-  allocator: allocatorSettingsSchema.default({} as never)
+  allocator: allocatorSettingsSchema.default({} as never),
+  travelCache: travelCacheSchema.default({} as never)
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
