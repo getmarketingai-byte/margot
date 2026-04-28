@@ -82,6 +82,7 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const externalId = String(formData.get("externalId") ?? "");
+  const displayName = String(formData.get("displayName") ?? "").trim();
   const color = String(formData.get("color") ?? "");
   const busyMode = String(formData.get("busyMode") ?? "busy-only") as BusyHandlingMode;
   const invertedGoalTitleRaw = String(formData.get("invertedGoalTitle") ?? "").trim();
@@ -97,17 +98,17 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   const colorValue = nextColor ? nextColor : undefined;
   let availabilityGoalId = source.availabilityGoalId;
   if (busyMode === "invert-free-busy") {
+    const fallbackTitle = displayName ? `${displayName} available` : "";
     availabilityGoalId = await ensureInvertedGoal({
       userId,
       timezone: settings.timezone,
-      title: invertedGoalTitleRaw,
+      title: invertedGoalTitleRaw || fallbackTitle,
       existingGoalId: source.availabilityGoalId
     });
   } else {
     availabilityGoalId = undefined;
   }
-  const mode: BusyHandlingMode =
-    busyMode === "invert-free-busy" && !availabilityGoalId ? "busy-only" : busyMode;
+  const mode: BusyHandlingMode = busyMode;
 
   const updated: CalendarSource = {
     ...source,
@@ -290,6 +291,7 @@ export default async function CalendarsPage() {
                   <CalendarOptionsForm
                     action={updateCalendarOptions}
                     externalId={c.id}
+                    displayName={c.summary}
                     defaultColor={colorValue}
                     defaultBusyMode={busyMode}
                     defaultInvertedGoalTitle={linkedGoalTitle}

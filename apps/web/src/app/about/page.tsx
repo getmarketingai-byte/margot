@@ -5,7 +5,7 @@ import { OAUTH_SCOPES, PRODUCT, SITE_URL } from "@/lib/marketing";
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: "About",
-  description: `Calendar Automations is a weekly planning service that publishes private iCal feeds. Read about why the project exists, who it is for, and how it is built.`,
+  description: `Calendar Automations is the balance layer for your existing scheduler — SkedPal, Reclaim, Motion, Sunsama. It publishes private iCal feeds that surface Wheel of Life, PPF, and HP6 goals in the calendar app you already use. Read about why the project exists, who it is for, and how it is built.`,
   alternates: { canonical: "/about" }
 };
 
@@ -18,8 +18,9 @@ export default function AboutPage() {
         </Link>
         <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">About Calendar Automations</h1>
         <p className="text-ink-600 dark:text-ink-200 sm:text-lg">
-          A weekly planner you don&apos;t have to live inside. We read your existing calendar, do
-          the allocation work, and publish the result as a private iCal feed.
+          The balance layer for your existing scheduler — designed to run alongside SkedPal,
+          Reclaim, Motion, or Sunsama, not replace them. We read your existing calendar, do the
+          weekly framework allocation, and publish the result as a private iCal feed.
         </p>
       </header>
 
@@ -44,9 +45,10 @@ export default function AboutPage() {
         <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Who it is for</h2>
         <p>{PRODUCT.audience}</p>
         <p>
-          If you already manage your week in Google Calendar and the only thing missing is a
-          deliberate, energy-aware allocation step, Calendar Automations is built for you. If you
-          want a brand new calendar surface to live in, this is not that.
+          If you already use SkedPal, Reclaim, Motion, or Sunsama for reactive task scheduling and
+          the only thing missing is a deliberate weekly balance step — Wheel of Life, PPF, HP6,
+          energy-aware ordering — Calendar Automations is built for you. If you want a brand new
+          calendar surface to live in, or a scheduler replacement, this is not that.
         </p>
 
         <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Design principles</h2>

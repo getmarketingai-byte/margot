@@ -163,11 +163,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       acc + d.gaps.reduce((a, g) => a + Math.floor((g.endMs - g.startMs) / MS_PER_MIN), 0),
     0
   );
-  const overcommit = { mode: settings.allocator.starvationMode };
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
     goalsForAllocation,
     totalFreeMin,
-    overcommit
+    settings.allocator
   );
 
   // Pass 3 — placement: schedule each prepared goal, day by day, honouring
@@ -211,16 +210,25 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  * Pass 1 + Pass 2: derive each goal's `effectiveMinutes` for the week.
  *
  *   - Pass 1 reserves every goal's `minMinutesPerWeek` as a floor.
- *   - Pass 2 distributes the remaining free time evenly across goals that have
- *     not yet hit their `maxMinutesPerWeek`. Goals with no time fields ("equal
- *     share" goals) start at 0 and receive their slice in this pass.
+ *   - Pass 2 distributes the remaining free time. Behavior depends on
+ *     `allocator.allocationMode`:
+ *
+ *       "even" (default): split the remainder evenly across goals that have
+ *       not yet hit their `maxMinutesPerWeek`. Goals with no time fields
+ *       ("equal share" goals) start at 0 and receive their slice in this pass,
+ *       so all available time gets allocated.
+ *
+ *       "finish-early": top up each goal in user/priority order to its
+ *       `maxMinutesPerWeek` cap, then stop. Goals without a cap stay at their
+ *       floor, leaving the remainder as free time at the end of the day/week.
+ *
  *   - When floors exceed `totalFreeMin`, we either scale floors proportionally
  *     (default) or pay them in user order until time runs out (strict).
  */
 function distributeMinutes(
   goals: readonly WeeklyGoal[],
   totalFreeMin: number,
-  starvation: { mode: AllocatorSettings["starvationMode"] }
+  allocator: AllocatorSettings
 ): {
   prepared: PreparedGoal[];
   overcommitted: WeekMetrics["overcommitted"];
@@ -254,9 +262,9 @@ function distributeMinutes(
     overcommitted = {
       neededMin: floorTotal,
       availableMin: totalFreeMin,
-      mode: starvation.mode
+      mode: allocator.starvationMode
     };
-    if (starvation.mode === "proportional") {
+    if (allocator.starvationMode === "proportional") {
       const ratio = totalFreeMin / Math.max(1, floorTotal);
       for (const p of prepared) {
         p.effectiveMinutes = quantise(p.effectiveMinutes * ratio);
@@ -277,8 +285,30 @@ function distributeMinutes(
     return { prepared, overcommitted, notScheduled };
   }
 
-  // Pass 2: equal-share the remainder up to each goal's ceiling.
   let remainder = totalFreeMin - floorTotal;
+
+  if (allocator.allocationMode === "finish-early") {
+    // Pass 2 (finish-early): fill goals one after another in user/priority
+    // order, topping each up to its weekly cap. Goals without a cap don't
+    // grow past their floor, so leftover time stays as free time the placer
+    // will simply not consume — surfaced to the UI as "free time at the end
+    // of the day/week".
+    const ordered = [...prepared].sort((a, b) => a.index - b.index);
+    for (const p of ordered) {
+      if (remainder < QUANTUM) break;
+      const cap = p.norm.maxMinutesPerWeek;
+      if (cap === undefined) continue;
+      const headroom = Math.max(0, cap - p.effectiveMinutes);
+      if (headroom < QUANTUM) continue;
+      const give = quantise(Math.min(headroom, remainder));
+      if (give <= 0) continue;
+      p.effectiveMinutes += give;
+      remainder -= give;
+    }
+    return { prepared, overcommitted, notScheduled };
+  }
+
+  // Pass 2 (even): equal-share the remainder up to each goal's ceiling.
   // Anyone whose effective minutes is below their cap (or who has no cap) is
   // eligible to receive more time. Equal-share goals (no time fields at all)
   // and goals with a floor below max both count.

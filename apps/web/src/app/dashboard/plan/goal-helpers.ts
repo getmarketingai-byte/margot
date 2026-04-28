@@ -165,16 +165,21 @@ export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
 
 /**
  * Live time-budget chip math, mirroring the allocator at a high level for the
- * UI. The real allocator runs server-side; this client-side approximation just
+ * UI. The real allocator runs server-side; this client-side approximation
  * tells the user how many hours each unconstrained goal will get.
  *
  * - `freeMinutes`: total free time across the week (server-computed).
- * - Goals with a `min` reserve their floor first.
- * - Remaining minutes split equally across remaining goals.
+ * - `allocationMode` (default `"even"`):
+ *   - `"even"`: goals with a `min` reserve their floor first; remaining minutes
+ *     split equally across goals that aren't already capped.
+ *   - `"finish-early"`: goals are filled in user/priority order up to their
+ *     cap. Unbounded goals stay at their floor; leftover free time is shown as
+ *     "free time at end".
  */
 export function summariseAllocation(
   goals: readonly WeeklyGoal[],
-  freeMinutes: number
+  freeMinutes: number,
+  allocationMode: "even" | "finish-early" = "even"
 ): {
   freeMinutes: number;
   goalCount: number;
@@ -182,28 +187,37 @@ export function summariseAllocation(
   remainingMinutes: number;
   equalShareGoals: number;
   perEqualShareMinutes: number;
+  allocationMode: "even" | "finish-early";
+  finishEarlyLeftoverMinutes: number;
 } {
   let reserved = 0;
   let equalShareCount = 0;
+  let plannedFromCaps = 0;
   for (const g of goals) {
     const norm = normaliseGoalTime(g);
     const floor = norm.minMinutesPerWeek ?? 0;
     reserved += floor;
-    // Anyone whose ceiling isn't already met by their floor will receive more
-    // time in the equal-share pass. For the headline summary we just count
-    // goals that don't have a fixed target.
     const ceiling = norm.maxMinutesPerWeek;
     if (ceiling === undefined || floor < ceiling) equalShareCount++;
+    // For finish-early projection we only top up goals that have an explicit
+    // cap; unbounded goals stay at their floor.
+    if (ceiling !== undefined) {
+      plannedFromCaps += Math.max(0, ceiling - floor);
+    }
   }
   const remaining = Math.max(0, freeMinutes - reserved);
   const perEqual = equalShareCount > 0 ? Math.round(remaining / equalShareCount) : 0;
+  const finishEarlyLeftover =
+    allocationMode === "finish-early" ? Math.max(0, remaining - plannedFromCaps) : 0;
   return {
     freeMinutes,
     goalCount: goals.length,
     reservedMinutes: reserved,
     remainingMinutes: remaining,
     equalShareGoals: equalShareCount,
-    perEqualShareMinutes: perEqual
+    perEqualShareMinutes: perEqual,
+    allocationMode,
+    finishEarlyLeftoverMinutes: finishEarlyLeftover
   };
 }
 

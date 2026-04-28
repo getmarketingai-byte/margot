@@ -246,6 +246,7 @@ export default async function PlanPage() {
               wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
               scheduledByGoal={scheduledByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}
+              allocationMode={settings.allocator.allocationMode}
             />
 
             {allocation.metrics.notScheduled.length > 0 && (

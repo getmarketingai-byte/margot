@@ -42,6 +42,7 @@ interface PlanClientProps {
   wheelAreas: WheelOption[];
   scheduledByGoal: Record<string, number>;
   effectiveTargetByGoal: Record<string, number>;
+  allocationMode: "even" | "finish-early";
 }
 
 const DAY_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
@@ -91,7 +92,8 @@ export function PlanClient({
   freeMinutesThisWeek,
   wheelAreas,
   scheduledByGoal,
-  effectiveTargetByGoal
+  effectiveTargetByGoal,
+  allocationMode
 }: PlanClientProps) {
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
@@ -120,8 +122,8 @@ export function PlanClient({
   }, []);
 
   const summary = useMemo(
-    () => summariseAllocation(goals, freeMinutesThisWeek),
-    [goals, freeMinutesThisWeek]
+    () => summariseAllocation(goals, freeMinutesThisWeek, allocationMode),
+    [goals, freeMinutesThisWeek, allocationMode]
   );
 
   const wheelLabel = useCallback(
@@ -242,6 +244,19 @@ function BudgetChip({
           <div className="text-lg font-semibold">{formatMinutes(summary.freeMinutes)}</div>
         </div>
         <div className="text-sm text-ink-400">Add a goal to start filling it.</div>
+      </div>
+    );
+  }
+
+  if (summary.allocationMode === "finish-early") {
+    return (
+      <div className="card grid gap-3 sm:grid-cols-3">
+        <Stat label="Free time" value={formatMinutes(summary.freeMinutes)} />
+        <Stat label="Goals" value={String(summary.goalCount)} />
+        <Stat
+          label="Free at end (finish early)"
+          value={`~${formatMinutes(summary.finishEarlyLeftoverMinutes)}`}
+        />
       </div>
     );
   }

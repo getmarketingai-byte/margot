@@ -14,14 +14,14 @@ export const PRODUCT = {
   name: "Calendar Automations",
   legalName: "Calendar Automations",
   contactEmail: "autocalender@neutrino.au",
-  tagline: "Plan a perfect week. Subscribe to it from any calendar.",
+  tagline: "The balance layer for your existing scheduler.",
   shortDescription:
-    "Calendar Automations is a mobile-first weekly planning service that reads your existing calendars over read-only OAuth, allocates your goals into the gaps with energy-aware ordering, and publishes the result as a private iCal feed you subscribe to from Apple Calendar, Google Calendar, or Outlook.",
+    "A framework-driven weekly planning layer that runs alongside SkedPal, Reclaim, Motion, Sunsama, or any task-driven scheduler. Reads your calendar over read-only OAuth, allocates Wheel of Life / PPF / HP6 goals into the gaps with energy-aware ordering, and publishes the result as a private iCal feed your existing calendar app subscribes to.",
   longDescription:
-    "Calendar Automations connects to Google Calendar with read-only scopes, computes a balanced weekly schedule based on Wheel of Life areas, PPF (Personal / Professional / Financial) pillars, HP6 habit tags, and Bustamante-style energy modes (hyperfocus, hyperaware, neutral), and publishes private iCal feeds that any calendar app can subscribe to. The app never writes to your calendar; you stay in control.",
+    "Calendar Automations runs alongside your existing scheduler — SkedPal, Reclaim, Motion, Sunsama, or anything task-driven that lives in Google Calendar. Your scheduler keeps doing reactive task flow: deadlines, project hierarchies, auto-rescheduling. Calendar Automations adds the strategic layer those tools don't cover — Wheel of Life weekly minutes per area, PPF (Personal / Professional / Financial) mix targets, HP6 habit tags with monthly minimum-touch goals, and Bustamante-style energy modes (hyperfocus / hyperaware / neutral). It connects to Google Calendar with read-only scopes only, computes a balanced weekly schedule against your existing busy time, and publishes private iCal feeds any calendar app can subscribe to. The app never writes to your calendar — even when your scheduler does.",
   category: "Productivity",
   audience:
-    "Solo operators, knowledge workers, and small-team leaders who already live in Google Calendar and want a planned week without giving an external app write access."
+    "SkedPal, Reclaim, Motion, and Sunsama users — and anyone who plans weeks against Wheel of Life, PPF, or HP6 — who want a framework-driven balance layer on top of their existing scheduler without giving another app calendar write access."
 } as const;
 
 /**
@@ -47,16 +47,12 @@ export const FEED_BEHAVIOR = {
 
 export const FEATURES: ReadonlyArray<{ title: string; body: string }> = [
   {
-    title: "Time-mapped weeks",
-    body: "Reads up to 60 days of your existing Google Calendar, finds the gaps, and generates Needle-Mover, Execute, Ops, and Play bands across each day."
-  },
-  {
-    title: "Energy-aware ordering",
-    body: "Tag goals as hyperfocus, hyperaware, or neutral. The allocator places deep work first and avoids long runs of pure scanning in one block."
+    title: "Sits alongside your scheduler",
+    body: "Designed to run with SkedPal, Reclaim, Motion, Sunsama, or any task-driven calendar tool. Your scheduler keeps handling reactive task flow; Calendar Automations adds the framework layer it doesn't cover. Both surface in the same calendar app."
   },
   {
     title: "Wheel of Life balance",
-    body: "Set weekly minutes per area so neglected domains get guaranteed slots — no week disappears under work pressure."
+    body: "Set weekly minutes per area so neglected domains get guaranteed slots — no week disappears under work pressure or auto-scheduled deadlines."
   },
   {
     title: "PPF mix targets",
@@ -67,12 +63,21 @@ export const FEATURES: ReadonlyArray<{ title: string; body: string }> = [
     body: "Six habit tags, weekly review day, monthly strategy day-of-month — wired in with your own paraphrased prompts."
   },
   {
+    title: "Energy-aware ordering",
+    body: "Tag goals as hyperfocus, hyperaware, or neutral. The allocator places deep work first and avoids long runs of pure scanning in one block."
+  },
+  {
     title: "Read-only by design",
-    body: "The app uses calendar.readonly OAuth scopes only. Output is a private iCal feed you subscribe to. We never write events to your calendar."
+    body: "Even when your scheduler has full calendar write access, this app uses calendar.readonly scopes only. Output is a private iCal feed you subscribe to. We never add, edit, or delete events."
+  },
+  {
+    title: "Time-mapped weeks",
+    body: "Reads up to 60 days of your existing Google Calendar, finds the gaps left by meetings and your scheduler, and generates Needle-Mover, Execute, Ops, and Play bands across each day."
   }
 ];
 
 export const NON_GOALS: ReadonlyArray<string> = [
+  "Calendar Automations is not a task manager, project tracker, or auto-rescheduler. It runs alongside SkedPal, Reclaim, Motion, Sunsama, or any task-driven scheduler — adding a balance and frameworks layer those tools do not cover.",
   "Calendar Automations does not write events to your Google Calendar in v1.",
   "Calendar Automations does not read or sync iCloud calendars via CalDAV in v1; iCloud users subscribe to the published feed instead.",
   "Calendar Automations is not a meeting scheduler, availability picker, or external booking page.",
@@ -85,7 +90,12 @@ export const FAQ: ReadonlyArray<FaqEntry> = [
   {
     question: "What does Calendar Automations actually do?",
     answer:
-      "It reads your connected calendars to find busy intervals, allocates your weekly goals into the free gaps using energy-aware ordering and balance constraints, then publishes a private iCal feed of the planned blocks. You subscribe to that feed from Apple Calendar, Google Calendar, Outlook, or any RFC 5545-compliant client."
+      "It reads your connected calendars to find busy intervals (including blocks placed by your existing scheduler), allocates your weekly framework goals into the remaining gaps using energy-aware ordering and balance constraints, then publishes a private iCal feed of the planned blocks. You subscribe to that feed from Apple Calendar, Google Calendar, Outlook, or any RFC 5545-compliant client — alongside whatever your scheduler is publishing."
+  },
+  {
+    question: "Does this replace SkedPal, Reclaim, Motion, or Sunsama?",
+    answer:
+      "No — it is designed to sit alongside them. Your scheduler keeps doing what it does best: reactive task flow, deadlines, project hierarchies, auto-rescheduling. Calendar Automations adds the strategic layer those tools do not cover — Wheel of Life weekly balance, PPF (Personal / Professional / Financial) mix targets, HP6 monthly habit touches, and energy-aware ordering. Both feed into the same calendar app, so you see one unified week."
   },
   {
     question: "Does Calendar Automations write to my Google Calendar?",
@@ -278,7 +288,7 @@ export const ARTICLES: ReadonlyArray<Article> = [
 ];
 
 export const PRICING_NOTE =
-  "Pricing is shown on the in-app billing page after sign-in. The app uses Stripe Checkout and the Stripe Customer Portal; no card is charged before you choose a plan.";
+  "A$6/month or A$54/year (save 25%) in AUD, with a 7-day no-card free trial. Pricing is shown on the in-app billing page after sign-in. The app uses Stripe Checkout and the Stripe Customer Portal; cancel any time.";
 
 /**
  * Build the canonical URL set for a given site origin. Pass the consumer's

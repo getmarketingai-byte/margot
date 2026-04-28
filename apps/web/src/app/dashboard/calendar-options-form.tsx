@@ -7,6 +7,7 @@ type BusyHandlingMode = "ignore" | "busy-only" | "all-events" | "invert-free-bus
 interface CalendarOptionsFormProps {
   action: (formData: FormData) => void | Promise<void>;
   externalId: string;
+  displayName: string;
   defaultColor: string;
   defaultBusyMode: BusyHandlingMode;
   defaultInvertedGoalTitle: string;
@@ -15,6 +16,7 @@ interface CalendarOptionsFormProps {
 export function CalendarOptionsForm({
   action,
   externalId,
+  displayName,
   defaultColor,
   defaultBusyMode,
   defaultInvertedGoalTitle
@@ -26,6 +28,7 @@ export function CalendarOptionsForm({
   return (
     <form action={action} className="flex flex-wrap items-end gap-3">
       <input type="hidden" name="externalId" value={externalId} />
+      <input type="hidden" name="displayName" value={displayName} />
       <label className="flex flex-col gap-1 text-xs text-ink-500">
         Display color
         <input
@@ -62,14 +65,16 @@ export function CalendarOptionsForm({
             className="h-9 rounded border border-ink-200 bg-white px-2 text-sm text-ink-900 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100"
             required
           />
-          <span className="text-[11px] text-ink-400">
-            This creates a goal if it does not already exist.
-          </span>
         </label>
       ) : null}
       <button type="submit" className="btn-secondary">
         Save options
       </button>
+      {isInverted ? (
+        <p className="w-full text-[11px] text-ink-400">
+          This creates a goal if it does not already exist.
+        </p>
+      ) : null}
     </form>
   );
 }

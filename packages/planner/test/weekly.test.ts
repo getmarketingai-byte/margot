@@ -322,6 +322,170 @@ describe("allocateWeek", () => {
     );
   });
 
+  it("finish-early mode fills capped goals in user order and leaves leftover free", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "finish-early-cap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "first",
+            title: "First",
+            maxMinutesPerWeek: 240,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "second",
+            title: "Second",
+            maxMinutesPerWeek: 240,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings({
+        allocator: { starvationMode: "proportional", allocationMode: "finish-early" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["first"]!.targetMinutes).toBe(240);
+    expect(result.metrics.perGoal["second"]!.targetMinutes).toBe(240);
+    // Leftover free time should remain unallocated, far more than even-mode would leave.
+    expect(result.metrics.utilisation.availableMinutes).toBeGreaterThan(60 * 24);
+  });
+
+  it("finish-early mode keeps unbounded goals at their floor (not equal-share)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "finish-early-unbounded",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          { id: "a", title: "A", priority: 3, energyMode: "neutral", ppfHorizon: "unspecified" },
+          { id: "b", title: "B", priority: 3, energyMode: "neutral", ppfHorizon: "unspecified" },
+          {
+            id: "floor",
+            title: "Floor",
+            minMinutesPerWeek: 120,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings({
+        allocator: { starvationMode: "proportional", allocationMode: "finish-early" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["a"]!.targetMinutes).toBe(0);
+    expect(result.metrics.perGoal["b"]!.targetMinutes).toBe(0);
+    // Floor-only goal stays at its floor; no equal-share growth.
+    expect(result.metrics.perGoal["floor"]!.targetMinutes).toBe(120);
+  });
+
+  it("finish-early starves later capped goals when free time runs short", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    // Each day only has a 2-hour window of free time → ~14h/wk total.
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      busy.push({
+        id: `morning-${d}`,
+        startMs: weekStartMs + d * DAY_MS,
+        endMs: weekStartMs + d * DAY_MS + 9 * HOUR_MS,
+        busy: true
+      });
+      busy.push({
+        id: `afternoon-${d}`,
+        startMs: weekStartMs + d * DAY_MS + 11 * HOUR_MS,
+        endMs: weekStartMs + d * DAY_MS + 24 * HOUR_MS,
+        busy: true
+      });
+    }
+    const result = allocateWeek({
+      plan: {
+        id: "finish-early-starve",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "first",
+            title: "First",
+            maxMinutesPerWeek: 600,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "second",
+            title: "Second",
+            maxMinutesPerWeek: 600,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings({
+        allocator: { starvationMode: "proportional", allocationMode: "finish-early" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["first"]!.targetMinutes).toBe(600);
+    expect(result.metrics.perGoal["second"]!.targetMinutes).toBeLessThan(
+      result.metrics.perGoal["first"]!.targetMinutes
+    );
+  });
+
+  it("finish-early still respects floors before topping up caps", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "finish-early-floor-first",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "capped-first",
+            title: "Capped first",
+            maxMinutesPerWeek: 120,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "floored-second",
+            title: "Floored second",
+            minMinutesPerWeek: 240,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings({
+        allocator: { starvationMode: "proportional", allocationMode: "finish-early" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["capped-first"]!.targetMinutes).toBe(120);
+    expect(result.metrics.perGoal["floored-second"]!.targetMinutes).toBe(240);
+  });
+
   it("restricts a goal to inverted-calendar availability windows", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const result = allocateWeek({

@@ -1,6 +1,11 @@
 /**
  * Creates a Stripe Checkout session (or redirects to the customer portal when
  * the user already has an active subscription). Returns 303 to the URL.
+ *
+ * Plan selection: the form posts a `plan` field of "monthly" | "annual",
+ * defaulting to "monthly". Annual is optional — if STRIPE_PRICE_ID_ANNUAL is
+ * unset, an annual request falls back to monthly so a misconfigured deploy
+ * still completes checkout instead of 500-ing.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -10,6 +15,15 @@ import { db, schema } from "@/lib/db";
 import { getStripe, hasActiveSubscription } from "@/lib/stripe";
 
 export const runtime = "nodejs";
+
+type Plan = "monthly" | "annual";
+
+function resolvePriceId(plan: Plan): string | null {
+  const monthly = process.env.STRIPE_PRICE_ID_MONTHLY ?? null;
+  const annual = process.env.STRIPE_PRICE_ID_ANNUAL ?? null;
+  if (plan === "annual" && annual) return annual;
+  return monthly;
+}
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const session = await auth();
@@ -21,6 +35,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const userRow = db
     ? (await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1))[0]
     : null;
+
+  const form = await req.formData().catch(() => null);
+  const requestedPlan = form?.get("plan");
+  const plan: Plan = requestedPlan === "annual" ? "annual" : "monthly";
 
   let customerId = userRow?.stripeCustomerId ?? null;
   if (!customerId) {
@@ -46,8 +64,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(portal.url, 303);
   }
 
-  const priceId = process.env.STRIPE_PRICE_ID;
-  if (!priceId) return new NextResponse("STRIPE_PRICE_ID not set", { status: 500 });
+  const priceId = resolvePriceId(plan);
+  if (!priceId) return new NextResponse("STRIPE_PRICE_ID_MONTHLY not set", { status: 500 });
 
   const checkout = await stripe.checkout.sessions.create({
     mode: "subscription",
