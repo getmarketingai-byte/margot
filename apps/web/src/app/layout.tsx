@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import Script from "next/script";
 import "./globals.css";
 import { PRODUCT, SITE_URL } from "@/lib/marketing";
 import { ADSENSE_PUBLISHER_ID, GOOGLE_ANALYTICS_ID } from "@/lib/analytics";
@@ -24,10 +23,10 @@ export const metadata: Metadata = {
   robots: {
     index: true,
     follow: true
-  },
-  other: {
-    "google-adsense-account": ADSENSE_PUBLISHER_ID
   }
+  // The AdSense meta tag is rendered directly in <head> below rather than via
+  // metadata.other — Next.js 15.5 streams metadata into the body via React
+  // Suspense, which AdSense's static-HTML verification crawler doesn't see.
 };
 
 export const viewport: Viewport = {
@@ -39,32 +38,30 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-dvh">
-        {children}
-        <SiteFooter />
-
-        <Script
-          id="adsbygoogle-loader"
+      <head>
+        {/*
+         * Google AdSense + Analytics tags are inlined directly in <head> so
+         * Google's verification crawler sees them in the initial HTML
+         * response. Placing them via next/script (any strategy) or via
+         * metadata.other causes Next.js 15.5 to stream them into <body>,
+         * which the static-HTML AdSense crawler does not parse.
+         */}
+        <meta name="google-adsense-account" content={ADSENSE_PUBLISHER_ID} />
+        <script
           async
-          strategy="afterInteractive"
           src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_PUBLISHER_ID}`}
           crossOrigin="anonymous"
         />
-
-        <Script
-          id="gtag-loader"
-          async
-          strategy="afterInteractive"
-          src={`https://www.googletagmanager.com/gtag/js?id=${GOOGLE_ANALYTICS_ID}`}
+        <script async src={`https://www.googletagmanager.com/gtag/js?id=${GOOGLE_ANALYTICS_ID}`} />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.dataLayer = window.dataLayer || [];function gtag(){dataLayer.push(arguments);}gtag('js', new Date());gtag('config', '${GOOGLE_ANALYTICS_ID}');`
+          }}
         />
-        <Script id="gtag-init" strategy="afterInteractive">
-          {`
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-            gtag('config', '${GOOGLE_ANALYTICS_ID}');
-          `}
-        </Script>
+      </head>
+      <body className="min-h-dvh">
+        {children}
+        <SiteFooter />
       </body>
     </html>
   );
