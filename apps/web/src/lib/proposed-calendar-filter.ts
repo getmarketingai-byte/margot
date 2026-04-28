@@ -8,8 +8,9 @@ import {
 } from "@calendar-automations/schema";
 
 /**
- * Perfect Week calendar "proposed" layer is for schedulable commitments.
- * Inverted free/busy time maps are a readout layer (like weather) — hide them here.
+ * Allocator blocks for schedulable commitments only.
+ * Inverted free/busy time maps are a readout layer (like weather) — omit from
+ * Perfect Week "proposed" preview and from ICS snapshot events.
  */
 export function filterInvertedTimemapFromProposedBlocks(
   blocks: readonly AllocatedBlock[],

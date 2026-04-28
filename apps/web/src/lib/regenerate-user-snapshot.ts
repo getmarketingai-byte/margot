@@ -8,6 +8,7 @@ import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
 import { fetchGoogleBusy } from "./google-calendar";
+import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
 import { loadSettings } from "./settings-store";
 import { saveSnapshot } from "./snapshots";
 import { buildWeatherTimemapEvents } from "./weather-timemap";
@@ -105,14 +106,18 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
 
   const events =
     plan
-      ? allocateWeek({
+      ? filterInvertedTimemapFromProposedBlocks(
+          allocateWeek({
+            plan,
+            busy: [...busy, ...systemBlocks],
+            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+            settings,
+            weekStartMs,
+            weekEndMs
+          }).blocks,
           plan,
-          busy: [...busy, ...systemBlocks],
-          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-          settings,
-          weekStartMs,
-          weekEndMs
-        }).blocks.map((b) => toGeneratedEvent(userId, plan, b))
+          settings.calendars.sources
+        ).map((b) => toGeneratedEvent(userId, plan, b))
       : [];
 
   const sleepBlockMs = systemBlocks

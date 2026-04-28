@@ -172,40 +172,12 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   }
 
   const schedulingGoals = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
-  const timemapAvailabilityGoals = plan.goals.filter((g) => isInvertedTimemapGoal(g));
-
-  // Inverted timemap rows (companion-calendar free maps) must place before
-  // equal-share goals consume the same gaps; otherwise `effectiveMinutes`
-  // looked huge but nothing remained inside the windows after placement.
-  const timemapPrepared: PreparedGoal[] = [];
-  for (const g of timemapAvailabilityGoals) {
-    const windows = input.goalAvailabilityWindows?.[g.id];
-    const totalAvailMin = minutesInIntersectedWeekGaps(days, windows);
-    if (totalAvailMin < QUANTUM) continue;
-    const norm = normaliseGoalTime(g);
-    const pp: PreparedGoal = {
-      goal: g,
-      norm,
-      effectiveMinutes: quantise(totalAvailMin),
-      index: plan.goals.findIndex((x) => x.id === g.id)
-    };
-    timemapPrepared.push(pp);
-    allocateGoal(
-      pp,
-      days,
-      blocks,
-      settings.energyOrdering,
-      settings.placementPriority,
-      tz,
-      windows
-    );
-  }
 
   // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
   const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel);
   const goalsForAllocation = [...schedulingGoals, ...wheelTopUps];
 
-  // Three-pass distribution (uses free gaps remaining after timemap placement).
+  // Three-pass distribution.
   const totalFreeMin = days.reduce(
     (acc, d) =>
       acc + d.gaps.reduce((a, g) => a + Math.floor((g.endMs - g.startMs) / MS_PER_MIN), 0),
@@ -248,15 +220,13 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     );
   }
 
-  const preparedForMetrics = [...timemapPrepared, ...prepared];
-
   if (settings.energyOrdering.mode !== "ignore") {
     sortBlocksByEnergyCurve(blocks, settings.energyOrdering);
   } else {
     blocks.sort((a, b) => a.startMs - b.startMs);
   }
 
-  const metrics = computeMetrics(plan, preparedForMetrics, blocks, days, settings.wheel, settings.ppf);
+  const metrics = computeMetrics(plan, prepared, blocks, days, settings.wheel, settings.ppf);
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
   return { blocks, metrics };
@@ -423,22 +393,6 @@ function distributeMinutes(
 
 function quantise(min: number): number {
   return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
-}
-
-/** Sum free minutes still in `days[].gaps` that fall inside global availability windows. */
-function minutesInIntersectedWeekGaps(
-  days: { startMs: number; endMs: number; gaps: Interval[] }[],
-  windows: readonly Interval[] | undefined
-): number {
-  if (!windows?.length) return 0;
-  let total = 0;
-  for (const day of days) {
-    const clipped = intersectWithAvailability(day.gaps, windows, day.startMs, day.endMs);
-    for (const iv of clipped) {
-      total += Math.floor((iv.endMs - iv.startMs) / MS_PER_MIN);
-    }
-  }
-  return total;
 }
 
 /* ──────────────────────────── helpers ───────────────────────────────────── */

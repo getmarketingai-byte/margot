@@ -4,14 +4,7 @@ import { authOrPreview, signOut } from "@/lib/auth";
 import { loadBillingState } from "@/lib/billing-state-server";
 import { AccountMenu } from "./account-menu";
 import { BillingBanner } from "./billing-banner";
-
-const PRIMARY_NAV = [
-  { href: "/dashboard/plan", label: "Perfect Week" },
-  { href: "/dashboard/energy", label: "Planning" },
-  { href: "/dashboard/review", label: "Day sheet" },
-  { href: "/dashboard/week-review", label: "Week review" },
-  { href: "/dashboard/calendars", label: "Calendars" }
-];
+import { DashboardPrimaryNav } from "./dashboard-primary-nav";
 
 const ACCOUNT_LINKS = [
   { href: "/dashboard/settings", label: "Settings" },
@@ -39,23 +32,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         />
       </header>
 
-      <nav
-        aria-label="Primary"
-        className="-mx-4 sticky top-0 z-10 mb-4 border-b border-ink-200 bg-white/95 px-4 backdrop-blur dark:border-ink-600 dark:bg-ink-900/90"
-      >
-        <ul className="flex justify-around gap-1 sm:gap-2">
-          {PRIMARY_NAV.map((item) => (
-            <li key={item.href} className="shrink-0">
-              <Link
-                href={item.href}
-                className="block px-2 py-2.5 text-xs font-medium text-ink-600 hover:text-ink-900 sm:px-3 sm:text-sm dark:text-ink-200 dark:hover:text-ink-100"
-              >
-                {item.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <DashboardPrimaryNav />
 
       <BillingBanner state={billing} />
 
