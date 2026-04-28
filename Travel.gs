@@ -15,7 +15,7 @@ function _travelIsMapsQuotaError(e) {
   var msg = (e && e.message) ? String(e.message) : "";
   return msg.indexOf("too many times") !== -1 || (msg.indexOf("Service invoked") !== -1 && msg.indexOf("route") !== -1);
 }
-
+ 
 /**
  * When Maps API is unavailable: find an existing [Drive] event with the given title whose start or end time
  * is nearest to anchorTime. If useEndAnchor is true, match by end time (for outbound); else match by start time (for inbound).
