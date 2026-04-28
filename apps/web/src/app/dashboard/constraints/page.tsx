@@ -106,6 +106,23 @@ async function updateAllocator(formData: FormData): Promise<void> {
   revalidatePath("/dashboard/constraints");
 }
 
+async function updateAllocationMode(formData: FormData): Promise<void> {
+  "use server";
+  const session = await auth();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const allocationMode = (String(formData.get("allocationMode") ?? "even") ===
+  "finish-early"
+    ? "finish-early"
+    : "even") as "even" | "finish-early";
+  await saveSettings(userId, {
+    ...settings,
+    allocator: { ...settings.allocator, allocationMode }
+  });
+  revalidatePath("/dashboard/constraints");
+}
+
 export default async function ConstraintsPage() {
   const session = await auth();
   const userId = session!.user!.id!;
@@ -128,6 +145,45 @@ export default async function ConstraintsPage() {
           beside the calendar preview.
         </p>
       </section>
+
+      <details className="card" open>
+        <summary className="cursor-pointer text-sm font-semibold">Spare time distribution</summary>
+        <p className="mt-1 text-xs text-ink-400">
+          How should spare unallocated time be split across your goals once their minimums are
+          covered?
+        </p>
+        <form action={updateAllocationMode} className="mt-3 flex flex-col gap-2 text-sm">
+          <label className="flex items-start gap-2">
+            <input
+              type="radio"
+              name="allocationMode"
+              value="even"
+              defaultChecked={settings.allocator.allocationMode !== "finish-early"}
+              className="mt-1"
+            />
+            <span>
+              <strong>Evenly distributed</strong> — share leftover free time across goals so each
+              one grows by roughly the same amount.
+            </span>
+          </label>
+          <label className="flex items-start gap-2">
+            <input
+              type="radio"
+              name="allocationMode"
+              value="finish-early"
+              defaultChecked={settings.allocator.allocationMode === "finish-early"}
+              className="mt-1"
+            />
+            <span>
+              <strong>Finish early</strong> — fill goals one after another in order; leftover time
+              accumulates as free time at the end.
+            </span>
+          </label>
+          <button type="submit" className="btn-primary w-fit text-xs">
+            Save
+          </button>
+        </form>
+      </details>
 
       <details className="card" open>
         <summary className="cursor-pointer text-sm font-semibold">When you&apos;re overcommitted</summary>

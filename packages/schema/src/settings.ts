@@ -420,7 +420,20 @@ export const allocatorSettingsSchema = z.object({
    *   "strict": pay floors in goal-order until time runs out, leaving later
    *   goals at zero. Surfaces them in a "not scheduled this week" list.
    */
-  starvationMode: z.enum(["proportional", "strict"]).default("proportional")
+  starvationMode: z.enum(["proportional", "strict"]).default("proportional"),
+  /**
+   * How spare (unallocated) free time is distributed across goals after each
+   * goal's `minMinutesPerWeek` floor has been reserved.
+   *
+   *   "even": split remaining minutes evenly across eligible goals so every
+   *   goal grows by roughly the same amount (default; matches legacy behavior).
+   *
+   *   "finish-early": fill goals one after another in user/priority order,
+   *   topping each up to its cap before moving to the next. Later goals may
+   *   receive nothing, leaving the leftover free time as a single block of
+   *   "finish early" time at the end of the day/week.
+   */
+  allocationMode: z.enum(["even", "finish-early"]).default("even")
 });
 export type AllocatorSettings = z.infer<typeof allocatorSettingsSchema>;
 

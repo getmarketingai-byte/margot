@@ -81,21 +81,11 @@ function ensureBracketedTitle(title: string): string {
 }
 
 /**
- * Timemap-like events should render in ICS with bracketed titles so SkedPal
- * rules can match consistently regardless of where the event originated.
+ * All feed events should render in ICS with bracketed titles so downstream
+ * calendar tooling can match a single consistent naming convention.
  */
-export function normalizeTimemapTitlesForIcs(
-  events: readonly GeneratedEvent[]
-): GeneratedEvent[] {
+export function normalizeEventTitlesForIcs(events: readonly GeneratedEvent[]): GeneratedEvent[] {
   return events.map((event) => {
-    if (
-      event.kind === "timemap" ||
-      event.kind === "routine" ||
-      event.kind === "errand" ||
-      event.kind === "gym"
-    ) {
-      return { ...event, title: ensureBracketedTitle(event.title) };
-    }
-    return event;
+    return { ...event, title: ensureBracketedTitle(event.title) };
   });
 }

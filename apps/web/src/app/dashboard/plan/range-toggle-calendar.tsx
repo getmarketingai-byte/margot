@@ -8,6 +8,7 @@ import { WeekCalendar } from "../week-calendar";
 type CalendarRangeMode = "calendar-week" | "next-7-days";
 
 const STORAGE_KEY = "dashboard.plan.calendar.rangeMode";
+const WEATHER_STORAGE_KEY = "dashboard.plan.calendar.showWeather";
 
 function partsInTimezone(ms: number, timezone: string) {
   const fmt = new Intl.DateTimeFormat("en-US", {
@@ -53,6 +54,7 @@ export function RangeToggleCalendar({
   compact?: boolean;
 }) {
   const [mode, setMode] = useState<CalendarRangeMode>("calendar-week");
+  const [showWeather, setShowWeather] = useState(true);
 
   useEffect(() => {
     try {
@@ -60,6 +62,8 @@ export function RangeToggleCalendar({
       if (stored === "calendar-week" || stored === "next-7-days") {
         setMode(stored);
       }
+      const weatherStored = window.localStorage.getItem(WEATHER_STORAGE_KEY);
+      if (weatherStored === "false") setShowWeather(false);
     } catch {
       // Ignore storage failures.
     }
@@ -79,6 +83,20 @@ export function RangeToggleCalendar({
       // Ignore storage failures.
     }
   };
+
+  const setWeatherAndPersist = (next: boolean) => {
+    setShowWeather(next);
+    try {
+      window.localStorage.setItem(WEATHER_STORAGE_KEY, String(next));
+    } catch {
+      // Ignore storage failures.
+    }
+  };
+
+  const visibleSystem = useMemo(
+    () => (showWeather ? system : system.filter((s) => s.system !== "weather")),
+    [showWeather, system]
+  );
 
   return (
     <div className="flex flex-col gap-2">
@@ -110,12 +128,24 @@ export function RangeToggleCalendar({
         >
           Next 7 days
         </button>
+        <button
+          type="button"
+          onClick={() => setWeatherAndPersist(!showWeather)}
+          aria-pressed={showWeather}
+          className={`rounded border px-2 py-1 ${
+            showWeather
+              ? "border-sky-400/70 bg-sky-500/20 text-sky-700 dark:text-sky-200"
+              : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+          }`}
+        >
+          {showWeather ? "Hide weather" : "Show weather"}
+        </button>
       </div>
       <WeekCalendar
         weekStartMs={weekStartMs}
         timezone={timezone}
         busy={busy}
-        system={system}
+        system={visibleSystem}
         proposed={proposed}
         compact={compact}
         dayIndices={dayOffsets}

@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { renderIcs } from "@calendar-automations/planner";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { findFeedByToken, filterEventsForFeed, normalizeTimemapTitlesForIcs } from "@/lib/feeds";
+import { findFeedByToken, filterEventsForFeed, normalizeEventTitlesForIcs } from "@/lib/feeds";
 import {
   FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS,
   runRegenerateForUser
@@ -81,7 +81,7 @@ export async function GET(
         }
       ];
 
-  const icsEvents = normalizeTimemapTitlesForIcs(finalEvents);
+  const icsEvents = normalizeEventTitlesForIcs(finalEvents);
   const ics = renderIcs(icsEvents, {
     calendarName: `Calendar Automations · ${feed.feed}`,
     domain: "calendar-automations",

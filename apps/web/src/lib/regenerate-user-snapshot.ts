@@ -11,6 +11,9 @@ import { fetchGoogleBusy } from "./google-calendar";
 import { loadSettings } from "./settings-store";
 import { saveSnapshot } from "./snapshots";
 import { buildWeatherTimemapEvents } from "./weather-timemap";
+import { buildSystemBlocks, overridesFromPlan } from "./system-blocks-server";
+import { localMondayMidnightMs } from "./week";
+import type { SystemBlock } from "./week-blocks";
 
 /** Minimum age of the latest snapshot before a feed request triggers Google + replan. */
 export const FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS = 3 * 60 * 1000;
@@ -36,6 +39,35 @@ function toGeneratedEvent(
   };
 }
 
+function systemBlockKind(block: SystemBlock): GeneratedEvent["kind"] {
+  switch (block.system) {
+    case "sleep":
+      return "sleep";
+    case "travel":
+      return "travel";
+    case "routine":
+      return "routine";
+    case "weather":
+      return "timemap";
+  }
+}
+
+function toGeneratedSystemEvent(userId: string, block: SystemBlock): GeneratedEvent {
+  const tags = ["system", block.system];
+  if (block.variant) tags.push(block.variant);
+  if (block.override?.isOverridden) tags.push("overridden");
+  return {
+    uid: buildStableUid([userId, "system", block.system, block.sourceId, block.startMs, block.endMs]),
+    kind: systemBlockKind(block),
+    title: block.title,
+    startMs: block.startMs,
+    endMs: block.endMs,
+    busy: block.busy,
+    ...(block.location ? { location: block.location } : {}),
+    tags
+  };
+}
+
 export async function runRegenerateForUser(userId: string): Promise<{ eventCount: number }> {
   if (!db) return { eventCount: 0 };
 
@@ -43,14 +75,16 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
   const now = Date.now();
   const days = settings.calendars.schedulingWindowDays;
   const window = { startMs: now, endMs: now + days * 24 * 60 * 60 * 1000 };
+  const weekStartMs = localMondayMidnightMs(settings.timezone);
+  const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
 
   const busyFetch = await fetchGoogleBusy(
     userId,
     settings.calendars.sources,
-    window.startMs,
-    window.endMs
+    weekStartMs,
+    weekEndMs
   );
-  const busy = busyFetch.busyEvents;
+  const busy = busyFetch.busyEvents.filter((e) => e.endMs > weekStartMs && e.startMs < weekEndMs);
 
   const planRows = await db
     .select()
@@ -59,14 +93,25 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     .limit(1);
   const planRow = planRows[0];
   const plan = planRow ? (planRow.data as WeeklyPlan) : null;
+  const systemBlocks = await buildSystemBlocks({
+    userId,
+    settings,
+    weekStartMs,
+    busy,
+    overrides: overridesFromPlan(plan ?? undefined),
+    nowMs: now
+  });
+  const systemEvents = systemBlocks.map((b) => toGeneratedSystemEvent(userId, b));
 
   const events =
     plan
       ? allocateWeek({
           plan,
-          busy,
+          busy: [...busy, ...systemBlocks],
           goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-          settings
+          settings,
+          weekStartMs,
+          weekEndMs
         }).blocks.map((b) => toGeneratedEvent(userId, plan, b))
       : [];
 
@@ -78,7 +123,9 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     stableUid: buildStableUid
   });
 
-  const mergedEvents = [...events, ...weatherTimemapEvents].sort((a, b) => a.startMs - b.startMs);
+  const mergedEvents = [...events, ...systemEvents, ...weatherTimemapEvents].sort(
+    (a, b) => a.startMs - b.startMs
+  );
 
   await saveSnapshot(userId, {
     generatedAt: Date.now(),

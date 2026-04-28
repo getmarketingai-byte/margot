@@ -14,6 +14,26 @@ describe("UserSettings schema", () => {
     expect(parsed.wheel.areas).toHaveLength(8);
     expect(parsed.ppf.targets).toHaveLength(3);
     expect(parsed.calendars.schedulingWindowDays).toBe(60);
+    expect(parsed.allocator.starvationMode).toBe("proportional");
+    expect(parsed.allocator.allocationMode).toBe("even");
+  });
+
+  it("accepts finish-early allocationMode", () => {
+    const parsed = userSettingsSchema.parse({
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      allocator: { allocationMode: "finish-early" }
+    });
+    expect(parsed.allocator.allocationMode).toBe("finish-early");
+    expect(parsed.allocator.starvationMode).toBe("proportional");
+  });
+
+  it("migrates legacy settings that omit allocationMode", () => {
+    const migrated = migrateSettings({
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      allocator: { starvationMode: "strict" }
+    });
+    expect(migrated.allocator.starvationMode).toBe("strict");
+    expect(migrated.allocator.allocationMode).toBe("even");
   });
 
   it("DEFAULT_USER_SETTINGS round-trips", () => {
