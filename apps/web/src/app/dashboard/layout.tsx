@@ -6,7 +6,6 @@ import { AccountMenu } from "./account-menu";
 import { BillingBanner } from "./billing-banner";
 
 const PRIMARY_NAV = [
-  { href: "/dashboard", label: "Today" },
   { href: "/dashboard/plan", label: "Perfect Week" },
   { href: "/dashboard/calendars", label: "Calendars" }
 ];
@@ -26,7 +25,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 pb-28 pt-6 sm:max-w-4xl lg:max-w-6xl xl:max-w-7xl">
       <header className="mb-6 flex items-center justify-between">
-        <Link href="/dashboard" className="text-sm font-semibold tracking-tight">
+        <Link href="/dashboard/plan" className="text-sm font-semibold tracking-tight">
           Calendar Automations
         </Link>
         <AccountMenu
