@@ -13,7 +13,7 @@
 export const PRODUCT = {
   name: "Calendar Automations",
   legalName: "Calendar Automations",
-  contactEmail: "hello@calendar-automations.app",
+  contactEmail: "autocalender@neutrino.au",
   tagline: "Plan a perfect week. Subscribe to it from any calendar.",
   shortDescription:
     "Calendar Automations is a mobile-first weekly planning service that reads your existing calendars over read-only OAuth, allocates your goals into the gaps with energy-aware ordering, and publishes the result as a private iCal feed you subscribe to from Apple Calendar, Google Calendar, or Outlook.",
