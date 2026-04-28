@@ -174,11 +174,38 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const schedulingGoals = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
   const timemapAvailabilityGoals = plan.goals.filter((g) => isInvertedTimemapGoal(g));
 
+  // Inverted timemap rows (companion-calendar free maps) must place before
+  // equal-share goals consume the same gaps; otherwise `effectiveMinutes`
+  // looked huge but nothing remained inside the windows after placement.
+  const timemapPrepared: PreparedGoal[] = [];
+  for (const g of timemapAvailabilityGoals) {
+    const windows = input.goalAvailabilityWindows?.[g.id];
+    const totalAvailMin = minutesInIntersectedWeekGaps(days, windows);
+    if (totalAvailMin < QUANTUM) continue;
+    const norm = normaliseGoalTime(g);
+    const pp: PreparedGoal = {
+      goal: g,
+      norm,
+      effectiveMinutes: quantise(totalAvailMin),
+      index: plan.goals.findIndex((x) => x.id === g.id)
+    };
+    timemapPrepared.push(pp);
+    allocateGoal(
+      pp,
+      days,
+      blocks,
+      settings.energyOrdering,
+      settings.placementPriority,
+      tz,
+      windows
+    );
+  }
+
   // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
   const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel);
   const goalsForAllocation = [...schedulingGoals, ...wheelTopUps];
 
-  // Three-pass distribution.
+  // Three-pass distribution (uses free gaps remaining after timemap placement).
   const totalFreeMin = days.reduce(
     (acc, d) =>
       acc + d.gaps.reduce((a, g) => a + Math.floor((g.endMs - g.startMs) / MS_PER_MIN), 0),
@@ -221,31 +248,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     );
   }
 
-  const timemapPrepared: PreparedGoal[] = [];
-  for (const g of timemapAvailabilityGoals) {
-    const windows = input.goalAvailabilityWindows?.[g.id];
-    const totalAvailMin = minutesInIntersectedWeekGaps(days, windows);
-    if (totalAvailMin < QUANTUM) continue;
-    const norm = normaliseGoalTime(g);
-    const pp: PreparedGoal = {
-      goal: g,
-      norm,
-      effectiveMinutes: quantise(totalAvailMin),
-      index: plan.goals.findIndex((x) => x.id === g.id)
-    };
-    timemapPrepared.push(pp);
-    allocateGoal(
-      pp,
-      days,
-      blocks,
-      settings.energyOrdering,
-      settings.placementPriority,
-      tz,
-      windows
-    );
-  }
-
-  const preparedForMetrics = [...prepared, ...timemapPrepared];
+  const preparedForMetrics = [...timemapPrepared, ...prepared];
 
   if (settings.energyOrdering.mode !== "ignore") {
     sortBlocksByEnergyCurve(blocks, settings.energyOrdering);
@@ -568,9 +571,11 @@ function allocateGoal(
 
   // We may need to walk the days more than once when frequencyPerWeek limits
   // us to N days but our first pass couldn't place the full budget. Two rounds
-  // is plenty: once to land each day's first chunk, once to top up days that
-  // had headroom.
-  for (let pass = 0; pass < 2 && remainingMinutes > 0; pass++) {
+  // cover typical weekly goals; inverted-calendar windows often squeeze all
+  // minutes into fewer days than `ceil(total/7)`, so extra passes are needed
+  // whenever availability windows intersect the grid.
+  const maxPasses = availabilityWindows ? 32 : 2;
+  for (let pass = 0; pass < maxPasses && remainingMinutes > 0; pass++) {
     let daysScheduledThisPass = 0;
     for (const dayIdx of allowedDays) {
       if (remainingMinutes <= 0) break;

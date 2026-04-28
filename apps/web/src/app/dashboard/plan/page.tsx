@@ -249,61 +249,6 @@ export default async function PlanPage() {
         </p>
       </header>
 
-      <section className="card">
-        <div className="text-sm font-semibold">Daily routines</div>
-        <p className="mt-1 text-xs text-ink-400">
-          Morning and shutdown routines are reserved around sleep and block planner time-map slots
-          from being placed in the same window.
-        </p>
-        <form action={updateRoutines} className="mt-3 grid gap-3 sm:grid-cols-4">
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              name="morning_enabled"
-              defaultChecked={settings.timemap.morningRoutine.enabled}
-            />
-            <span>Enable morning routine</span>
-          </label>
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              name="shutdown_enabled"
-              defaultChecked={settings.timemap.shutdownRoutine.enabled}
-            />
-            <span>Enable shutdown routine</span>
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            Morning minutes
-            <input
-              type="number"
-              name="morning_minutes"
-              min={0}
-              max={180}
-              step={5}
-              defaultValue={settings.timemap.morningRoutine.minutes}
-              className="field"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            Shutdown minutes
-            <input
-              type="number"
-              name="shutdown_minutes"
-              min={0}
-              max={180}
-              step={5}
-              defaultValue={settings.timemap.shutdownRoutine.minutes}
-              className="field"
-            />
-          </label>
-          <div className="sm:col-span-4">
-            <button type="submit" className="btn-primary w-full text-xs">
-              Save routines
-            </button>
-          </div>
-        </form>
-      </section>
-
       {catchUpActive && (
         <CatchUpBanner adjustments={catchUpFloors} goals={schedulingGoals} />
       )}
@@ -328,6 +273,65 @@ export default async function PlanPage() {
               allocationMode={settings.allocator.allocationMode}
               paceByGoal={paceByGoal}
             />
+
+            <section className="card">
+              <div className="text-sm font-semibold">Daily routines</div>
+              <p className="mt-1 text-xs text-ink-400">
+                Morning and shutdown routines are reserved around sleep and block planner time-map
+                slots from being placed in the same window.
+              </p>
+              <form action={updateRoutines} className="mt-3 grid gap-4 sm:grid-cols-2">
+                <div className="flex min-w-0 flex-col gap-3">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      name="morning_enabled"
+                      defaultChecked={settings.timemap.morningRoutine.enabled}
+                    />
+                    <span>Enable morning routine</span>
+                  </label>
+                  <label className="flex min-w-0 flex-col gap-1 text-xs">
+                    Morning minutes
+                    <input
+                      type="number"
+                      name="morning_minutes"
+                      min={0}
+                      max={180}
+                      step={5}
+                      defaultValue={settings.timemap.morningRoutine.minutes}
+                      className="field w-full"
+                    />
+                  </label>
+                </div>
+                <div className="flex min-w-0 flex-col gap-3">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      name="shutdown_enabled"
+                      defaultChecked={settings.timemap.shutdownRoutine.enabled}
+                    />
+                    <span>Enable shutdown routine</span>
+                  </label>
+                  <label className="flex min-w-0 flex-col gap-1 text-xs">
+                    Shutdown minutes
+                    <input
+                      type="number"
+                      name="shutdown_minutes"
+                      min={0}
+                      max={180}
+                      step={5}
+                      defaultValue={settings.timemap.shutdownRoutine.minutes}
+                      className="field w-full"
+                    />
+                  </label>
+                </div>
+                <div className="sm:col-span-2">
+                  <button type="submit" className="btn-primary w-full text-xs">
+                    Save routines
+                  </button>
+                </div>
+              </form>
+            </section>
 
             {allocation.metrics.notScheduled.length > 0 && (
               <section className="card border-amber-300/40">

@@ -118,6 +118,18 @@ export async function fetchGoogleBusy(
           const goalId = normalized.availabilityGoalId;
           if (!goalId || !eventIsBusy) continue;
           (blockedByGoal[goalId] ??= []).push({ startMs, endMs });
+          // Busy on this calendar still blocks the main planner — only the
+          // inverted free gaps (built below) constrain the synthetic timemap
+          // goal. Without this, work goals could land on top of companion busy.
+          busyEvents.push({
+            sourceId: `${normalized.externalId}:invert-busy:${ev.id}`,
+            title: ev.summary ?? "(no title)",
+            startMs,
+            endMs,
+            busy: true,
+            ...(ev.location ? { location: ev.location } : {}),
+            source: "google"
+          });
           continue;
         }
         busyEvents.push({

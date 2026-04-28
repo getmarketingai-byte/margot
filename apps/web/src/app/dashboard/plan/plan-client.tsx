@@ -7,8 +7,7 @@ import {
   useRef,
   useState,
   useTransition,
-  type FormEvent,
-  type KeyboardEvent
+  type FormEvent
 } from "react";
 import type {
   DayOfWeek,
@@ -21,6 +20,7 @@ import {
   SPECIAL_GOAL_PRESETS,
   STARTER_GOALS,
   chipsForGoal,
+  summaryChipsForGoal,
   formatMinutes,
   summariseAllocation
 } from "./goal-helpers";
@@ -224,8 +224,6 @@ export function PlanClient({
     <div className="flex flex-col gap-5">
       <BudgetChip summary={summary} />
 
-      <QuickAdd wheelAreas={wheelAreas} onAdd={handleAdd} />
-
       {goals.length === 0 ? (
         <EmptyState onAdd={handleAdd} />
       ) : (
@@ -250,6 +248,9 @@ export function PlanClient({
               focusNonce={focusRequest?.nonce}
             />
           ))}
+          <li className="list-none">
+            <AddGoalTitle onAdd={handleAdd} />
+          </li>
         </ul>
       )}
     </div>
@@ -313,108 +314,36 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* ─────────────────────────── Quick add row ───────────────────────────────── */
-
-function QuickAdd({
-  wheelAreas,
-  onAdd
-}: {
-  wheelAreas: WheelOption[];
-  onAdd: (title: string, draft: GoalDraft) => void;
-}) {
+/** Title-only add row; special types and other constraints live under each goal’s scheduling options. */
+function AddGoalTitle({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => void }) {
   const [title, setTitle] = useState("");
-  const [draft, setDraft] = useState<GoalDraft>(emptyDraft);
-  const [open, setOpen] = useState(false);
-  const [specialType, setSpecialType] = useState<SpecialGoalType | "">("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const trimmed = title.trim();
     if (!trimmed) return;
-    onAdd(trimmed, draft);
+    onAdd(trimmed, emptyDraft());
     setTitle("");
-    setDraft(emptyDraft());
-    setSpecialType("");
-    setOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "/" && !title) {
-      event.preventDefault();
-      setOpen(true);
-    }
-  };
-
-  const chips = chipsForGoal({ id: "draft", title: title || "draft", ...draft }, (id) =>
-    wheelAreas.find((a) => a.id === id)?.label ?? id
-  );
-
   return (
-    <form onSubmit={submit} className="card flex flex-col gap-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div className="flex flex-1 flex-wrap items-center gap-2">
-          <select
-            value={specialType}
-            onChange={(e) => {
-              const nextType = (e.target.value || "") as SpecialGoalType | "";
-              setSpecialType(nextType);
-              if (nextType) {
-                const preset = SPECIAL_GOAL_PRESETS.find((p) => p.type === nextType);
-                if (preset && !title.trim()) setTitle(preset.title);
-              }
-              setDraft((prev) => applySpecialGoalPreset(prev, nextType || undefined));
-            }}
-            className="field w-full sm:w-auto"
-            aria-label="Special goal type"
-          >
-            <option value="">Special goal type</option>
-            {SPECIAL_GOAL_PRESETS.map((preset) => (
-              <option key={preset.type} value={preset.type}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <input
-            ref={inputRef}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Add a goal and press Enter"
-            className="field flex-1"
-            aria-label="Goal title"
-          />
-          {chips.map((chip) => (
-            <span
-              key={chip.key}
-              className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
-            >
-              {chip.label}
-            </span>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            className="btn-secondary text-xs"
-          >
-            {open ? "Hide options" : "+ Options"}
-          </button>
-          <button type="submit" className="btn-primary text-xs">
-            Add
-          </button>
-        </div>
-      </div>
-      {open && (
-        <OptionsEditor
-          draft={draft}
-          onChange={setDraft}
-          wheelAreas={wheelAreas}
-        />
-      )}
+    <form
+      onSubmit={submit}
+      className="card flex flex-col gap-2 border-dashed border-ink-200 sm:flex-row sm:items-center dark:border-ink-600"
+    >
+      <input
+        ref={inputRef}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Add another goal and press Enter"
+        className="field min-w-0 flex-1"
+        aria-label="New goal title"
+      />
+      <button type="submit" className="btn-primary shrink-0 text-xs">
+        Add
+      </button>
     </form>
   );
 }
@@ -507,7 +436,11 @@ function GoalRow({
     rowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focusNonce, focusedGoalId, goal.id]);
 
-  const chips = chipsForGoal(goal, wheelLabel);
+  const allChips = chipsForGoal(goal, wheelLabel);
+  const rowChips = summaryChipsForGoal(goal, wheelLabel);
+  const rowKeySet = new Set(rowChips.map((c) => c.key));
+  const hiddenChips = allChips.filter((c) => !rowKeySet.has(c.key));
+  const hiddenChipSummary = hiddenChips.map((c) => c.label).join(" · ");
 
   const draft: GoalDraft = draftDirty ?? extractDraft(goal);
 
@@ -586,7 +519,7 @@ function GoalRow({
             {pace && pace.status !== "no-data" && (
               <PacePill pace={pace} />
             )}
-            {chips.length === 0 ? (
+            {rowChips.length === 0 && hiddenChips.length === 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
                 Equal share
                 {effectiveTarget && effectiveTarget > 0
@@ -594,14 +527,24 @@ function GoalRow({
                   : ""}
               </span>
             ) : (
-              chips.map((chip) => (
-                <span
-                  key={chip.key}
-                  className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
-                >
-                  {chip.label}
-                </span>
-              ))
+              <>
+                {rowChips.map((chip) => (
+                  <span
+                    key={chip.key}
+                    className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
+                  >
+                    {chip.label}
+                  </span>
+                ))}
+                {hiddenChips.length > 0 ? (
+                  <span
+                    title={hiddenChipSummary}
+                    className="inline-flex shrink-0 items-center rounded-full border border-dashed border-ink-200 px-1.5 py-0.5 text-[11px] tabular-nums text-ink-500 dark:border-ink-600 dark:text-ink-300"
+                  >
+                    +{hiddenChips.length}
+                  </span>
+                ) : null}
+              </>
             )}
             {scheduledMinutes !== undefined && effectiveTarget !== undefined && effectiveTarget > 0 && (
               <span className="ml-auto text-xs text-ink-400">

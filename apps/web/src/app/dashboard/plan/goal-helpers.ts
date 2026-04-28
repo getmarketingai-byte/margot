@@ -40,6 +40,17 @@ export interface Chip {
   label: string;
 }
 
+/** Shown on collapsed goal rows; energy / attention / wheel / PPF stay in expand. */
+const SUMMARY_ROW_CHIP_KEYS = new Set<ChipKind>([
+  "special",
+  "min-week",
+  "max-week",
+  "min-day",
+  "max-day",
+  "frequency",
+  "day"
+]);
+
 const ENERGY_LABELS: Record<EnergyMode, string> = {
   hyperfocus: "Deep focus",
   neutral: "Neutral",
@@ -167,6 +178,11 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
     chips.push({ key: "ppf", label: PPF_LABELS[goal.ppfPillar] });
   }
   return chips;
+}
+
+/** Collapsed list row: time and cadence only (framework matrix tags live under expand). */
+export function summaryChipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => string): Chip[] {
+  return chipsForGoal(goal, wheelLabel).filter((c) => SUMMARY_ROW_CHIP_KEYS.has(c.key));
 }
 
 export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{

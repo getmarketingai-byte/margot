@@ -526,7 +526,7 @@ describe("allocateWeek", () => {
     }
   });
 
-  it("excludes inverted-timemap rows from equal-share and places them after scheduling goals", () => {
+  it("excludes inverted-timemap rows from equal-share and places them before other goals claim the same gaps", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const monEnd = weekStartMs + DAY_MS;
     const wed10 = weekStartMs + 2 * DAY_MS + 10 * HOUR_MS;
@@ -561,7 +561,10 @@ describe("allocateWeek", () => {
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
-    expect(result.metrics.perGoal["work"]!.targetMinutes).toBe(7 * 24 * 60);
+    // Friend timemap claims Wed 10–12 first; equal-share work fills the rest.
+    const friendScheduled = result.metrics.perGoal["friend-map"]!.scheduledMinutes;
+    expect(friendScheduled).toBeGreaterThan(0);
+    expect(result.metrics.perGoal["work"]!.targetMinutes).toBe(7 * 24 * 60 - friendScheduled);
     const friendBlocks = result.blocks.filter((b) => b.goalId === "friend-map");
     expect(friendBlocks.length).toBeGreaterThan(0);
     for (const block of friendBlocks) {
