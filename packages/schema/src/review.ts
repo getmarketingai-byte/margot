@@ -41,7 +41,7 @@ export type AllocatedBlockSnapshot = z.infer<typeof allocatedBlockSnapshotSchema
  * One 15-minute (or longer, in 15m multiples) slot of a daily time log. The
  * slot's `goalId` ties actuals back to a weekly goal; `category` distinguishes
  * goal-aligned work from system blocks (sleep/routine), unplanned-but-useful
- * time, and interruptions.
+ * time, interruptions, and free-form "other" (describe in `note`).
  *
  * Times are minutes-from-midnight in the user's local timezone. The end of
  * the day is represented as 1440; we cap the start at 1425 so any zero-length
@@ -53,7 +53,7 @@ export const logSlotSchema = z
     endMinute: z.number().int().min(15).max(1440),
     goalId: z.string().optional(),
     category: z
-      .enum(["goal", "system", "unplanned", "interruption"])
+      .enum(["goal", "system", "unplanned", "interruption", "other"])
       .default("goal"),
     energy: energyState.default("neutral"),
     note: z.string().max(280).optional()

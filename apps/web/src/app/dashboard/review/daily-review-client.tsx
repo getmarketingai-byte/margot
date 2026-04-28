@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -35,6 +36,11 @@ interface DailyReviewClientProps {
   goals: WeeklyGoal[];
   /** Day-of-week label in the user's TZ. */
   dayLabel: string;
+  /**
+   * Epoch ms for the user's local midnight on `date`. Used to map
+   * planned-block timestamps to minute-of-day rows in the timeline.
+   */
+  dayStartMs: number;
   /** Suggested log range in 15-min row units. */
   logStartMinute: number;
   logEndMinute: number;
@@ -61,7 +67,8 @@ const CATEGORY_LABEL: Record<LogSlot["category"], string> = {
   goal: "Goal",
   system: "System",
   unplanned: "Unplanned",
-  interruption: "Interruption"
+  interruption: "Interruption",
+  other: "Other"
 };
 
 const STATUS_OPTIONS: ReadonlyArray<{ key: BlockMark["status"]; label: string }> = [
@@ -102,6 +109,7 @@ export function DailyReviewClient({
   initialReview,
   goals,
   dayLabel,
+  dayStartMs,
   logStartMinute,
   logEndMinute
 }: DailyReviewClientProps) {
@@ -182,6 +190,55 @@ export function DailyReviewClient({
       (s) => !(s.startMinute <= startMinute && s.endMinute > startMinute)
     );
     flushSlots(without);
+  };
+
+  /**
+   * Fill the empty 15-min rows that fall inside `block` with the block's goal.
+   * Existing entries are left untouched so the user's reality always wins.
+   */
+  const applyBlockToLog = (block: AllocatedBlockSnapshot) => {
+    const blockStart = Math.round((block.startMs - dayStartMs) / 60_000);
+    const blockEnd = Math.round((block.endMs - dayStartMs) / 60_000);
+    const from = Math.max(blockStart, logStartMinute);
+    const to = Math.min(blockEnd, logEndMinute);
+    if (from >= to) return;
+    const existingByMinute = new Map(
+      review.slots.map((s) => [s.startMinute, s] as const)
+    );
+    const additions: LogSlot[] = [];
+    for (let m = from; m < to; m += SLOT_LENGTH_MIN) {
+      if (existingByMinute.has(m)) continue;
+      additions.push({
+        startMinute: m,
+        endMinute: m + SLOT_LENGTH_MIN,
+        category: "goal",
+        goalId: block.goalId,
+        energy: "neutral"
+      });
+    }
+    if (additions.length === 0) return;
+    flushSlots(
+      [...review.slots, ...additions].sort(
+        (a, b) => a.startMinute - b.startMinute
+      )
+    );
+  };
+
+  /**
+   * Remove rows tagged to the block's goal that fall inside `block`. Rows
+   * tagged to a different goal/category are kept (the user logged something
+   * else there on purpose).
+   */
+  const clearBlockFromLog = (block: AllocatedBlockSnapshot) => {
+    const blockStart = Math.round((block.startMs - dayStartMs) / 60_000);
+    const blockEnd = Math.round((block.endMs - dayStartMs) / 60_000);
+    const remaining = review.slots.filter((s) => {
+      const inRange = s.startMinute >= blockStart && s.startMinute < blockEnd;
+      if (!inRange) return true;
+      return !(s.category === "goal" && s.goalId === block.goalId);
+    });
+    if (remaining.length === review.slots.length) return;
+    flushSlots(remaining);
   };
 
   const updateBlockMark = (
@@ -272,19 +329,21 @@ export function DailyReviewClient({
         dayLabel={dayLabel}
       />
 
-      <LogGridCard
+      <TimelineCard
         slotMinutes={slotMinutes}
         slotIndex={slotIndex}
-        goals={goals}
-        onUpdate={updateSlot}
-        onClear={clearSlot}
-      />
-
-      <BlockMarksCard
         blocks={review.plannedBlocksSnapshot}
-        marks={review.blockMarks}
+        blockMarks={review.blockMarks}
+        goals={goals}
         goalById={goalById}
-        onSet={updateBlockMark}
+        dayStartMs={dayStartMs}
+        logStartMinute={logStartMinute}
+        logEndMinute={logEndMinute}
+        onUpdateSlot={updateSlot}
+        onClearSlot={clearSlot}
+        onSetBlockMark={updateBlockMark}
+        onApplyBlock={applyBlockToLog}
+        onClearBlock={clearBlockFromLog}
       />
 
       <GoalMarksCard
@@ -370,127 +429,158 @@ function MorningCard({
   );
 }
 
-function LogGridCard({
+/**
+ * Combined 15-minute log + planned-block timeline. Planned blocks render as
+ * inline section headers above the slot rows they cover, with a colored rail
+ * tying the header to those rows. The block header carries the status mark
+ * (done/partial/skipped) plus shortcut actions to bulk-fill or clear the
+ * underlying log rows from the plan.
+ */
+function TimelineCard({
   slotMinutes,
   slotIndex,
+  blocks,
+  blockMarks,
   goals,
-  onUpdate,
-  onClear
+  goalById,
+  dayStartMs,
+  logStartMinute,
+  logEndMinute,
+  onUpdateSlot,
+  onClearSlot,
+  onSetBlockMark,
+  onApplyBlock,
+  onClearBlock
 }: {
   slotMinutes: number[];
   slotIndex: Map<number, LogSlot>;
+  blocks: AllocatedBlockSnapshot[];
+  blockMarks: BlockMark[];
   goals: WeeklyGoal[];
-  onUpdate: (startMinute: number, patch: Partial<LogSlot>) => void;
-  onClear: (startMinute: number) => void;
+  goalById: Map<string, WeeklyGoal>;
+  dayStartMs: number;
+  logStartMinute: number;
+  logEndMinute: number;
+  onUpdateSlot: (startMinute: number, patch: Partial<LogSlot>) => void;
+  onClearSlot: (startMinute: number) => void;
+  onSetBlockMark: (blockKey: string, status: BlockMark["status"] | null) => void;
+  onApplyBlock: (block: AllocatedBlockSnapshot) => void;
+  onClearBlock: (block: AllocatedBlockSnapshot) => void;
 }) {
-  const totalMin = slotMinutes.length * SLOT_LENGTH_MIN;
-  const filledMin = slotMinutes
-    .map((m) => slotIndex.get(m))
-    .filter((s): s is LogSlot => Boolean(s)).length * SLOT_LENGTH_MIN;
+  // Map each visible slot start-minute to the block (if any) that covers it.
+  // Object identity is preserved so we can detect block boundaries with
+  // strict-equality compares against the previous slot's block.
+  const blockBySlot = useMemo(() => {
+    const out = new Map<number, AllocatedBlockSnapshot>();
+    for (const b of blocks) {
+      const blockStart = Math.round((b.startMs - dayStartMs) / 60_000);
+      const blockEnd = Math.round((b.endMs - dayStartMs) / 60_000);
+      const from = Math.max(blockStart, logStartMinute);
+      const to = Math.min(blockEnd, logEndMinute);
+      const aligned = from - (from % SLOT_LENGTH_MIN);
+      for (let m = aligned; m < to; m += SLOT_LENGTH_MIN) {
+        if (m < logStartMinute) continue;
+        out.set(m, b);
+      }
+    }
+    return out;
+  }, [blocks, dayStartMs, logStartMinute, logEndMinute]);
+
+  const markByKey = useMemo(
+    () => new Map(blockMarks.map((m) => [m.blockKey, m] as const)),
+    [blockMarks]
+  );
+
+  // Per-block capture stats for the header chip.
+  const blockStats = useMemo(() => {
+    const out = new Map<
+      string,
+      { totalRows: number; filledRows: number; matchedRows: number }
+    >();
+    for (const b of blocks) {
+      const blockStart = Math.round((b.startMs - dayStartMs) / 60_000);
+      const blockEnd = Math.round((b.endMs - dayStartMs) / 60_000);
+      const from = Math.max(blockStart, logStartMinute);
+      const to = Math.min(blockEnd, logEndMinute);
+      let totalRows = 0;
+      let filledRows = 0;
+      let matchedRows = 0;
+      const aligned = from - (from % SLOT_LENGTH_MIN);
+      for (let m = aligned; m < to; m += SLOT_LENGTH_MIN) {
+        if (m < logStartMinute) continue;
+        totalRows++;
+        const slot = slotIndex.get(m);
+        if (slot) {
+          filledRows++;
+          if (slot.category === "goal" && slot.goalId === b.goalId) {
+            matchedRows++;
+          }
+        }
+      }
+      out.set(blockKeyFor(b), { totalRows, filledRows, matchedRows });
+    }
+    return out;
+  }, [blocks, dayStartMs, logStartMinute, logEndMinute, slotIndex]);
+
+  const totalRows = slotMinutes.length;
+  const filledRows = slotMinutes.filter((m) => slotIndex.has(m)).length;
+
   return (
     <section className="card">
       <header className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold">15-minute log</h2>
+          <h2 className="text-sm font-semibold">Time-of-day log</h2>
           <p className="text-xs text-ink-400">
-            Dan Martell-style audit — what were you actually doing? Tag the goal
-            and how the time felt.
+            What did you actually do? Planned blocks are highlighted in-line —
+            confirm them in one click or override row-by-row.
           </p>
         </div>
         <div className="text-xs text-ink-400">
-          Captured {formatMinutes(filledMin)} of {formatMinutes(totalMin)} window
+          Captured {formatMinutes(filledRows * SLOT_LENGTH_MIN)} of{" "}
+          {formatMinutes(totalRows * SLOT_LENGTH_MIN)} window
         </div>
       </header>
+      {blocks.length === 0 ? (
+        <p className="mb-3 rounded-md border border-dashed border-ink-200 bg-ink-50/60 p-2 text-xs text-ink-400 dark:border-ink-600 dark:bg-ink-900/40">
+          No planned blocks were captured for this day yet — open this page
+          during the planning week to seed a snapshot from the allocator.
+        </p>
+      ) : null}
       <ul className="flex flex-col">
         {slotMinutes.map((startMinute) => {
-          const slot = slotIndex.get(startMinute);
-          const color = slot?.goalId
-            ? goalColorFromKey(slot.goalId)
-            : "transparent";
+          const block = blockBySlot.get(startMinute);
+          const prevBlock = blockBySlot.get(startMinute - SLOT_LENGTH_MIN);
+          const isFirstOfBlock = !!block && block !== prevBlock;
+          const isLastOfBlock =
+            !!block && block !== blockBySlot.get(startMinute + SLOT_LENGTH_MIN);
           return (
-            <li
-              key={startMinute}
-              className="grid grid-cols-[64px_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-ink-200 py-1.5 last:border-b-0 dark:border-ink-600"
-              style={
-                slot?.goalId
-                  ? { borderLeftWidth: 3, borderLeftColor: color, paddingLeft: 8 }
-                  : undefined
-              }
-            >
-              <div className="font-mono text-xs text-ink-400">
-                {fmtTime(startMinute)}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  aria-label={`Goal at ${fmtTime(startMinute)}`}
-                  className="field text-xs"
-                  value={
-                    slot?.category === "goal" && slot.goalId
-                      ? `goal:${slot.goalId}`
-                      : slot
-                        ? `cat:${slot.category}`
-                        : ""
-                  }
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    if (!value) {
-                      onClear(startMinute);
-                      return;
+            <Fragment key={startMinute}>
+              {isFirstOfBlock && block ? (
+                <li className="pt-2">
+                  <PlannedBlockHeader
+                    block={block}
+                    goalTitle={goalById.get(block.goalId)?.title ?? block.title}
+                    mark={markByKey.get(blockKeyFor(block))}
+                    stats={blockStats.get(blockKeyFor(block))}
+                    onSetMark={(status) =>
+                      onSetBlockMark(blockKeyFor(block), status)
                     }
-                    if (value.startsWith("goal:")) {
-                      onUpdate(startMinute, {
-                        category: "goal",
-                        goalId: value.slice(5)
-                      });
-                    } else if (value.startsWith("cat:")) {
-                      onUpdate(startMinute, {
-                        category: value.slice(4) as LogSlot["category"],
-                        goalId: undefined
-                      });
-                    }
-                  }}
-                >
-                  <option value="">—</option>
-                  <optgroup label="Goals">
-                    {goals.map((g) => (
-                      <option key={g.id} value={`goal:${g.id}`}>
-                        {g.title}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Other">
-                    <option value="cat:system">{CATEGORY_LABEL.system}</option>
-                    <option value="cat:unplanned">{CATEGORY_LABEL.unplanned}</option>
-                    <option value="cat:interruption">{CATEGORY_LABEL.interruption}</option>
-                  </optgroup>
-                </select>
-                <input
-                  type="text"
-                  className="field text-xs"
-                  placeholder="Note (optional)"
-                  value={slot?.note ?? ""}
-                  disabled={!slot}
-                  onChange={(e) =>
-                    onUpdate(startMinute, { note: e.target.value || undefined })
-                  }
-                />
-              </div>
-              <SegmentedControl
-                ariaLabel={`Energy state at ${fmtTime(startMinute)}`}
-                options={ENERGY_OPTIONS}
-                value={slot?.energy ?? "neutral"}
-                onChange={(next) => onUpdate(startMinute, { energy: next })}
-                disabled={!slot}
+                    onApply={() => onApplyBlock(block)}
+                    onClear={() => onClearBlock(block)}
+                  />
+                </li>
+              ) : null}
+              <SlotRow
+                startMinute={startMinute}
+                slot={slotIndex.get(startMinute)}
+                block={block}
+                isFirstOfBlock={isFirstOfBlock}
+                isLastOfBlock={isLastOfBlock}
+                goals={goals}
+                onUpdate={onUpdateSlot}
+                onClear={onClearSlot}
               />
-              <button
-                type="button"
-                className="text-xs text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
-                onClick={() => onClear(startMinute)}
-                aria-label={`Clear log at ${fmtTime(startMinute)}`}
-              >
-                ×
-              </button>
-            </li>
+            </Fragment>
           );
         })}
       </ul>
@@ -498,80 +588,227 @@ function LogGridCard({
   );
 }
 
-function BlockMarksCard({
-  blocks,
-  marks,
-  goalById,
-  onSet
+function PlannedBlockHeader({
+  block,
+  goalTitle,
+  mark,
+  stats,
+  onSetMark,
+  onApply,
+  onClear
 }: {
-  blocks: AllocatedBlockSnapshot[];
-  marks: BlockMark[];
-  goalById: Map<string, WeeklyGoal>;
-  onSet: (blockKey: string, status: BlockMark["status"] | null) => void;
+  block: AllocatedBlockSnapshot;
+  goalTitle: string;
+  mark: BlockMark | undefined;
+  stats: { totalRows: number; filledRows: number; matchedRows: number } | undefined;
+  onSetMark: (status: BlockMark["status"] | null) => void;
+  onApply: () => void;
+  onClear: () => void;
 }) {
-  if (blocks.length === 0) {
-    return (
-      <section className="card">
-        <h2 className="text-sm font-semibold">Planned blocks</h2>
-        <p className="mt-1 text-xs text-ink-400">
-          No allocator blocks were captured for this day. Open this page during
-          the planning week to seed the snapshot.
-        </p>
-      </section>
-    );
-  }
-  const markByKey = new Map(marks.map((m) => [m.blockKey, m] as const));
-  const sorted = [...blocks].sort((a, b) => a.startMs - b.startMs);
+  const color = goalColorFromKey(block.goalId);
+  const start = new Date(block.startMs);
+  const end = new Date(block.endMs);
+  const startLabel = start.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const endLabel = end.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const matched = stats?.matchedRows ?? 0;
+  const total = stats?.totalRows ?? 0;
+  const hasMatched = matched > 0;
   return (
-    <section className="card">
-      <header className="mb-3">
-        <h2 className="text-sm font-semibold">Planned blocks</h2>
-        <p className="text-xs text-ink-400">
-          Mark each scheduled block with what actually happened.
-        </p>
-      </header>
-      <ul className="flex flex-col gap-2">
-        {sorted.map((b) => {
-          const key = blockKeyFor(b);
-          const mark = markByKey.get(key);
-          const color = goalColorFromKey(b.goalId);
-          const start = new Date(b.startMs);
-          const end = new Date(b.endMs);
-          const startLabel = start.toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit"
-          });
-          const endLabel = end.toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit"
-          });
-          const goalTitle = goalById.get(b.goalId)?.title ?? b.title;
-          return (
-            <li
-              key={key}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-ink-200 bg-ink-50/40 p-2 dark:border-ink-600 dark:bg-ink-900/40"
-              style={{ borderLeftColor: color, borderLeftWidth: 4 }}
-            >
-              <div>
-                <div className="text-sm font-medium" style={{ color }}>
-                  {goalTitle}
-                </div>
-                <div className="text-xs text-ink-400">
-                  {startLabel} – {endLabel}
-                </div>
-              </div>
-              <SegmentedControl
-                ariaLabel={`Status for ${goalTitle}`}
-                options={STATUS_OPTIONS}
-                value={mark?.status ?? null}
-                onChange={(next) => onSet(key, next === mark?.status ? null : next)}
-                allowClear
-              />
-            </li>
-          );
-        })}
-      </ul>
-    </section>
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-ink-200 bg-ink-50/60 px-3 py-2 dark:border-ink-600 dark:bg-ink-900/50"
+      style={{ borderLeftColor: color, borderLeftWidth: 4 }}
+    >
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-2 text-sm font-medium" style={{ color }}>
+          <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
+          {goalTitle}
+        </div>
+        <div className="text-xs text-ink-400">
+          Planned {startLabel} – {endLabel}
+          {total > 0 ? (
+            <>
+              {" · "}
+              <span className={hasMatched ? "text-ink-600 dark:text-ink-200" : undefined}>
+                {matched}/{total} on-plan
+              </span>
+            </>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <SegmentedControl
+          ariaLabel={`Status for ${goalTitle}`}
+          options={STATUS_OPTIONS}
+          value={mark?.status ?? null}
+          onChange={(next) => onSetMark(next === mark?.status ? null : next)}
+          allowClear
+        />
+        <button
+          type="button"
+          className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-200 dark:hover:text-ink-100"
+          onClick={onApply}
+          title="Tag every empty 15-min row in this block to this goal"
+        >
+          Apply to log
+        </button>
+        {hasMatched ? (
+          <button
+            type="button"
+            className="rounded-full border border-transparent px-2 py-0.5 text-[11px] text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
+            onClick={onClear}
+            title="Remove rows tagged to this goal from this block's range"
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SlotRow({
+  startMinute,
+  slot,
+  block,
+  isFirstOfBlock,
+  isLastOfBlock,
+  goals,
+  onUpdate,
+  onClear
+}: {
+  startMinute: number;
+  slot: LogSlot | undefined;
+  block: AllocatedBlockSnapshot | undefined;
+  isFirstOfBlock: boolean;
+  isLastOfBlock: boolean;
+  goals: WeeklyGoal[];
+  onUpdate: (startMinute: number, patch: Partial<LogSlot>) => void;
+  onClear: (startMinute: number) => void;
+}) {
+  const slotColor = slot?.goalId ? goalColorFromKey(slot.goalId) : undefined;
+  const blockColor = block ? goalColorFromKey(block.goalId) : undefined;
+  // Prefer the slot color (what actually happened) for the rail; fall back to
+  // the block color so empty rows still show planned-context.
+  const railColor = slotColor ?? blockColor;
+  const inBlockClass = block
+    ? "bg-ink-50/40 dark:bg-ink-900/30"
+    : "";
+  // Round corners on first/last row of a block so the rail looks contiguous.
+  const blockRadius = block
+    ? `${isFirstOfBlock ? "rounded-tl-md " : ""}${isLastOfBlock ? "rounded-bl-md" : ""}`
+    : "";
+  return (
+    <li
+      className={`grid grid-cols-[64px_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-ink-200 py-1.5 last:border-b-0 dark:border-ink-600 ${inBlockClass} ${blockRadius}`}
+      style={
+        railColor
+          ? { borderLeftWidth: 3, borderLeftColor: railColor, paddingLeft: 8 }
+          : undefined
+      }
+    >
+      <div className="font-mono text-xs text-ink-400">{fmtTime(startMinute)}</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          aria-label={`Goal at ${fmtTime(startMinute)}`}
+          className="field text-xs"
+          value={
+            slot?.category === "goal" && slot.goalId
+              ? `goal:${slot.goalId}`
+              : slot
+                ? `cat:${slot.category}`
+                : ""
+          }
+          onChange={(e) => {
+            const value = e.target.value;
+            if (!value) {
+              onClear(startMinute);
+              return;
+            }
+            if (value.startsWith("goal:")) {
+              onUpdate(startMinute, {
+                category: "goal",
+                goalId: value.slice(5)
+              });
+            } else if (value.startsWith("cat:")) {
+              onUpdate(startMinute, {
+                category: value.slice(4) as LogSlot["category"],
+                goalId: undefined
+              });
+            }
+          }}
+        >
+          {/* Empty placeholder shows the planned goal's title when present so
+              the user knows what they're "accepting" before clicking. */}
+          <option value="">
+            {block ? `— planned: ${block.title} —` : "—"}
+          </option>
+          <optgroup label="Goals">
+            {goals.map((g) => (
+              <option key={g.id} value={`goal:${g.id}`}>
+                {g.title}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Not on a goal">
+            <option value="cat:system">{CATEGORY_LABEL.system}</option>
+            <option value="cat:unplanned">{CATEGORY_LABEL.unplanned}</option>
+            <option value="cat:interruption">{CATEGORY_LABEL.interruption}</option>
+            <option value="cat:other">{CATEGORY_LABEL.other}</option>
+          </optgroup>
+        </select>
+        {block && !slot ? (
+          <button
+            type="button"
+            className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-500 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-300 dark:hover:text-ink-100"
+            onClick={() =>
+              onUpdate(startMinute, {
+                category: "goal",
+                goalId: block.goalId
+              })
+            }
+            title={`Accept the planned ${block.title} for this 15 min`}
+          >
+            Accept plan
+          </button>
+        ) : null}
+        <input
+          type="text"
+          className="field text-xs"
+          placeholder={
+            slot?.category === "other"
+              ? "What were you doing?"
+              : "Note (optional)"
+          }
+          value={slot?.note ?? ""}
+          disabled={!slot}
+          onChange={(e) =>
+            onUpdate(startMinute, { note: e.target.value || undefined })
+          }
+        />
+      </div>
+      <SegmentedControl
+        ariaLabel={`Energy state at ${fmtTime(startMinute)}`}
+        options={ENERGY_OPTIONS}
+        value={slot?.energy ?? "neutral"}
+        onChange={(next) => onUpdate(startMinute, { energy: next })}
+        disabled={!slot}
+      />
+      <button
+        type="button"
+        className="text-xs text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
+        onClick={() => onClear(startMinute)}
+        aria-label={`Clear log at ${fmtTime(startMinute)}`}
+        disabled={!slot}
+      >
+        ×
+      </button>
+    </li>
   );
 }
 

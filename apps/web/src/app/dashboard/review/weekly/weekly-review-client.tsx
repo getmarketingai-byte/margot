@@ -389,7 +389,7 @@ function BurchardWeeklyCard({
   return (
     <section className="card">
       <header className="mb-2">
-        <h2 className="text-sm font-semibold">Weekly synthesis</h2>
+        <h2 className="text-sm font-semibold">Week review</h2>
         <p className="text-xs text-ink-400">
           Burchard&apos;s weekly review prompts. Daily entries are listed below
           each prompt as raw material.

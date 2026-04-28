@@ -83,6 +83,17 @@ describe("dailyReviewSchema", () => {
     expect(slot.category).toBe("goal");
     expect(slot.energy).toBe("neutral");
   });
+
+  it("accepts other category with optional note", () => {
+    const slot = logSlotSchema.parse({
+      startMinute: 600,
+      endMinute: 615,
+      category: "other" as const,
+      note: "Errands"
+    });
+    expect(slot.category).toBe("other");
+    expect(slot.note).toBe("Errands");
+  });
 });
 
 describe("blockMarkSchema + goalMarkSchema", () => {

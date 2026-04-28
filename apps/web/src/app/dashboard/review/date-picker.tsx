@@ -33,7 +33,7 @@ export function ReviewDatePicker({
     <section className="card flex flex-wrap items-center justify-between gap-3">
       <div>
         <div className="text-xs uppercase tracking-wide text-ink-400">
-          Reviewing
+          Day sheet
         </div>
         <div className="text-lg font-semibold">{prettyLabel}</div>
       </div>

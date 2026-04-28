@@ -163,6 +163,18 @@ export const weeklyGoalSchema = z.object({
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
 
+/** Calendar invert-free-busy rows: time-map readout, not a scheduling commitment. */
+export function isInvertedTimemapGoal(goal: Pick<WeeklyGoal, "specialGoalType">): boolean {
+  return goal.specialGoalType === "inverted-timemap";
+}
+
+/** Goals the user edits in planning tools (excludes synthetic calendar time-map rows). */
+export function filterSchedulingGoals<T extends Pick<WeeklyGoal, "specialGoalType">>(
+  goals: readonly T[]
+): T[] {
+  return goals.filter((g) => !isInvertedTimemapGoal(g));
+}
+
 /**
  * Resolved time bounds for a goal after normalising legacy `targetMinutes`
  * and per-day ↔ per-week derivations. The allocator consumes this shape

@@ -43,7 +43,7 @@ import type {
   WeeklyPlan,
   WorkLayer
 } from "@calendar-automations/schema";
-import { normaliseGoalTime } from "@calendar-automations/schema";
+import { isInvertedTimemapGoal, normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps } from "./intervals";
 import { hourInTz, dateKeyInTz } from "./time";
@@ -171,9 +171,12 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     }
   }
 
+  const schedulingGoals = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
+  const timemapAvailabilityGoals = plan.goals.filter((g) => isInvertedTimemapGoal(g));
+
   // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
-  const wheelTopUps = wheelTopUpGoals(plan.goals, settings.wheel);
-  const goalsForAllocation = [...plan.goals, ...wheelTopUps];
+  const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel);
+  const goalsForAllocation = [...schedulingGoals, ...wheelTopUps];
 
   // Three-pass distribution.
   const totalFreeMin = days.reduce(
@@ -218,13 +221,39 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     );
   }
 
+  const timemapPrepared: PreparedGoal[] = [];
+  for (const g of timemapAvailabilityGoals) {
+    const windows = input.goalAvailabilityWindows?.[g.id];
+    const totalAvailMin = minutesInIntersectedWeekGaps(days, windows);
+    if (totalAvailMin < QUANTUM) continue;
+    const norm = normaliseGoalTime(g);
+    const pp: PreparedGoal = {
+      goal: g,
+      norm,
+      effectiveMinutes: quantise(totalAvailMin),
+      index: plan.goals.findIndex((x) => x.id === g.id)
+    };
+    timemapPrepared.push(pp);
+    allocateGoal(
+      pp,
+      days,
+      blocks,
+      settings.energyOrdering,
+      settings.placementPriority,
+      tz,
+      windows
+    );
+  }
+
+  const preparedForMetrics = [...prepared, ...timemapPrepared];
+
   if (settings.energyOrdering.mode !== "ignore") {
     sortBlocksByEnergyCurve(blocks, settings.energyOrdering);
   } else {
     blocks.sort((a, b) => a.startMs - b.startMs);
   }
 
-  const metrics = computeMetrics(plan, prepared, blocks, days, settings.wheel, settings.ppf);
+  const metrics = computeMetrics(plan, preparedForMetrics, blocks, days, settings.wheel, settings.ppf);
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
   return { blocks, metrics };
@@ -391,6 +420,22 @@ function distributeMinutes(
 
 function quantise(min: number): number {
   return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
+}
+
+/** Sum free minutes still in `days[].gaps` that fall inside global availability windows. */
+function minutesInIntersectedWeekGaps(
+  days: { startMs: number; endMs: number; gaps: Interval[] }[],
+  windows: readonly Interval[] | undefined
+): number {
+  if (!windows?.length) return 0;
+  let total = 0;
+  for (const day of days) {
+    const clipped = intersectWithAvailability(day.gaps, windows, day.startMs, day.endMs);
+    for (const iv of clipped) {
+      total += Math.floor((iv.endMs - iv.startMs) / MS_PER_MIN);
+    }
+  }
+  return total;
 }
 
 /* ──────────────────────────── helpers ───────────────────────────────────── */

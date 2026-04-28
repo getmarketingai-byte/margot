@@ -1,6 +1,10 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { type WeeklyPlan, weeklyIntentSchema } from "@calendar-automations/schema";
+import {
+  filterSchedulingGoals,
+  type WeeklyPlan,
+  weeklyIntentSchema
+} from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
@@ -103,7 +107,7 @@ async function updateRoutines(formData: FormData): Promise<void> {
 
   revalidatePath("/dashboard/plan");
   revalidatePath("/dashboard");
-  revalidatePath("/dashboard/constraints");
+  revalidatePath("/dashboard/energy");
 }
 
 export default async function PlanPage() {
@@ -111,6 +115,7 @@ export default async function PlanPage() {
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
+  const schedulingGoals = filterSchedulingGoals(plan.goals);
   const weekStartIso = localMondayIso(settings.timezone);
   const weeklyReview = await loadWeeklyReview(userId, weekStartIso, settings.timezone);
   const catchUpFloors = weeklyReview.catchUpAdjustments;
@@ -216,7 +221,7 @@ export default async function PlanPage() {
   const todayIso = todayIsoInTz(settings.timezone);
   const todayIdx = weekDates.indexOf(todayIso);
   const goalRollups = computeGoalRollups({
-    goals: plan.goals,
+    goals: schedulingGoals,
     reviewsByDate,
     effectiveTargetByGoal,
     weekDates,
@@ -300,7 +305,7 @@ export default async function PlanPage() {
       </section>
 
       {catchUpActive && (
-        <CatchUpBanner adjustments={catchUpFloors} goals={plan.goals} />
+        <CatchUpBanner adjustments={catchUpFloors} goals={schedulingGoals} />
       )}
 
       {allocation.metrics.overcommitted ? (
@@ -315,7 +320,7 @@ export default async function PlanPage() {
         left={
           <div className="flex flex-col gap-5">
             <PlanClient
-              initialGoals={plan.goals}
+              initialGoals={schedulingGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.availableMinutes}
               wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
               scheduledByGoal={scheduledByGoal}
@@ -329,7 +334,11 @@ export default async function PlanPage() {
                 <h2 className="text-sm font-semibold">Not scheduled this week</h2>
                 <p className="text-xs text-ink-400">
                   With strict mode on, these goals didn&apos;t fit. Either soften their floors or
-                  switch to proportional in Constraints.
+                  switch to proportional under{" "}
+                  <Link className="underline" href="/dashboard/energy#scheduling-constraints">
+                    Scheduling rules
+                  </Link>{" "}
+                  on Planning.
                 </p>
                 <ul className="mt-2 list-disc pl-5 text-sm">
                   {allocation.metrics.notScheduled.map((n) => (

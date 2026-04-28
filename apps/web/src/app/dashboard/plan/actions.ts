@@ -8,6 +8,7 @@ import {
   type WeeklyIntent,
   type WeeklyPlan,
   blockOverrideSchema,
+  isInvertedTimemapGoal,
   weeklyGoalSchema,
   weeklyIntentSchema,
   weeklyPlanSchema
@@ -108,6 +109,9 @@ export async function addGoal(input: Omit<WeeklyGoal, "id">): Promise<{ id: stri
   const userId = session.user.id;
   const settings = await loadSettings(userId);
   const plan = await loadOrCreatePlan(userId, settings.timezone);
+  if (input.specialGoalType === "inverted-timemap") {
+    throw new Error("Calendar time-map rows are managed from Calendars, not added here.");
+  }
   const id = crypto.randomUUID();
   const parsed = weeklyGoalSchema.parse({ ...input, id });
   plan.goals.push(parsed);
@@ -128,6 +132,7 @@ export async function updateGoal(id: string, input: Omit<WeeklyGoal, "id">): Pro
   const plan = await loadOrCreatePlan(userId, settings.timezone);
   const idx = plan.goals.findIndex((g) => g.id === id);
   if (idx < 0) return;
+  if (isInvertedTimemapGoal(plan.goals[idx]!)) return;
   plan.goals[idx] = weeklyGoalSchema.parse({ ...input, id });
   await savePlan(userId, plan);
   revalidatePlanRoutes();
@@ -150,6 +155,7 @@ export async function patchGoal(
   const plan = await loadOrCreatePlan(userId, settings.timezone);
   const idx = plan.goals.findIndex((g) => g.id === id);
   if (idx < 0) return;
+  if (isInvertedTimemapGoal(plan.goals[idx]!)) return;
   const merged = { ...plan.goals[idx]!, ...patch, id };
   plan.goals[idx] = weeklyGoalSchema.parse(merged);
   await savePlan(userId, plan);
@@ -162,6 +168,8 @@ export async function removeGoal(id: string): Promise<void> {
   const userId = session.user.id;
   const settings = await loadSettings(userId);
   const plan = await loadOrCreatePlan(userId, settings.timezone);
+  const victim = plan.goals.find((g) => g.id === id);
+  if (victim && isInvertedTimemapGoal(victim)) return;
   plan.goals = plan.goals.filter((g) => g.id !== id);
   await savePlan(userId, plan);
   revalidatePlanRoutes();
@@ -170,6 +178,7 @@ export async function removeGoal(id: string): Promise<void> {
 /**
  * Reorder goals by passing the canonical array of ids. Goals whose ids aren't
  * in the array are dropped (useful when reorder fires alongside a delete).
+ * Inverted calendar time-map rows are kept at the end and never reordered here.
  */
 export async function reorderGoals(orderedIds: readonly string[]): Promise<void> {
   const session = await authOrPreview();
@@ -177,10 +186,15 @@ export async function reorderGoals(orderedIds: readonly string[]): Promise<void>
   const userId = session.user.id;
   const settings = await loadSettings(userId);
   const plan = await loadOrCreatePlan(userId, settings.timezone);
-  const byId = new Map(plan.goals.map((g) => [g.id, g] as const));
-  plan.goals = orderedIds
+  const timemapTail = plan.goals.filter((g) => isInvertedTimemapGoal(g));
+  const userGoals = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
+  const byId = new Map(userGoals.map((g) => [g.id, g] as const));
+  const reordered = orderedIds
     .map((id) => byId.get(id))
     .filter((g): g is WeeklyGoal => g !== undefined);
+  const seen = new Set(orderedIds);
+  const missing = userGoals.filter((g) => !seen.has(g.id));
+  plan.goals = [...reordered, ...missing, ...timemapTail];
   weeklyPlanSchema.parse(plan);
   await savePlan(userId, plan);
   revalidatePlanRoutes();

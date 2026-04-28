@@ -8,13 +8,12 @@ import { BillingBanner } from "./billing-banner";
 const PRIMARY_NAV = [
   { href: "/dashboard/plan", label: "Perfect Week" },
   { href: "/dashboard/energy", label: "Planning" },
-  { href: "/dashboard/review", label: "Review" },
+  { href: "/dashboard/review", label: "Day sheet" },
   { href: "/dashboard/calendars", label: "Calendars" }
 ];
 
 const ACCOUNT_LINKS = [
   { href: "/dashboard/settings", label: "Settings" },
-  { href: "/dashboard/constraints", label: "Constraints" },
   { href: "/dashboard/calendars#ical-feeds", label: "iCal feeds" },
   { href: "/dashboard/billing", label: "Billing" }
 ];

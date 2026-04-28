@@ -16,7 +16,7 @@ import type {
   WeeklyGoal,
   WorkLayer
 } from "@calendar-automations/schema";
-import { normaliseGoalTime } from "@calendar-automations/schema";
+import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
 
 export type ChipKind =
   | "min-week"
@@ -232,10 +232,11 @@ export function summariseAllocation(
   allocationMode: "even" | "finish-early";
   finishEarlyLeftoverMinutes: number;
 } {
+  const schedulingGoals = filterSchedulingGoals(goals);
   let reserved = 0;
   let equalShareCount = 0;
   let plannedFromCaps = 0;
-  for (const g of goals) {
+  for (const g of schedulingGoals) {
     const norm = normaliseGoalTime(g);
     const floor = norm.minMinutesPerWeek ?? 0;
     reserved += floor;
@@ -253,7 +254,7 @@ export function summariseAllocation(
     allocationMode === "finish-early" ? Math.max(0, remaining - plannedFromCaps) : 0;
   return {
     freeMinutes,
-    goalCount: goals.length,
+    goalCount: schedulingGoals.length,
     reservedMinutes: reserved,
     remainingMinutes: remaining,
     equalShareGoals: equalShareCount,

@@ -12,6 +12,7 @@
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
+  filterSchedulingGoals,
   type PlacementSignalKey,
   type VisionSettings,
   type WeeklyPlan,
@@ -24,6 +25,7 @@ import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
 import { updateWeeklyIntent } from "../plan/actions";
+import { ConstraintsSection } from "./constraints-section";
 import { PlanningHubClient } from "./planning-hub-client";
 
 export const dynamic = "force-dynamic";
@@ -99,11 +101,41 @@ async function updatePlacementPriority(
   revalidatePath("/dashboard/plan");
 }
 
+async function updateFrameworkInScheduler(
+  framework: "wheel" | "ppf" | "hpp",
+  enabled: boolean
+): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  if (framework === "wheel") {
+    await saveSettings(userId, {
+      ...settings,
+      wheel: { ...settings.wheel, enabled }
+    });
+  } else if (framework === "ppf") {
+    await saveSettings(userId, {
+      ...settings,
+      ppf: { ...settings.ppf, enabled }
+    });
+  } else {
+    await saveSettings(userId, {
+      ...settings,
+      hpp: { ...settings.hpp, enabled }
+    });
+  }
+  revalidatePath("/dashboard/energy");
+  revalidatePath("/dashboard/plan");
+}
+
 export default async function PlanningHubPage() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
+  const schedulingGoals = filterSchedulingGoals(plan.goals);
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
 
   return (
@@ -111,25 +143,28 @@ export default async function PlanningHubPage() {
       <header>
         <h1 className="text-2xl font-semibold">Planning</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Set the week&apos;s intentions, classify each goal across the frameworks you trust, and
-          decide which framework wins when they disagree. Everything here feeds the Perfect
-          Week allocator.
+          Set the week&apos;s intentions, classify each goal across the frameworks you trust, tune
+          allocator rules at the bottom, and decide which framework wins when they disagree.
+          Everything here feeds the Perfect Week calendar.
         </p>
       </header>
 
       <PlanningHubClient
-        initialGoals={plan.goals}
+        initialGoals={schedulingGoals}
         initialIntent={plan.weeklyIntent}
         initialVision={settings.vision}
         initialPlacementOrder={settings.placementPriority.order}
         wheelAreas={wheelAreas}
-        wheelEnabled={settings.wheel.enabled}
-        ppfEnabled={settings.ppf.enabled}
-        hppEnabled={settings.hpp.enabled}
+        wheelSchedulerEnabled={settings.wheel.enabled}
+        ppfSchedulerEnabled={settings.ppf.enabled}
+        hppSchedulerEnabled={settings.hpp.enabled}
         saveVision={updateVision}
         savePlacementOrder={updatePlacementPriority}
         saveWeeklyIntent={updateWeeklyIntent}
+        saveFrameworkScheduler={updateFrameworkInScheduler}
       />
+
+      <ConstraintsSection />
     </div>
   );
 }

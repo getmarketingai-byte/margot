@@ -36,6 +36,7 @@ import type {
 } from "@calendar-automations/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { patchGoal } from "../plan/actions";
+import { FrameworkSchedulerToggles } from "./framework-scheduler-toggles";
 
 const HP6_LABELS: Record<Hp6HabitKey, string> = {
   clarity: "Clarity",
@@ -91,7 +92,7 @@ interface BoardConfig {
   key: FrameworkKey;
   title: string;
   description: string;
-  /** When false, the board is disabled with a hint to enable in Constraints. */
+  /** When false, the board is disabled with an optional hint (e.g. PPF until mix is saved in Scheduling rules). */
   enabled: boolean;
   /** Hint text shown when disabled. */
   disabledHint?: string;
@@ -106,12 +107,16 @@ interface PlanningHubClientProps {
   initialVision: VisionSettings;
   initialPlacementOrder: readonly PlacementSignalKey[];
   wheelAreas: ReadonlyArray<{ id: string; label: string }>;
-  wheelEnabled: boolean;
-  ppfEnabled: boolean;
-  hppEnabled: boolean;
+  wheelSchedulerEnabled: boolean;
+  ppfSchedulerEnabled: boolean;
+  hppSchedulerEnabled: boolean;
   saveVision: (input: VisionSettings) => Promise<void>;
   savePlacementOrder: (order: readonly PlacementSignalKey[]) => Promise<void>;
   saveWeeklyIntent: (input: WeeklyIntent) => Promise<void>;
+  saveFrameworkScheduler: (
+    framework: "wheel" | "ppf" | "hpp",
+    enabled: boolean
+  ) => Promise<void>;
 }
 
 /**
@@ -119,9 +124,10 @@ interface PlanningHubClientProps {
  *
  *   1. Weekly intentions card — short reflection prompts that anchor the week.
  *   2. Long-horizon vision — PPF-aligned text persisted on user settings.
- *   3. Framework picker — toggles which kanban board is visible right now.
- *   4. Active board — drag goals between columns to set the framework tag.
- *   5. Placement tie-break — rank the four placement signals.
+ *   3. Scheduler frameworks — which balance layers the allocator enforces.
+ *   4. Framework picker — toggles which kanban board is visible right now.
+ *   5. Active board — drag goals between columns to set the framework tag.
+ *   6. Placement tie-break — rank the four placement signals.
  */
 export function PlanningHubClient(props: PlanningHubClientProps) {
   const {
@@ -130,12 +136,13 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     initialVision,
     initialPlacementOrder,
     wheelAreas,
-    wheelEnabled,
-    ppfEnabled,
-    hppEnabled,
+    wheelSchedulerEnabled,
+    ppfSchedulerEnabled,
+    hppSchedulerEnabled,
     saveVision,
     savePlacementOrder,
-    saveWeeklyIntent
+    saveWeeklyIntent,
+    saveFrameworkScheduler
   } = props;
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const lastSeenSig = useRef<string>("");
@@ -154,12 +161,24 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
 
   const boards = useMemo<BoardConfig[]>(
     () =>
-      buildBoardRegistry({ wheelAreas, wheelEnabled, ppfEnabled, hppEnabled }),
-    [wheelAreas, wheelEnabled, ppfEnabled, hppEnabled]
+      buildBoardRegistry({
+        wheelAreas,
+        wheelEnabled: wheelSchedulerEnabled,
+        ppfEnabled: ppfSchedulerEnabled,
+        hp6Enabled: hppSchedulerEnabled
+      }),
+    [wheelAreas, wheelSchedulerEnabled, ppfSchedulerEnabled, hppSchedulerEnabled]
   );
 
   const [activeBoardKey, setActiveBoardKey] = useState<FrameworkKey>("commitment");
   const activeBoard = boards.find((b) => b.key === activeBoardKey) ?? boards[0]!;
+
+  useEffect(() => {
+    const current = boards.find((b) => b.key === activeBoardKey);
+    if (current?.enabled) return;
+    const fallback = boards.find((b) => b.enabled) ?? boards[0];
+    if (fallback) setActiveBoardKey(fallback.key);
+  }, [boards, activeBoardKey]);
 
   const handlePatch = (goalId: string, patch: Partial<Omit<WeeklyGoal, "id">>) => {
     setGoals((prev) =>
@@ -172,13 +191,16 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
 
   return (
     <div className="flex flex-col gap-5">
-      <WeeklyIntentCard
-        initial={initialIntent}
-        save={saveWeeklyIntent}
-        hppEnabled={hppEnabled}
-      />
+      <WeeklyIntentCard initial={initialIntent} save={saveWeeklyIntent} />
 
       <VisionCard initial={initialVision} save={saveVision} />
+
+      <FrameworkSchedulerToggles
+        wheel={wheelSchedulerEnabled}
+        ppf={ppfSchedulerEnabled}
+        hpp={hppSchedulerEnabled}
+        save={saveFrameworkScheduler}
+      />
 
       <FrameworkPicker
         boards={boards}
@@ -258,12 +280,10 @@ const HP6_KEYS: readonly Hp6HabitKey[] = [
 
 function WeeklyIntentCard({
   initial,
-  save,
-  hppEnabled
+  save
 }: {
   initial: WeeklyIntent;
   save: (input: WeeklyIntent) => Promise<void>;
-  hppEnabled: boolean;
 }) {
   const [intent, setIntent] = useState<WeeklyIntent>(initial);
   const [open, setOpen] = useState(false);
@@ -346,35 +366,33 @@ function WeeklyIntentCard({
               />
             </label>
           ))}
-          {hppEnabled && (
-            <fieldset className="flex flex-col gap-2 rounded-md border border-ink-200 p-2 dark:border-ink-600">
-              <legend className="px-1 text-xs font-medium">HP6 focus this week</legend>
-              <p className="text-[11px] text-ink-400">
-                Optional — pick the habits you want to double down on. The HP6 board below uses
-                the same six options.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {HP6_KEYS.map((habit) => {
-                  const active = (intent.hp6Focus ?? []).includes(habit);
-                  return (
-                    <button
-                      key={habit}
-                      type="button"
-                      onClick={() => toggleHabit(habit)}
-                      aria-pressed={active}
-                      className={`rounded-full border px-2.5 py-1 text-xs transition ${
-                        active
-                          ? "border-accent bg-accent text-accent-fg"
-                          : "border-ink-200 text-ink-600 hover:border-accent/40 dark:border-ink-600 dark:text-ink-200"
-                      }`}
-                    >
-                      {HP6_LABELS[habit]}
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-          )}
+          <fieldset className="flex flex-col gap-2 rounded-md border border-ink-200 p-2 dark:border-ink-600">
+            <legend className="px-1 text-xs font-medium">HP6 focus this week</legend>
+            <p className="text-[11px] text-ink-400">
+              Optional — pick the habits you want to double down on. The HP6 board below uses the
+              same six options.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {HP6_KEYS.map((habit) => {
+                const active = (intent.hp6Focus ?? []).includes(habit);
+                return (
+                  <button
+                    key={habit}
+                    type="button"
+                    onClick={() => toggleHabit(habit)}
+                    aria-pressed={active}
+                    className={`rounded-full border px-2.5 py-1 text-xs transition ${
+                      active
+                        ? "border-accent bg-accent text-accent-fg"
+                        : "border-ink-200 text-ink-600 hover:border-accent/40 dark:border-ink-600 dark:text-ink-200"
+                    }`}
+                  >
+                    {HP6_LABELS[habit]}
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
         </div>
       )}
     </section>
@@ -503,10 +521,12 @@ function FrameworkPicker({
       <div>
         <h2 className="text-sm font-semibold">Framework boards</h2>
         <p className="text-xs text-ink-400">
-          One board per framework. Drag a goal between columns to update its tag — disabled
-          frameworks need to be turned on in{" "}
-          <a className="underline" href="/dashboard/constraints">
-            Constraints
+          One board per framework. Drag a goal between columns to update its tag — boards for Wheel,
+          PPF, and HP6 follow the switches in{" "}
+          <span className="font-medium text-ink-600 dark:text-ink-200">Frameworks in the scheduler</span>{" "}
+          above; floors and mix numbers live in{" "}
+          <a className="underline" href="#scheduling-constraints">
+            Scheduling rules
           </a>
           .
         </p>
@@ -764,12 +784,12 @@ function buildBoardRegistry({
   wheelAreas,
   wheelEnabled,
   ppfEnabled,
-  hppEnabled
+  hp6Enabled
 }: {
   wheelAreas: ReadonlyArray<{ id: string; label: string }>;
   wheelEnabled: boolean;
   ppfEnabled: boolean;
-  hppEnabled: boolean;
+  hp6Enabled: boolean;
 }): BoardConfig[] {
   const boards: BoardConfig[] = [
     {
@@ -836,11 +856,10 @@ function buildBoardRegistry({
     key: "wheel",
     title: "Wheel of Life",
     description:
-      "Each life area floor is enforced by the allocator. Drop a goal onto an area to count it toward that floor.",
-    enabled: wheelEnabled && wheelAreas.length > 0,
-    disabledHint: wheelEnabled
-      ? "Add at least one wheel area in Constraints to enable this board."
-      : "Enable Wheel of Life in Constraints to use this board.",
+      "Each life area floor is enforced by the allocator when Wheel is on in the scheduler and floors are set in Scheduling rules. Drop a goal onto an area to set its wheel tag.",
+    enabled: wheelEnabled,
+    disabledHint:
+      "Turn on Wheel of Life in Frameworks in the scheduler above, then set area floors in Scheduling rules.",
     columns: [
       ...wheelAreas.map((a) => ({ id: a.id, title: a.label })),
       { id: "__none__", title: "Unassigned" }
@@ -855,7 +874,8 @@ function buildBoardRegistry({
     description:
       "Personal / Professional / Financial — Natalie Dawson's three buckets. Drives the PPF mix metrics.",
     enabled: ppfEnabled,
-    disabledHint: "Enable the PPF mix in Constraints to use this board.",
+    disabledHint:
+      "Turn on PPF in Frameworks in the scheduler above to classify goals by pillar (and set mix in Scheduling rules when you want enforcement).",
     columns: [
       { id: "personal", title: "Personal" },
       { id: "professional", title: "Professional" },
@@ -873,7 +893,8 @@ function buildBoardRegistry({
     title: "PPF horizon",
     description: "Which time horizon does this goal serve — 1, 3, or 5 years out?",
     enabled: ppfEnabled,
-    disabledHint: "Enable the PPF mix in Constraints to use this board.",
+    disabledHint:
+      "Turn on PPF in Frameworks in the scheduler above to classify goals by pillar (and set mix in Scheduling rules when you want enforcement).",
     columns: [
       { id: "y1", title: "1 year" },
       { id: "y3", title: "3 years" },
@@ -888,9 +909,10 @@ function buildBoardRegistry({
     key: "hp6",
     title: "HP6 habit",
     description:
-      "Tag goals against Brendon Burchard's six high-performance habits to hit your monthly minimum touches.",
-    enabled: hppEnabled,
-    disabledHint: "Enable the HP6 habits in Constraints to use this board.",
+      "Tag goals against Brendon Burchard's six high-performance habits. When HP6 is on in the scheduler, minimum touches from Scheduling rules apply.",
+    enabled: hp6Enabled,
+    disabledHint:
+      "Turn on HP6 habits in Frameworks in the scheduler above, then set monthly minimums in Scheduling rules.",
     columns: [
       ...HP6_KEYS.map((h) => ({ id: h, title: HP6_LABELS[h] })),
       { id: "__none__", title: "Unassigned" }

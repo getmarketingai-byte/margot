@@ -1,5 +1,5 @@
 /**
- * Daily review page.
+ * Day sheet page.
  *
  * Loads (or creates a fresh) daily review row for `?date=YYYY-MM-DD`,
  * defaulting to today in the user's timezone. The first time a date is
@@ -195,17 +195,17 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-2xl font-semibold">Review</h1>
+        <h1 className="text-2xl font-semibold">Day sheet</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Daily check-in for energy, goals, and execution. The weekly synthesis
-          rolls up across days and powers the catch-up planner.
+          Daily check-in for energy, goals, and execution. The week review rolls
+          up across days and powers the catch-up planner.
         </p>
         <div className="mt-2 text-xs">
           <Link
             href="/dashboard/review/weekly"
             className="text-accent hover:underline"
           >
-            View weekly synthesis →
+            Week review →
           </Link>
         </div>
       </header>
@@ -223,6 +223,7 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
         initialReview={review}
         goals={plan.goals}
         dayLabel={dayLabel}
+        dayStartMs={dayStartMs}
         logStartMinute={logStartMinute}
         logEndMinute={logEndMinute}
       />

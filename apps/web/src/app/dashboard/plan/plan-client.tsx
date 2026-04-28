@@ -245,7 +245,7 @@ export function PlanClient({
               onDelete={() => handleDelete(goal.id)}
               onMoveUp={() => handleReorder(idx, Math.max(0, idx - 1))}
               onMoveDown={() => handleReorder(idx, Math.min(goals.length - 1, idx + 1))}
-              onDropAt={(toIdx) => handleReorder(idx, toIdx)}
+              onDropAt={(fromIdx, toIdx) => handleReorder(fromIdx, toIdx)}
               focusedGoalId={focusRequest?.goalId}
               focusNonce={focusRequest?.nonce}
             />
@@ -488,7 +488,7 @@ function GoalRow({
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  onDropAt: (toIdx: number) => void;
+  onDropAt: (fromIdx: number, toIdx: number) => void;
   focusedGoalId?: string;
   focusNonce?: number;
 }) {
@@ -543,7 +543,7 @@ function GoalRow({
     if (fromIdx === index || fromIdx === index + 1) return;
     // Adjust target index when dragging downward over the same item.
     const adjusted = fromIdx < toIdx ? toIdx - 1 : toIdx;
-    onDropAt(adjusted);
+    onDropAt(fromIdx, adjusted);
   };
 
   return (

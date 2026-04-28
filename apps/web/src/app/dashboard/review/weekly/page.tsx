@@ -1,5 +1,5 @@
 /**
- * Weekly synthesis page.
+ * Week review page.
  *
  * Loads the week's daily reviews, runs the allocator to derive per-goal
  * targets, and feeds both into `computeGoalRollups` for the pace board and
@@ -159,14 +159,14 @@ export default async function WeeklyReviewPage() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-2xl font-semibold">Weekly synthesis</h1>
+        <h1 className="text-2xl font-semibold">Week review</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
           Week of {prettyWeek}. See where you&apos;re behind, set catch-up
           minutes, and answer Burchard&apos;s weekly review prompts.
         </p>
         <div className="mt-2 text-xs">
           <Link href="/dashboard/review" className="text-accent hover:underline">
-            ← Back to daily review
+            ← Back to day sheet
           </Link>
         </div>
       </header>

@@ -525,6 +525,50 @@ describe("allocateWeek", () => {
       expect(block.endMs).toBeLessThanOrEqual(weekStartMs + DAY_MS + 12 * HOUR_MS);
     }
   });
+
+  it("excludes inverted-timemap rows from equal-share and places them after scheduling goals", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const monEnd = weekStartMs + DAY_MS;
+    const wed10 = weekStartMs + 2 * DAY_MS + 10 * HOUR_MS;
+    const wed12 = weekStartMs + 2 * DAY_MS + 12 * HOUR_MS;
+    const result = allocateWeek({
+      plan: {
+        id: "mix",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "work",
+            title: "Work",
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "friend-map",
+            title: "Friend free",
+            specialGoalType: "inverted-timemap",
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      goalAvailabilityWindows: {
+        work: [{ startMs: weekStartMs, endMs: monEnd }],
+        "friend-map": [{ startMs: wed10, endMs: wed12 }]
+      },
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["work"]!.targetMinutes).toBe(7 * 24 * 60);
+    const friendBlocks = result.blocks.filter((b) => b.goalId === "friend-map");
+    expect(friendBlocks.length).toBeGreaterThan(0);
+    for (const block of friendBlocks) {
+      expect(block.startMs).toBeGreaterThanOrEqual(wed10);
+      expect(block.endMs).toBeLessThanOrEqual(wed12);
+    }
+  });
 });
 
 describe("allocateWeek energy-aware suggestion pass", () => {
