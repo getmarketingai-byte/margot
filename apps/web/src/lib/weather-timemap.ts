@@ -180,6 +180,59 @@ function mergeIntervals(intervals: readonly Interval[]): Interval[] {
   return out;
 }
 
+/** Merges overlapping/adjacent ms ranges (no provenance). */
+function mergeMsRanges(ranges: readonly { startMs: number; endMs: number }[]): { startMs: number; endMs: number }[] {
+  if (ranges.length === 0) return [];
+  const sorted = [...ranges]
+    .filter((r) => r.endMs > r.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+  if (sorted.length === 0) return [];
+  const out: { startMs: number; endMs: number }[] = [{ ...sorted[0]! }];
+  for (let i = 1; i < sorted.length; i++) {
+    const cur = sorted[i]!;
+    const last = out[out.length - 1]!;
+    if (cur.startMs <= last.endMs) {
+      if (cur.endMs > last.endMs) last.endMs = cur.endMs;
+    } else {
+      out.push({ ...cur });
+    }
+  }
+  return out;
+}
+
+/** Returns sub-ranges of [sMs, eMs) with merged busy blocks removed. */
+function clipMsRangeAgainstBlocks(
+  sMs: number,
+  eMs: number,
+  blocksMerged: readonly { startMs: number; endMs: number }[]
+): { startMs: number; endMs: number }[] {
+  if (eMs <= sMs) return [];
+  if (blocksMerged.length === 0) return [{ startMs: sMs, endMs: eMs }];
+  const out: { startMs: number; endMs: number }[] = [];
+  let cur = sMs;
+  for (const b of blocksMerged) {
+    if (b.endMs <= cur) continue;
+    if (b.startMs >= eMs) break;
+    if (b.startMs > cur) out.push({ startMs: cur, endMs: Math.min(b.startMs, eMs) });
+    cur = Math.max(cur, b.endMs);
+    if (cur >= eMs) return out;
+  }
+  if (cur < eMs) out.push({ startMs: cur, endMs: eMs });
+  return out;
+}
+
+function subtractSleepFromIntervals(intervals: readonly Interval[], blocks: { startMs: number; endMs: number }[]): Interval[] {
+  if (blocks.length === 0) return [...intervals];
+  const pieces: Interval[] = [];
+  for (const iv of intervals) {
+    for (const f of clipMsRangeAgainstBlocks(iv.startMs, iv.endMs, blocks)) {
+      if (f.endMs <= f.startMs) continue;
+      pieces.push({ startMs: f.startMs, endMs: f.endMs, source: iv.source });
+    }
+  }
+  return mergeIntervals(pieces);
+}
+
 function invertIntervals(
   startMs: number,
   endMs: number,
@@ -233,8 +286,10 @@ export async function buildWeatherTimemapEvents(params: {
   windowEndMs: number;
   weather: WeatherSettings;
   stableUid: (parts: readonly (string | number)[]) => string;
+  /** When set (e.g. computed sleep blocks), clips [Outside]/[Inside] so they do not overlap sleep. */
+  sleepBlockMs?: readonly { startMs: number; endMs: number }[];
 }): Promise<GeneratedEvent[]> {
-  const { userId, windowStartMs, windowEndMs, weather, stableUid } = params;
+  const { userId, windowStartMs, windowEndMs, weather, stableUid, sleepBlockMs } = params;
   if (!weather.enabled) return [];
   if (windowEndMs <= windowStartMs) return [];
 
@@ -314,7 +369,7 @@ export async function buildWeatherTimemapEvents(params: {
     return [];
   }
 
-  const mergedOutside = mergeIntervals(
+  let mergedOutside = mergeIntervals(
     outside
       .map((i) => ({
         startMs: Math.max(windowStartMs, i.startMs),
@@ -323,6 +378,9 @@ export async function buildWeatherTimemapEvents(params: {
       }))
       .filter((i) => i.endMs > i.startMs)
   );
+
+  const sleepMerged = mergeMsRanges(sleepBlockMs ?? []);
+  mergedOutside = subtractSleepFromIntervals(mergedOutside, sleepMerged);
 
   const inside = invertIntervals(windowStartMs, windowEndMs, mergedOutside, true, weather.timezone);
   if (weather.extendInsideOutsideBeyondForecast) {
@@ -337,6 +395,12 @@ export async function buildWeatherTimemapEvents(params: {
     dedupInside.set(`${i.startMs}_${i.endMs}`, i);
   }
 
+  const insideAfterSleep: { startMs: number; endMs: number }[] = [];
+  for (const i of dedupInside.values()) {
+    insideAfterSleep.push(...clipMsRangeAgainstBlocks(i.startMs, i.endMs, sleepMerged));
+  }
+  const mergedInsideDisplay = mergeMsRanges(insideAfterSleep);
+
   const events: GeneratedEvent[] = [];
   for (const out of mergedOutside) {
     events.push({
@@ -349,7 +413,7 @@ export async function buildWeatherTimemapEvents(params: {
       tags: ["weather", "outside"]
     });
   }
-  for (const i of dedupInside.values()) {
+  for (const i of mergedInsideDisplay) {
     events.push({
       uid: stableUid([userId, "weather", "inside", i.startMs, i.endMs]),
       kind: "timemap",

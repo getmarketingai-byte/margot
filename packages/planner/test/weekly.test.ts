@@ -637,6 +637,153 @@ describe("allocateWeek energy-aware suggestion pass", () => {
     }
   });
 
+  it("biases placement toward the top-ranked signal when energyMode and workLayer disagree", () => {
+    // Each day has the same morning vs evening gap shape. With the default
+    // ranking (energyMode first), a hyperfocus + play combination should
+    // still land in the morning slot. Promoting workLayer above energyMode
+    // flips the tie-break toward the play-friendly evening slot.
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      const dayStart = weekStartMs + d * DAY_MS;
+      busy.push({ id: `pre-${d}`, startMs: dayStart, endMs: dayStart + 8 * HOUR_MS, busy: true });
+      busy.push({
+        id: `mid-${d}`,
+        startMs: dayStart + 11 * HOUR_MS,
+        endMs: dayStart + 17 * HOUR_MS,
+        busy: true
+      });
+      busy.push({ id: `post-${d}`, startMs: dayStart + 21 * HOUR_MS, endMs: dayStart + 24 * HOUR_MS, busy: true });
+    }
+    const goal = {
+      id: "mixed",
+      title: "Mixed signals",
+      minMinutesPerWeek: 60,
+      maxMinutesPerWeek: 60,
+      maxMinutesPerDay: 60,
+      frequencyPerWeek: 1,
+      energyMode: "hyperfocus",
+      energyPolarity: "neutral",
+      attentionMode: "unspecified",
+      workLayer: "play",
+      ppfHorizon: "unspecified"
+    } as const;
+    const planForGoal = {
+      id: "mixed-plan",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [goal]
+    };
+
+    const defaultRank = allocateWeek({
+      plan: planForGoal,
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const defaultBlocks = defaultRank.blocks.filter((b) => b.goalId === "mixed");
+    expect(defaultBlocks.length).toBeGreaterThan(0);
+    for (const block of defaultBlocks) {
+      const startHour = ((block.startMs - weekStartMs) % DAY_MS) / HOUR_MS;
+      expect(startHour).toBeLessThan(11);
+    }
+
+    const layerFirst = allocateWeek({
+      plan: planForGoal,
+      busy,
+      settings: buildSettings({
+        placementPriority: {
+          order: ["workLayer", "energyMode", "attentionMode", "energyPolarity"]
+        }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const layerBlocks = layerFirst.blocks.filter((b) => b.goalId === "mixed");
+    expect(layerBlocks.length).toBeGreaterThan(0);
+    for (const block of layerBlocks) {
+      const startHour = ((block.startMs - weekStartMs) % DAY_MS) / HOUR_MS;
+      expect(startHour).toBeGreaterThanOrEqual(17);
+    }
+  });
+
+  it("schedules non-negotiable goals before nice-to-have ones when free time is scarce", () => {
+    // Each day has a one-hour free window from 9-10am. Both goals want a
+    // 60-minute floor, so only one can fully land. With strict starvation
+    // the commitment tier sort decides who wins — the non-negotiable goal
+    // listed second should beat the nice-to-have goal listed first.
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      const dayStart = weekStartMs + d * DAY_MS;
+      // Two sub-24h busy events bracketing a 9-10am gap.
+      busy.push({
+        id: `am-${d}`,
+        startMs: dayStart,
+        endMs: dayStart + 9 * HOUR_MS,
+        busy: true
+      });
+      busy.push({
+        id: `pm-${d}`,
+        startMs: dayStart + 10 * HOUR_MS,
+        endMs: dayStart + 24 * HOUR_MS,
+        busy: true
+      });
+    }
+
+    const result = allocateWeek({
+      plan: {
+        id: "tier",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "nice",
+            title: "Nice to have",
+            minMinutesPerWeek: 60,
+            maxMinutesPerWeek: 60,
+            maxMinutesPerDay: 60,
+            frequencyPerWeek: 1,
+            energyMode: "neutral",
+            energyPolarity: "neutral",
+            attentionMode: "unspecified",
+            workLayer: "unspecified",
+            ppfHorizon: "unspecified",
+            commitmentLevel: "nice_to_have"
+          },
+          {
+            id: "must",
+            title: "Must do",
+            minMinutesPerWeek: 60,
+            maxMinutesPerWeek: 60,
+            maxMinutesPerDay: 60,
+            frequencyPerWeek: 1,
+            energyMode: "neutral",
+            energyPolarity: "neutral",
+            attentionMode: "unspecified",
+            workLayer: "unspecified",
+            ppfHorizon: "unspecified",
+            commitmentLevel: "non_negotiable"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+
+    // The non-negotiable goal lands first, so its block sits in the very
+    // first available 9am gap (Monday) while the nice-to-have falls to a
+    // later day.
+    const mustBlocks = result.blocks.filter((b) => b.goalId === "must");
+    const niceBlocks = result.blocks.filter((b) => b.goalId === "nice");
+    expect(mustBlocks.length).toBeGreaterThan(0);
+    expect(niceBlocks.length).toBeGreaterThan(0);
+    const earliestMust = Math.min(...mustBlocks.map((b) => b.startMs));
+    const earliestNice = Math.min(...niceBlocks.map((b) => b.startMs));
+    expect(earliestMust).toBeLessThan(earliestNice);
+  });
+
   it("ignores suggestion biases when energy ordering mode is 'ignore'", () => {
     const result = allocateWeek({
       plan: {

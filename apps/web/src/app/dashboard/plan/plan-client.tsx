@@ -36,6 +36,14 @@ interface WheelOption {
   label: string;
 }
 
+type PaceStatus = "ahead" | "on-track" | "behind" | "no-data";
+
+interface GoalPaceInfo {
+  status: PaceStatus;
+  deltaMinutes: number;
+  actualMinutes: number;
+}
+
 interface PlanClientProps {
   initialGoals: WeeklyGoal[];
   freeMinutesThisWeek: number;
@@ -43,6 +51,11 @@ interface PlanClientProps {
   scheduledByGoal: Record<string, number>;
   effectiveTargetByGoal: Record<string, number>;
   allocationMode: "even" | "finish-early";
+  /**
+   * Per-goal pace info derived from this week's daily reviews. When omitted
+   * (or a goal isn't present), no pace pill is shown next to the goal.
+   */
+  paceByGoal?: Record<string, GoalPaceInfo>;
 }
 
 const DAY_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
@@ -61,7 +74,8 @@ function emptyDraft(): GoalDraft {
     energyPolarity: "neutral",
     attentionMode: "unspecified",
     workLayer: "unspecified",
-    ppfHorizon: "unspecified"
+    ppfHorizon: "unspecified",
+    commitmentLevel: "committed"
   };
 }
 
@@ -72,7 +86,8 @@ function ensureGoalShape(input: GoalInput): GoalInput {
     energyPolarity: input.energyPolarity ?? "neutral",
     attentionMode: input.attentionMode ?? "unspecified",
     workLayer: input.workLayer ?? "unspecified",
-    ppfHorizon: input.ppfHorizon ?? "unspecified"
+    ppfHorizon: input.ppfHorizon ?? "unspecified",
+    commitmentLevel: input.commitmentLevel ?? "committed"
   };
 }
 
@@ -99,7 +114,8 @@ export function PlanClient({
   wheelAreas,
   scheduledByGoal,
   effectiveTargetByGoal,
-  allocationMode
+  allocationMode,
+  paceByGoal
 }: PlanClientProps) {
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
@@ -147,7 +163,8 @@ export function PlanClient({
       energyPolarity: draft.energyPolarity ?? "neutral",
       attentionMode: draft.attentionMode ?? "unspecified",
       workLayer: draft.workLayer ?? "unspecified",
-      ppfHorizon: draft.ppfHorizon ?? "unspecified"
+      ppfHorizon: draft.ppfHorizon ?? "unspecified",
+      commitmentLevel: draft.commitmentLevel ?? "committed"
     };
     setGoals((prev) => [...prev, optimistic]);
     const payload = ensureGoalShape({ title, ...draft });
@@ -223,6 +240,7 @@ export function PlanClient({
               wheelLabel={wheelLabel}
               scheduledMinutes={scheduledByGoal[goal.id]}
               effectiveTarget={effectiveTargetByGoal[goal.id]}
+              pace={paceByGoal?.[goal.id]}
               onUpdate={(next) => handleUpdate(goal.id, next)}
               onDelete={() => handleDelete(goal.id)}
               onMoveUp={() => handleReorder(idx, Math.max(0, idx - 1))}
@@ -401,6 +419,44 @@ function QuickAdd({
   );
 }
 
+/* ─────────────────────────── Pace pill ───────────────────────────────────── */
+
+const PACE_BG: Record<PaceStatus, string> = {
+  ahead:
+    "bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100",
+  "on-track":
+    "bg-ink-100 text-ink-600 dark:bg-ink-900/40 dark:text-ink-200",
+  behind:
+    "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100",
+  "no-data":
+    "bg-ink-100 text-ink-400 dark:bg-ink-900/40 dark:text-ink-400"
+};
+
+function PacePill({ pace }: { pace: GoalPaceInfo }) {
+  let label: string;
+  switch (pace.status) {
+    case "ahead":
+      label = `Ahead ${formatMinutes(pace.deltaMinutes)}`;
+      break;
+    case "behind":
+      label = `Behind ${formatMinutes(-pace.deltaMinutes)}`;
+      break;
+    case "on-track":
+      label = "On track";
+      break;
+    default:
+      label = "No data";
+  }
+  return (
+    <span
+      title={`Logged ${formatMinutes(pace.actualMinutes)} this week`}
+      className={`rounded-full px-2 py-0.5 text-[11px] ${PACE_BG[pace.status]}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 /* ─────────────────────────── Goal row (collapsed + expanded) ─────────────── */
 
 function GoalRow({
@@ -411,6 +467,7 @@ function GoalRow({
   wheelLabel,
   scheduledMinutes,
   effectiveTarget,
+  pace,
   onUpdate,
   onDelete,
   onMoveUp,
@@ -426,6 +483,7 @@ function GoalRow({
   wheelLabel: (id: string) => string;
   scheduledMinutes?: number;
   effectiveTarget?: number;
+  pace?: GoalPaceInfo;
   onUpdate: (next: GoalInput) => void;
   onDelete: () => void;
   onMoveUp: () => void;
@@ -525,6 +583,9 @@ function GoalRow({
             <span className="text-sm font-medium" style={{ color: goalColor }}>
               {goal.title}
             </span>
+            {pace && pace.status !== "no-data" && (
+              <PacePill pace={pace} />
+            )}
             {chips.length === 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
                 Equal share
@@ -621,7 +682,8 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
     energyPolarity: goal.energyPolarity ?? "neutral",
     attentionMode: goal.attentionMode ?? "unspecified",
     workLayer: goal.workLayer ?? "unspecified",
-    ppfHorizon: goal.ppfHorizon ?? "unspecified"
+    ppfHorizon: goal.ppfHorizon ?? "unspecified",
+    commitmentLevel: goal.commitmentLevel ?? "committed"
   };
   if (goal.minMinutesPerWeek !== undefined) draft.minMinutesPerWeek = goal.minMinutesPerWeek;
   if (goal.maxMinutesPerWeek !== undefined) draft.maxMinutesPerWeek = goal.maxMinutesPerWeek;
@@ -1094,7 +1156,8 @@ function EmptyState({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => voi
                 energyPolarity: "neutral",
                 attentionMode: "unspecified",
                 workLayer: "unspecified",
-                ppfHorizon: "unspecified"
+                ppfHorizon: "unspecified",
+                commitmentLevel: "committed"
               })
             }
             className="btn-secondary text-xs"

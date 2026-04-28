@@ -409,6 +409,50 @@ export const energyOrderingSchema = z.object({
 });
 export type EnergyOrderingSettings = z.infer<typeof energyOrderingSchema>;
 
+/* ─────────────────────── 12b. Placement signal priority ─────────────────── */
+
+/**
+ * The four placement signals the allocator can use to nudge a goal's
+ * preferred hour. Their default rank below mirrors today's implicit
+ * dominance in `pickGapForGoal` / `scoreEnergyAwareness`: legacy `energyMode`
+ * scoring is the strongest, followed by attention, layer, and polarity.
+ */
+export const placementSignalKey = z.enum([
+  "energyMode",
+  "attentionMode",
+  "workLayer",
+  "energyPolarity"
+]);
+export type PlacementSignalKey = z.infer<typeof placementSignalKey>;
+
+export const placementPrioritySettingsSchema = z.object({
+  /**
+   * Ordered ranking of placement signals. Rank 0 is the most important.
+   * The allocator scales each signal's contribution by its rank so the
+   * top-ranked signal wins whenever two signals disagree about the ideal
+   * hour for a goal.
+   */
+  order: z
+    .array(placementSignalKey)
+    .default(["energyMode", "attentionMode", "workLayer", "energyPolarity"])
+});
+export type PlacementPrioritySettings = z.infer<typeof placementPrioritySettingsSchema>;
+
+/* ─────────────────────────── 12c. Long-horizon vision ────────────────────── */
+
+/**
+ * Long-horizon vision text persisted in user settings (not the per-week plan)
+ * so it carries across weeks. PPF-aligned: an optional paragraph per pillar
+ * plus an overall "north star" string. All fields are optional.
+ */
+export const visionSettingsSchema = z.object({
+  northStar: z.string().max(4000).optional(),
+  personal: z.string().max(4000).optional(),
+  professional: z.string().max(4000).optional(),
+  financial: z.string().max(4000).optional()
+});
+export type VisionSettings = z.infer<typeof visionSettingsSchema>;
+
 /* ─────────────────────────── 13. Allocator settings ──────────────────────── */
 
 export const allocatorSettingsSchema = z.object({
@@ -459,6 +503,16 @@ export const userSettingsSchema = z.object({
   hpp: hppRhythmSettingsSchema.default({} as never),
   consistency: consistencySettingsSchema.default({} as never),
   energyOrdering: energyOrderingSchema.default({} as never),
+  /**
+   * Placement-signal priority — when a goal's framework tags imply different
+   * ideal hours, this rank decides which signal wins.
+   */
+  placementPriority: placementPrioritySettingsSchema.default({} as never),
+  /**
+   * Optional long-horizon vision text used by the planning hub. Persists
+   * across weeks; not consumed by the allocator.
+   */
+  vision: visionSettingsSchema.default({} as never),
   allocator: allocatorSettingsSchema.default({} as never),
   travelCache: travelCacheSchema.default({} as never)
 });

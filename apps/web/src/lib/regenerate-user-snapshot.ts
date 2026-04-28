@@ -115,12 +115,16 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
         }).blocks.map((b) => toGeneratedEvent(userId, plan, b))
       : [];
 
+  const sleepBlockMs = systemBlocks
+    .filter((b) => b.system === "sleep")
+    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
   const weatherTimemapEvents = await buildWeatherTimemapEvents({
     userId,
     windowStartMs: window.startMs,
     windowEndMs: window.endMs,
     weather: settings.weather,
-    stableUid: buildStableUid
+    stableUid: buildStableUid,
+    sleepBlockMs
   });
 
   const mergedEvents = [...events, ...systemEvents, ...weatherTimemapEvents].sort(

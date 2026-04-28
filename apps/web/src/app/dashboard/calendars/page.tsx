@@ -7,6 +7,7 @@ import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
   calendarBusyModeForSource,
   normaliseCalendarSource,
+  weeklyIntentSchema,
   type CalendarSource,
   type WeeklyPlan
 } from "@calendar-automations/schema";
@@ -154,15 +155,26 @@ async function ensureInvertedTimemapPlanEntry(
     .limit(1);
   const row = rows[0];
   const weekStart = thisMondayIso();
+  const blank = weeklyIntentSchema.parse({});
   const base: WeeklyPlan = row
     ? ({
         ...(row.data as WeeklyPlan),
         id: row.id,
         weekStart,
         timezone: args.timezone,
-        overrides: (row.data as WeeklyPlan).overrides ?? []
+        overrides: (row.data as WeeklyPlan).overrides ?? [],
+        weeklyIntent: weeklyIntentSchema.parse(
+          (row.data as Partial<WeeklyPlan>).weeklyIntent ?? {}
+        )
       } as WeeklyPlan)
-    : { id: crypto.randomUUID(), weekStart, timezone: args.timezone, goals: [], overrides: [] };
+    : {
+        id: crypto.randomUUID(),
+        weekStart,
+        timezone: args.timezone,
+        goals: [],
+        overrides: [],
+        weeklyIntent: blank
+      };
 
   const existing = base.goals.find((goal) => goal.title.trim().toLowerCase() === title.toLowerCase());
   if (existing) return existing.id;
@@ -175,7 +187,8 @@ async function ensureInvertedTimemapPlanEntry(
     energyPolarity: "neutral" as const,
     attentionMode: "unspecified" as const,
     workLayer: "unspecified" as const,
-    ppfHorizon: "unspecified" as const
+    ppfHorizon: "unspecified" as const,
+    commitmentLevel: "committed" as const
   };
   const next: WeeklyPlan = { ...base, goals: [...base.goals, goal] };
   if (row) {

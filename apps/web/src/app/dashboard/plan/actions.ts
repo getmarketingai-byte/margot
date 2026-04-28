@@ -5,14 +5,27 @@ import { eq } from "drizzle-orm";
 import {
   type BlockOverride,
   type WeeklyGoal,
+  type WeeklyIntent,
   type WeeklyPlan,
   blockOverrideSchema,
   weeklyGoalSchema,
+  weeklyIntentSchema,
   weeklyPlanSchema
 } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
+
+/**
+ * Routes that read either the goal list or the weekly intent need to be
+ * invalidated whenever those slices change. Centralising the list keeps the
+ * planning hub and Perfect Week page in sync after an edit.
+ */
+function revalidatePlanRoutes(): void {
+  revalidatePath("/dashboard/plan");
+  revalidatePath("/dashboard/energy");
+  revalidatePath("/dashboard");
+}
 
 /**
  * The Perfect Week page treats the user's `weekly_plan` row as a singleton:
@@ -31,7 +44,14 @@ function thisMondayIso(): string {
 async function loadOrCreatePlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = thisMondayIso();
   if (!db) {
-    return { id: "dev", weekStart, timezone, goals: [], overrides: [] };
+    return {
+      id: "dev",
+      weekStart,
+      timezone,
+      goals: [],
+      overrides: [],
+      weeklyIntent: weeklyIntentSchema.parse({})
+    };
   }
   const rows = await db
     .select()
@@ -39,14 +59,17 @@ async function loadOrCreatePlan(userId: string, timezone: string): Promise<Weekl
     .where(eq(schema.weeklyPlans.userId, userId))
     .limit(1);
   const row = rows[0];
-  const baseGoals = row ? (row.data as WeeklyPlan).goals : [];
-  const baseOverrides = row ? ((row.data as WeeklyPlan).overrides ?? []) : [];
+  const stored = row ? (row.data as Partial<WeeklyPlan>) : null;
+  const baseGoals = stored?.goals ?? [];
+  const baseOverrides = stored?.overrides ?? [];
+  const baseIntent = weeklyIntentSchema.parse(stored?.weeklyIntent ?? {});
   const plan: WeeklyPlan = {
     id: row?.id ?? crypto.randomUUID(),
     weekStart,
     timezone,
     goals: baseGoals,
-    overrides: baseOverrides
+    overrides: baseOverrides,
+    weeklyIntent: baseIntent
   };
   if (row && (row.data as WeeklyPlan).weekStart !== weekStart) {
     await db
@@ -89,8 +112,7 @@ export async function addGoal(input: Omit<WeeklyGoal, "id">): Promise<{ id: stri
   const parsed = weeklyGoalSchema.parse({ ...input, id });
   plan.goals.push(parsed);
   await savePlan(userId, plan);
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
+  revalidatePlanRoutes();
   return { id };
 }
 
@@ -108,8 +130,30 @@ export async function updateGoal(id: string, input: Omit<WeeklyGoal, "id">): Pro
   if (idx < 0) return;
   plan.goals[idx] = weeklyGoalSchema.parse({ ...input, id });
   await savePlan(userId, plan);
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
+  revalidatePlanRoutes();
+}
+
+/**
+ * Patch a single field on a goal without re-sending the rest of the shape.
+ * Used by the planning hub kanban boards: dropping a card on a column should
+ * write one canonical field at a time. Only fields the caller passes in are
+ * changed; everything else round-trips through the schema unchanged.
+ */
+export async function patchGoal(
+  id: string,
+  patch: Partial<Omit<WeeklyGoal, "id">>
+): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  const idx = plan.goals.findIndex((g) => g.id === id);
+  if (idx < 0) return;
+  const merged = { ...plan.goals[idx]!, ...patch, id };
+  plan.goals[idx] = weeklyGoalSchema.parse(merged);
+  await savePlan(userId, plan);
+  revalidatePlanRoutes();
 }
 
 export async function removeGoal(id: string): Promise<void> {
@@ -120,8 +164,7 @@ export async function removeGoal(id: string): Promise<void> {
   const plan = await loadOrCreatePlan(userId, settings.timezone);
   plan.goals = plan.goals.filter((g) => g.id !== id);
   await savePlan(userId, plan);
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
+  revalidatePlanRoutes();
 }
 
 /**
@@ -140,8 +183,24 @@ export async function reorderGoals(orderedIds: readonly string[]): Promise<void>
     .filter((g): g is WeeklyGoal => g !== undefined);
   weeklyPlanSchema.parse(plan);
   await savePlan(userId, plan);
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
+  revalidatePlanRoutes();
+}
+
+/**
+ * Persist the Burchard-style weekly intention prompts. The whole intent
+ * shape is replaced atomically to keep the UI's state simple; passing a
+ * partial object (`{ mainOutcomes: "..." }`) is supported via the schema's
+ * optional fields.
+ */
+export async function updateWeeklyIntent(input: WeeklyIntent): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  plan.weeklyIntent = weeklyIntentSchema.parse(input);
+  await savePlan(userId, plan);
+  revalidatePlanRoutes();
 }
 
 /**
@@ -170,8 +229,7 @@ export async function setBlockOverride(
   );
   plan.overrides = [...filtered, parsed];
   await savePlan(userId, plan);
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
+  revalidatePlanRoutes();
 }
 
 /** Remove an override by `kind` + `key`. No-op if no matching override exists. */
@@ -188,6 +246,5 @@ export async function clearBlockOverride(
   plan.overrides = plan.overrides.filter((o) => !(o.kind === kind && o.key === key));
   if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
+  revalidatePlanRoutes();
 }

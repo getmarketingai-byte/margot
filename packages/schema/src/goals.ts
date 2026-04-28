@@ -76,6 +76,22 @@ export const specialGoalType = z.enum([
 ]);
 export type SpecialGoalType = z.infer<typeof specialGoalType>;
 
+/**
+ * How firmly the user is committing to this goal this week.
+ *
+ * The allocator uses this as the primary tie-breaker when free time is
+ * scarce: `non_negotiable` goals get first access to gaps, then `committed`,
+ * then `nice_to_have`. Within a tier the existing list-order signal still
+ * applies, so users can keep ranking goals with the existing Perfect Week
+ * drag handles.
+ */
+export const commitmentLevel = z.enum([
+  "non_negotiable",
+  "committed",
+  "nice_to_have"
+]);
+export type CommitmentLevel = z.infer<typeof commitmentLevel>;
+
 export const weeklyGoalSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -137,7 +153,13 @@ export const weeklyGoalSchema = z.object({
    * Optional semantic type used by the UI for routine presets that map to
    * existing timemap/sleep/travel patterns.
    */
-  specialGoalType: specialGoalType.optional()
+  specialGoalType: specialGoalType.optional(),
+  /**
+   * Commitment tier (non-negotiable / committed / nice-to-have). Defaults to
+   * "committed" so existing goals round-trip cleanly. Drives placement order
+   * in the weekly allocator and surfaces as a board on the planning hub.
+   */
+  commitmentLevel: commitmentLevel.default("committed")
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
 
@@ -237,6 +259,28 @@ export const blockOverrideSchema = z.object({
 });
 export type BlockOverride = z.infer<typeof blockOverrideSchema>;
 
+/**
+ * Brendan Burchard–inspired weekly intention prompts, captured at the top of
+ * the planning hub. Each field is optional plain text so users can answer the
+ * prompts that matter to them and skip the rest. Persisted with the rest of
+ * the WeeklyPlan so a fresh week starts blank (or "carry-forward" later).
+ */
+export const weeklyIntentSchema = z.object({
+  /** "What are the 1-3 outcomes that would make this week a win?" */
+  mainOutcomes: z.string().max(2000).optional(),
+  /** "What are the must-wins versus stretch goals?" */
+  mustWins: z.string().max(2000).optional(),
+  /** "Who do you want to show up for this week?" */
+  people: z.string().max(2000).optional(),
+  /** "Which of the six habits are you doubling down on?" — multi-select hint. */
+  hp6Focus: z.array(hp6HabitKey).max(6).default([]),
+  /** "How will you protect or generate energy?" */
+  energyNote: z.string().max(2000).optional(),
+  /** "What standard or mindset are you holding yourself to?" */
+  mindsetNote: z.string().max(2000).optional()
+});
+export type WeeklyIntent = z.infer<typeof weeklyIntentSchema>;
+
 export const weeklyPlanSchema = z.object({
   id: z.string().min(1),
   /** Monday 00:00 in user TZ. ISO date (YYYY-MM-DD). */
@@ -244,6 +288,8 @@ export const weeklyPlanSchema = z.object({
   timezone: z.string(),
   goals: z.array(weeklyGoalSchema).default([]),
   /** User-supplied drag overrides for sleep + routine blocks. */
-  overrides: z.array(blockOverrideSchema).default([])
+  overrides: z.array(blockOverrideSchema).default([]),
+  /** Weekly intention prompts (Burchard-style). Optional; blank for new weeks. */
+  weeklyIntent: weeklyIntentSchema.default({} as never)
 });
 export type WeeklyPlan = z.infer<typeof weeklyPlanSchema>;

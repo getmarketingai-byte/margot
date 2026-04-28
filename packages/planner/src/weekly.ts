@@ -25,6 +25,8 @@ import type {
   AllocatorSettings,
   ConsistencySegment,
   EnergyOrderingSettings,
+  PlacementPrioritySettings,
+  PlacementSignalKey,
   PpfPillarKey,
   PpfSettings,
   UserSettings,
@@ -33,6 +35,7 @@ import type {
 } from "@calendar-automations/schema";
 import type {
   AttentionMode,
+  CommitmentLevel,
   DayOfWeek,
   EnergyMode,
   NormalisedGoalTime,
@@ -114,6 +117,19 @@ export interface AllocateInput {
   /** Window covered by `busy`. Defaults to the seven days from plan.weekStart. */
   weekStartMs?: number;
   weekEndMs?: number;
+  /**
+   * Optional per-goal catch-up adjustments in minutes.
+   *
+   * When the user is behind on a goal mid-week, the weekly review surface
+   * computes a deficit and stores it here as `goalId -> additionalMinutes`.
+   * The allocator adds these minutes to the goal's effective weekly floor
+   * (and weekly ceiling, so the cap doesn't silently swallow the boost) so
+   * the remaining days of the week pick up the extra time.
+   *
+   * Negative values are honoured (you can shrink a goal that ran ahead).
+   * Missing or zero entries are no-ops, preserving baseline behaviour.
+   */
+  catchUpFloors?: Record<string, number>;
 }
 
 export interface AllocateResult {
@@ -168,15 +184,20 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
     goalsForAllocation,
     totalFreeMin,
-    settings.allocator
+    settings.allocator,
+    input.catchUpFloors
   );
 
   // Pass 3 — placement: schedule each prepared goal, day by day, honouring
   // per-day caps. Order matters when free time is scarce, so we sort:
-  //   1. floor-bearing goals first (so their minimums actually land),
-  //   2. then by user-provided list order,
-  //   3. then by remaining minutes desc as a final tie-breaker.
+  //   1. commitment tier (non-negotiable → committed → nice-to-have),
+  //   2. floor-bearing goals first (so their minimums actually land),
+  //   3. then by user-provided list order,
+  //   4. then by remaining minutes desc as a final tie-breaker.
   prepared.sort((a, b) => {
+    const aTier = commitmentRank(a.goal.commitmentLevel);
+    const bTier = commitmentRank(b.goal.commitmentLevel);
+    if (aTier !== bTier) return aTier - bTier;
     const aHasFloor = (a.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
     const bHasFloor = (b.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
     if (aHasFloor !== bHasFloor) return aHasFloor - bHasFloor;
@@ -191,6 +212,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       days,
       blocks,
       settings.energyOrdering,
+      settings.placementPriority,
       tz,
       input.goalAvailabilityWindows?.[p.goal.id]
     );
@@ -230,18 +252,37 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 function distributeMinutes(
   goals: readonly WeeklyGoal[],
   totalFreeMin: number,
-  allocator: AllocatorSettings
+  allocator: AllocatorSettings,
+  catchUpFloors?: Record<string, number>
 ): {
   prepared: PreparedGoal[];
   overcommitted: WeekMetrics["overcommitted"];
   notScheduled: WeekMetrics["notScheduled"];
 } {
-  const prepared: PreparedGoal[] = goals.map((goal, index) => ({
-    goal,
-    norm: normaliseGoalTime(goal),
-    effectiveMinutes: 0,
-    index
-  }));
+  const prepared: PreparedGoal[] = goals.map((goal, index) => {
+    const norm = normaliseGoalTime(goal);
+    const bump = catchUpFloors?.[goal.id] ?? 0;
+    if (bump !== 0) {
+      // Bump both the floor (so the catch-up is reserved in Pass 1) and the
+      // ceiling (so a tight `maxMinutesPerWeek` doesn't swallow the boost).
+      // Floors clamp at zero — a negative catch-up cannot drive the floor
+      // below zero or below an existing larger ceiling.
+      const baseFloor = norm.minMinutesPerWeek ?? 0;
+      norm.minMinutesPerWeek = Math.max(0, baseFloor + bump);
+      if (norm.maxMinutesPerWeek !== undefined) {
+        norm.maxMinutesPerWeek = Math.max(
+          norm.minMinutesPerWeek,
+          norm.maxMinutesPerWeek + bump
+        );
+      }
+    }
+    return {
+      goal,
+      norm,
+      effectiveMinutes: 0,
+      index
+    };
+  });
 
   // Pass 1: reserve floors.
   let floorTotal = 0;
@@ -437,7 +478,8 @@ function wheelTopUpGoals(
         attentionMode: "unspecified",
         workLayer: "unspecified",
         wheelAreaId: area.id,
-        ppfHorizon: "unspecified"
+        ppfHorizon: "unspecified",
+        commitmentLevel: "committed"
       });
     }
   }
@@ -449,6 +491,7 @@ function allocateGoal(
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   blocks: AllocatedBlock[],
   energy: EnergyOrderingSettings,
+  placement: PlacementPrioritySettings,
   tz: string,
   availabilityWindows?: readonly Interval[]
 ): void {
@@ -511,6 +554,7 @@ function allocateGoal(
         goal,
         dayHeadroom,
         energy,
+        placement,
         tz,
         placedToday
       );
@@ -571,11 +615,13 @@ function pickGapForGoal(
   goal: WeeklyGoal,
   perDay: number,
   energy: EnergyOrderingSettings,
+  placement: PlacementPrioritySettings,
   tz: string,
   placedToday: readonly AllocatedBlock[] = []
 ): { gap: Interval; minutes: number } | null {
   const earliest = goal.earliestHour ?? 0;
   const latest = goal.latestHour ?? 24;
+  const weights = placementWeightsFromPriority(placement);
   const candidates: { gap: Interval; minutes: number; score: number }[] = [];
   for (const g of gaps) {
     const startHour = hourInTz(g.startMs, tz);
@@ -583,9 +629,12 @@ function pickGapForGoal(
     if (endHour < earliest || startHour >= latest) continue;
     const lengthMin = Math.floor((g.endMs - g.startMs) / MS_PER_MIN);
     if (lengthMin < 15) continue;
-    const energyScore = scoreGapForEnergy(g, goal.energyMode, energy, tz);
+    const energyScore =
+      weights.energyMode * scoreGapForEnergy(g, goal.energyMode, energy, tz);
     const suggestionScore =
-      energy.mode === "ignore" ? 0 : scoreEnergyAwareness(g, goal, tz, placedToday);
+      energy.mode === "ignore"
+        ? 0
+        : scoreEnergyAwareness(g, goal, tz, placedToday, weights);
     candidates.push({
       gap: g,
       minutes: Math.min(perDay, lengthMin),
@@ -609,6 +658,81 @@ function scoreGapForEnergy(
   if (mode === "hyperfocus") return -Math.abs(startHour - 9);
   if (mode === "hyperaware") return -Math.abs(startHour - 15);
   return -Math.abs(startHour - 12);
+}
+
+/**
+ * Sort key for the commitment tier. Lower number wins. Falling back to
+ * "committed" keeps legacy goals in the same slot they used to occupy
+ * (between non-negotiables and nice-to-haves).
+ */
+function commitmentRank(level: CommitmentLevel | undefined): number {
+  switch (level) {
+    case "non_negotiable":
+      return 0;
+    case "nice_to_have":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+interface SignalWeights {
+  energyMode: number;
+  attentionMode: number;
+  workLayer: number;
+  energyPolarity: number;
+}
+
+const DEFAULT_PLACEMENT_ORDER: readonly PlacementSignalKey[] = [
+  "energyMode",
+  "attentionMode",
+  "workLayer",
+  "energyPolarity"
+];
+
+const UNIFORM_SIGNAL_WEIGHTS: SignalWeights = {
+  energyMode: 1,
+  attentionMode: 1,
+  workLayer: 1,
+  energyPolarity: 1
+};
+
+/**
+ * Aggressive fade applied only when the user has reordered the placement
+ * signals away from the default. Top-rank stays at full strength and lower
+ * ranks are knocked down hard so the user's chosen signal genuinely flips
+ * placement decisions. The default ranking yields uniform weights so legacy
+ * behaviour is preserved bit-for-bit.
+ */
+const PLACEMENT_FADE_WEIGHTS = [1, 0.25, 0.08, 0.02] as const;
+
+/**
+ * Translate a user-supplied placement-signal ranking into multiplicative
+ * weights. The default order returns uniform 1.0 weights so existing
+ * placement scoring is unchanged; any other order applies a fade so the
+ * user's preferred signal dominates.
+ */
+function placementWeightsFromPriority(
+  placement: PlacementPrioritySettings
+): SignalWeights {
+  const order = placement.order;
+  const isDefault =
+    order.length === DEFAULT_PLACEMENT_ORDER.length &&
+    order.every((key, i) => key === DEFAULT_PLACEMENT_ORDER[i]);
+  if (isDefault) return UNIFORM_SIGNAL_WEIGHTS;
+  const weightFor = (key: PlacementSignalKey): number => {
+    const idx = order.indexOf(key);
+    if (idx < 0) return PLACEMENT_FADE_WEIGHTS[PLACEMENT_FADE_WEIGHTS.length - 1]!;
+    return (
+      PLACEMENT_FADE_WEIGHTS[Math.min(idx, PLACEMENT_FADE_WEIGHTS.length - 1)] ?? 1
+    );
+  };
+  return {
+    energyMode: weightFor("energyMode"),
+    attentionMode: weightFor("attentionMode"),
+    workLayer: weightFor("workLayer"),
+    energyPolarity: weightFor("energyPolarity")
+  };
 }
 
 /**
@@ -662,7 +786,8 @@ function scoreEnergyAwareness(
   gap: Interval,
   goal: WeeklyGoal,
   tz: string,
-  placedToday: readonly AllocatedBlock[]
+  placedToday: readonly AllocatedBlock[],
+  weights: SignalWeights
 ): number {
   let score = 0;
   const startHour = hourInTz(gap.startMs, tz);
@@ -670,6 +795,7 @@ function scoreEnergyAwareness(
   const attentionTarget = ATTENTION_TARGET_HOUR[goal.attentionMode ?? "unspecified"];
   if (attentionTarget !== null) {
     score -=
+      weights.attentionMode *
       ENERGY_SUGGESTION_WEIGHTS.attentionPenaltyPerHour *
       Math.abs(startHour - attentionTarget);
   }
@@ -677,6 +803,7 @@ function scoreEnergyAwareness(
   const layerTarget = WORK_LAYER_TARGET_HOUR[goal.workLayer ?? "unspecified"];
   if (layerTarget !== null) {
     score -=
+      weights.workLayer *
       ENERGY_SUGGESTION_WEIGHTS.workLayerPenaltyPerHour *
       Math.abs(startHour - layerTarget);
   }
@@ -695,9 +822,9 @@ function scoreEnergyAwareness(
         (closeAfter >= 0 && closeAfter <= windowMs);
       if (!isAdjacent) continue;
       if (polarity === "drain") {
-        score -= ENERGY_SUGGESTION_WEIGHTS.drainAdjacencyPenalty;
+        score -= weights.energyPolarity * ENERGY_SUGGESTION_WEIGHTS.drainAdjacencyPenalty;
       } else {
-        score += ENERGY_SUGGESTION_WEIGHTS.energiseAdjacencyBonus;
+        score += weights.energyPolarity * ENERGY_SUGGESTION_WEIGHTS.energiseAdjacencyBonus;
       }
     }
   }

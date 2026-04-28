@@ -1,30 +1,45 @@
 /**
- * Energy planning page (the "second page" of the dashboard).
+ * Planning hub (the "second page" of the dashboard).
  *
- * This is a manual classification surface: the user drags/selects each goal
- * into an energy polarity (energises / neutral / drains) and tags the
- * Bustamante hyper-mode plus a four-layer work category. Updates flow through
- * the same server actions as the Perfect Week page so the goal store stays
- * single-source-of-truth.
- *
- * Phase 2 introduces a scheduling-suggestion layer that consumes these tags;
- * this page is the input for that layer.
+ * The hub is the strategic surface that pairs framework-aware classification
+ * boards with weekly intentions and a long-horizon vision. The Perfect Week
+ * page handles when things land on the calendar; the planning hub handles
+ * why each goal exists, which framework lens applies, and how non-negotiable
+ * each commitment is. All edits flow through the same goal/plan server
+ * actions so the allocator stays single-source-of-truth.
  */
 
 import { eq } from "drizzle-orm";
-import { type WeeklyPlan } from "@calendar-automations/schema";
+import { revalidatePath } from "next/cache";
+import {
+  type PlacementSignalKey,
+  type VisionSettings,
+  type WeeklyPlan,
+  placementPrioritySettingsSchema,
+  visionSettingsSchema,
+  weeklyIntentSchema
+} from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
-import { loadSettings } from "@/lib/settings-store";
+import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
-import { EnergyBoardClient } from "./energy-board-client";
+import { updateWeeklyIntent } from "../plan/actions";
+import { PlanningHubClient } from "./planning-hub-client";
 
 export const dynamic = "force-dynamic";
 
 async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
+  const blank = weeklyIntentSchema.parse({});
   if (!db) {
-    return { id: "dev", weekStart, timezone, goals: [], overrides: [] };
+    return {
+      id: "dev",
+      weekStart,
+      timezone,
+      goals: [],
+      overrides: [],
+      weeklyIntent: blank
+    };
   }
   const rows = await db
     .select()
@@ -33,13 +48,58 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return { id: crypto.randomUUID(), weekStart, timezone, goals: [], overrides: [] };
+    return {
+      id: crypto.randomUUID(),
+      weekStart,
+      timezone,
+      goals: [],
+      overrides: [],
+      weeklyIntent: blank
+    };
   }
-  const stored = row.data as WeeklyPlan;
-  return { ...stored, id: row.id, weekStart, timezone, overrides: stored.overrides ?? [] };
+  const stored = row.data as Partial<WeeklyPlan>;
+  return {
+    ...stored,
+    id: row.id,
+    weekStart,
+    timezone,
+    goals: stored.goals ?? [],
+    overrides: stored.overrides ?? [],
+    weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
+  };
 }
 
-export default async function EnergyPage() {
+async function updateVision(input: VisionSettings): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  await saveSettings(userId, {
+    ...settings,
+    vision: visionSettingsSchema.parse(input)
+  });
+  revalidatePath("/dashboard/energy");
+}
+
+async function updatePlacementPriority(
+  order: readonly PlacementSignalKey[]
+): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const parsed = placementPrioritySettingsSchema.parse({ order });
+  await saveSettings(userId, {
+    ...settings,
+    placementPriority: parsed
+  });
+  revalidatePath("/dashboard/energy");
+  revalidatePath("/dashboard/plan");
+}
+
+export default async function PlanningHubPage() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
@@ -49,14 +109,27 @@ export default async function EnergyPage() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h1 className="text-2xl font-semibold">Energy planning</h1>
+        <h1 className="text-2xl font-semibold">Planning</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Classify each goal so the planner can batch energising vs draining work and
-          honour your hyper-focus / hyper-awareness rhythm.
+          Set the week&apos;s intentions, classify each goal across the frameworks you trust, and
+          decide which framework wins when they disagree. Everything here feeds the Perfect
+          Week allocator.
         </p>
       </header>
 
-      <EnergyBoardClient initialGoals={plan.goals} wheelAreas={wheelAreas} />
+      <PlanningHubClient
+        initialGoals={plan.goals}
+        initialIntent={plan.weeklyIntent}
+        initialVision={settings.vision}
+        initialPlacementOrder={settings.placementPriority.order}
+        wheelAreas={wheelAreas}
+        wheelEnabled={settings.wheel.enabled}
+        ppfEnabled={settings.ppf.enabled}
+        hppEnabled={settings.hpp.enabled}
+        saveVision={updateVision}
+        savePlacementOrder={updatePlacementPriority}
+        saveWeeklyIntent={updateWeeklyIntent}
+      />
     </div>
   );
 }

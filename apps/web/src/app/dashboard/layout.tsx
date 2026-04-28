@@ -7,7 +7,8 @@ import { BillingBanner } from "./billing-banner";
 
 const PRIMARY_NAV = [
   { href: "/dashboard/plan", label: "Perfect Week" },
-  { href: "/dashboard/energy", label: "Energy" },
+  { href: "/dashboard/energy", label: "Planning" },
+  { href: "/dashboard/review", label: "Review" },
   { href: "/dashboard/calendars", label: "Calendars" }
 ];
 

@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
-import { type WeeklyPlan } from "@calendar-automations/schema";
+import Link from "next/link";
+import { type WeeklyPlan, weeklyIntentSchema } from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
@@ -7,6 +8,13 @@ import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
+import {
+  isoDatesForWeek,
+  loadDailyReviewsInRange,
+  loadWeeklyReview,
+  todayIsoInTz
+} from "@/lib/review-store";
+import { computeGoalRollups } from "@/lib/review-rollup";
 import { computeSystemBlocks } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
@@ -20,8 +28,16 @@ export const dynamic = "force-dynamic";
 
 async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
+  const blank = weeklyIntentSchema.parse({});
   if (!db) {
-    return { id: "dev", weekStart, timezone, goals: [], overrides: [] };
+    return {
+      id: "dev",
+      weekStart,
+      timezone,
+      goals: [],
+      overrides: [],
+      weeklyIntent: blank
+    };
   }
   const rows = await db
     .select()
@@ -30,10 +46,25 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return { id: crypto.randomUUID(), weekStart, timezone, goals: [], overrides: [] };
+    return {
+      id: crypto.randomUUID(),
+      weekStart,
+      timezone,
+      goals: [],
+      overrides: [],
+      weeklyIntent: blank
+    };
   }
-  const stored = row.data as WeeklyPlan;
-  return { ...stored, id: row.id, weekStart, timezone, overrides: stored.overrides ?? [] };
+  const stored = row.data as Partial<WeeklyPlan>;
+  return {
+    ...stored,
+    id: row.id,
+    weekStart,
+    timezone,
+    goals: stored.goals ?? [],
+    overrides: stored.overrides ?? [],
+    weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
+  };
 }
 
 async function updateRoutines(formData: FormData): Promise<void> {
@@ -80,6 +111,10 @@ export default async function PlanPage() {
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
+  const weekStartIso = localMondayIso(settings.timezone);
+  const weeklyReview = await loadWeeklyReview(userId, weekStartIso, settings.timezone);
+  const catchUpFloors = weeklyReview.catchUpAdjustments;
+  const catchUpActive = Object.keys(catchUpFloors ?? {}).length > 0;
 
   const weekStartMs = localMondayMidnightMs(settings.timezone);
   const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
@@ -124,7 +159,8 @@ export default async function PlanPage() {
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     settings,
     weekStartMs,
-    weekEndMs
+    weekEndMs,
+    catchUpFloors
   });
   const allocationNextWeek = allocateWeek({
     plan,
@@ -135,13 +171,17 @@ export default async function PlanPage() {
     weekEndMs: nextWeekEndMs
   });
   const busyForCalendar = [...busy, ...busyNextWeek];
+  const sleepBlockMs = [...systemBlocks, ...nextWeekSystemBlocks]
+    .filter((b) => b.system === "sleep")
+    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
   const weatherPreviewBlocks = (
     await buildWeatherTimemapEvents({
       userId,
       windowStartMs: weekStartMs,
       windowEndMs: nextWeekEndMs,
       weather: settings.weather,
-      stableUid: buildStableUid
+      stableUid: buildStableUid,
+      sleepBlockMs
     })
   )
     .filter((e) => e.title === "[Outside]")
@@ -162,6 +202,36 @@ export default async function PlanPage() {
   for (const [id, m] of Object.entries(allocation.metrics.perGoal)) {
     scheduledByGoal[id] = m.scheduledMinutes;
     effectiveTargetByGoal[id] = m.targetMinutes;
+  }
+
+  // Pace rollups: pull this week's daily reviews and compute per-goal status
+  // so the PlanClient can render badges next to each goal title.
+  const weekDates = isoDatesForWeek(weekStartMs, settings.timezone);
+  const dailyReviews = await loadDailyReviewsInRange(
+    userId,
+    weekDates[0]!,
+    weekDates[weekDates.length - 1]!
+  );
+  const reviewsByDate = new Map(dailyReviews.map((r) => [r.date, r] as const));
+  const todayIso = todayIsoInTz(settings.timezone);
+  const todayIdx = weekDates.indexOf(todayIso);
+  const goalRollups = computeGoalRollups({
+    goals: plan.goals,
+    reviewsByDate,
+    effectiveTargetByGoal,
+    weekDates,
+    dayIndex: todayIdx >= 0 ? todayIdx : 6
+  });
+  const paceByGoal: Record<
+    string,
+    { status: import("@/lib/review-rollup").PaceStatus; deltaMinutes: number; actualMinutes: number }
+  > = {};
+  for (const r of goalRollups) {
+    paceByGoal[r.goalId] = {
+      status: r.status,
+      deltaMinutes: r.deltaMinutes,
+      actualMinutes: r.effectiveActualMinutes
+    };
   }
 
   return (
@@ -229,6 +299,10 @@ export default async function PlanPage() {
         </form>
       </section>
 
+      {catchUpActive && (
+        <CatchUpBanner adjustments={catchUpFloors} goals={plan.goals} />
+      )}
+
       {allocation.metrics.overcommitted ? (
         <Overcommitted
           neededMin={allocation.metrics.overcommitted.neededMin}
@@ -247,6 +321,7 @@ export default async function PlanPage() {
               scheduledByGoal={scheduledByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}
               allocationMode={settings.allocator.allocationMode}
+              paceByGoal={paceByGoal}
             />
 
             {allocation.metrics.notScheduled.length > 0 && (
@@ -327,6 +402,43 @@ function CalendarPreview({
       proposed={proposed}
       compact={compact}
     />
+  );
+}
+
+function CatchUpBanner({
+  adjustments,
+  goals
+}: {
+  adjustments: Record<string, number>;
+  goals: WeeklyPlan["goals"];
+}) {
+  const titleById = new Map(goals.map((g) => [g.id, g.title] as const));
+  const entries = Object.entries(adjustments).filter(([, mins]) => mins !== 0);
+  const summary = entries
+    .map(([id, mins]) => {
+      const title = titleById.get(id) ?? id;
+      const sign = mins > 0 ? "+" : "";
+      return `${title} ${sign}${mins}m`;
+    })
+    .join(", ");
+  return (
+    <section className="card border-amber-300/40 bg-amber-50/30 dark:bg-amber-900/10">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold">Catch-up active</div>
+          <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">
+            Allocator is reserving extra time for {entries.length}{" "}
+            {entries.length === 1 ? "goal" : "goals"}: {summary}.
+          </p>
+        </div>
+        <Link
+          href="/dashboard/review/weekly"
+          className="btn-secondary text-xs"
+        >
+          Adjust catch-up
+        </Link>
+      </div>
+    </section>
   );
 }
 
