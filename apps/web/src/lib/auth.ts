@@ -13,6 +13,13 @@ import Google from "next-auth/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { db, schema } from "./db/index";
 
+const authUrl = process.env.AUTH_URL ?? process.env.NEXTAUTH_URL;
+if (process.env.NODE_ENV === "production" && (!authUrl || authUrl.includes("localhost"))) {
+  console.warn(
+    "[auth] AUTH_URL/NEXTAUTH_URL is missing or points to localhost in production; PKCE callbacks may fail."
+  );
+}
+
 const REQUIRED_SCOPES = [
   "openid",
   "email",
@@ -22,6 +29,7 @@ const REQUIRED_SCOPES = [
 ].join(" ");
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  trustHost: true,
   adapter: db
     ? DrizzleAdapter(db, {
         usersTable: schema.users,
