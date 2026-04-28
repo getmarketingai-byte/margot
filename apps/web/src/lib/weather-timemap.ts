@@ -105,6 +105,29 @@ function isNiceWeather(
   return true;
 }
 
+/**
+ * Open-Meteo returns hourly `time` values in the requested timezone, usually
+ * without an explicit offset (e.g. "2026-04-28T07:00"). Treating those as UTC
+ * shifts blocks by ~10h for Australia/Melbourne. Parse as local wall-clock
+ * in `timezone` instead.
+ */
+function parseOpenMeteoLocalHour(timeIsoLocal: string, timezone: string): number {
+  // Fast path: if offset/Z is present, Date.parse is unambiguous.
+  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(timeIsoLocal)) {
+    return Date.parse(timeIsoLocal);
+  }
+  const match = timeIsoLocal.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
+  );
+  if (!match) return Date.parse(timeIsoLocal);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  return utcMsForLocalDateAtHour(year, month, day, hour, minute, timezone);
+}
+
 async function fetchWeather(weather: WeatherSettings): Promise<OpenMeteoResponse> {
   const params = new URLSearchParams({
     latitude: String(weather.latitude),
@@ -225,7 +248,7 @@ export async function buildWeatherTimemapEvents(params: {
     let lastForecastStopMs = 0;
 
     for (let i = 0; i < hourly.time.length; i++) {
-      const timeMs = Date.parse(hourly.time[i]!);
+      const timeMs = parseOpenMeteoLocalHour(hourly.time[i]!, weather.timezone);
       if (!Number.isFinite(timeMs)) continue;
       const hourlyPoint = {
         precipitation_probability: hourly.precipitation_probability[i] ?? 100,
