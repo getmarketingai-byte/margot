@@ -90,15 +90,17 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
       label: SPECIAL_GOAL_LABELS[goal.specialGoalType] ?? goal.specialGoalType
     });
   }
+  if (goal.minMinutesPerWeek !== undefined) {
+    chips.push({ key: "min-week", label: `≥ ${formatMinutes(goal.minMinutesPerWeek)}/wk` });
+  }
   if (goal.minMinutesPerDay !== undefined) {
     chips.push({ key: "min-day", label: `≥ ${formatMinutes(goal.minMinutesPerDay)}/day` });
-  } else if (goal.minMinutesPerWeek !== undefined) {
-    chips.push({ key: "min-week", label: `≥ ${formatMinutes(goal.minMinutesPerWeek)}/wk` });
+  }
+  if (goal.maxMinutesPerWeek !== undefined) {
+    chips.push({ key: "max-week", label: `≤ ${formatMinutes(goal.maxMinutesPerWeek)}/wk` });
   }
   if (goal.maxMinutesPerDay !== undefined) {
     chips.push({ key: "max-day", label: `≤ ${formatMinutes(goal.maxMinutesPerDay)}/day` });
-  } else if (goal.maxMinutesPerWeek !== undefined) {
-    chips.push({ key: "max-week", label: `≤ ${formatMinutes(goal.maxMinutesPerWeek)}/wk` });
   }
   if (goal.frequencyPerWeek !== undefined) {
     chips.push({ key: "frequency", label: `${goal.frequencyPerWeek}×/wk` });

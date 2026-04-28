@@ -356,7 +356,6 @@ function QuickAdd({
           draft={draft}
           onChange={setDraft}
           wheelAreas={wheelAreas}
-          autoFocus
         />
       )}
     </form>
@@ -523,7 +522,6 @@ function GoalRow({
               draft={draft}
               onChange={commitDraft}
               wheelAreas={wheelAreas}
-              autoFocus={false}
             />
           </div>
         </div>
@@ -580,116 +578,228 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
 
 /* ─────────────────────────── Options editor ──────────────────────────────── */
 
+/**
+ * Each constraint is opt-in: we render only the ones the user has actually
+ * set, with a remove (✕) action. Unset constraints appear as "+ Add X"
+ * buttons at the bottom of the editor so the surface stays small until the
+ * user explicitly reaches for a constraint. This is the chip-builder pattern
+ * applied to the row's editor.
+ */
+type ConstraintId =
+  | "min-week"
+  | "min-day"
+  | "max-week"
+  | "max-day"
+  | "frequency"
+  | "days"
+  | "energy"
+  | "special"
+  | "wheel"
+  | "pillar";
+
+interface ConstraintDef {
+  id: ConstraintId;
+  label: string;
+  isSet: (d: GoalDraft) => boolean;
+  initialise: (d: GoalDraft) => Partial<GoalDraft>;
+  clear: (d: GoalDraft) => Partial<GoalDraft>;
+}
+
+function isDaySet(d: GoalDraft): boolean {
+  return Boolean((d.daysOfWeek && d.daysOfWeek.length > 0) || d.dayOfWeek);
+}
+
 function OptionsEditor({
   draft,
   onChange,
-  wheelAreas,
-  autoFocus
+  wheelAreas
 }: {
   draft: GoalDraft;
   onChange: (draft: GoalDraft) => void;
   wheelAreas: WheelOption[];
-  autoFocus: boolean;
 }) {
-  const [minUnit, setMinUnit] = useState<"week" | "day">(
-    draft.minMinutesPerDay !== undefined ? "day" : "week"
-  );
-  const [maxUnit, setMaxUnit] = useState<"week" | "day">(
-    draft.maxMinutesPerDay !== undefined ? "day" : "week"
-  );
-  const [minAmountUnit, setMinAmountUnit] = useState<"hours" | "minutes">("hours");
-  const [maxAmountUnit, setMaxAmountUnit] = useState<"hours" | "minutes">("hours");
-
-  const minMinutes = minUnit === "day" ? draft.minMinutesPerDay : draft.minMinutesPerWeek;
-  const maxMinutes = maxUnit === "day" ? draft.maxMinutesPerDay : draft.maxMinutesPerWeek;
-
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
-  const pinnedDays = draft.daysOfWeek?.length
-    ? draft.daysOfWeek
-    : draft.dayOfWeek
-      ? [draft.dayOfWeek]
-      : [];
 
-  const toDisplayAmount = (minutes: number | undefined, amountUnit: "hours" | "minutes") => {
-    if (minutes === undefined) return "";
-    return amountUnit === "hours" ? String(minutes / 60) : String(minutes);
-  };
-  const fromDisplayAmount = (raw: string, amountUnit: "hours" | "minutes") => {
-    if (raw === "") return undefined;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return undefined;
-    const minutes = amountUnit === "hours" ? n * 60 : n;
-    return Math.max(0, Math.round(minutes));
-  };
+  // Order matters: this is the order rows appear, both as set rows and as
+  // "+ Add X" buttons. Keep the high-impact constraints (time, cadence) on
+  // top and the categorisation tags (energy, wheel, pillar) at the bottom.
+  const constraints: ConstraintDef[] = [
+    {
+      id: "min-week",
+      label: "Min per week",
+      isSet: (d) => d.minMinutesPerWeek !== undefined,
+      initialise: () => ({ minMinutesPerWeek: 60 }),
+      clear: () => ({ minMinutesPerWeek: undefined })
+    },
+    {
+      id: "min-day",
+      label: "Min per day",
+      isSet: (d) => d.minMinutesPerDay !== undefined,
+      initialise: () => ({ minMinutesPerDay: 30 }),
+      clear: () => ({ minMinutesPerDay: undefined })
+    },
+    {
+      id: "max-week",
+      label: "Max per week",
+      isSet: (d) => d.maxMinutesPerWeek !== undefined,
+      initialise: () => ({ maxMinutesPerWeek: 300 }),
+      clear: () => ({ maxMinutesPerWeek: undefined })
+    },
+    {
+      id: "max-day",
+      label: "Max per day",
+      isSet: (d) => d.maxMinutesPerDay !== undefined,
+      initialise: () => ({ maxMinutesPerDay: 120 }),
+      clear: () => ({ maxMinutesPerDay: undefined })
+    },
+    {
+      id: "frequency",
+      label: "Times per week",
+      isSet: (d) => d.frequencyPerWeek !== undefined,
+      initialise: () => ({ frequencyPerWeek: 3 }),
+      clear: () => ({ frequencyPerWeek: undefined })
+    },
+    {
+      id: "days",
+      label: "Pin to day(s)",
+      isSet: isDaySet,
+      initialise: () => ({ daysOfWeek: ["monday"], dayOfWeek: undefined }),
+      clear: () => ({ daysOfWeek: undefined, dayOfWeek: undefined })
+    },
+    {
+      id: "energy",
+      label: "Energy mode",
+      isSet: (d) => d.energyMode !== undefined && d.energyMode !== "neutral",
+      initialise: () => ({ energyMode: "hyperfocus" }),
+      clear: () => ({ energyMode: "neutral" })
+    },
+    {
+      id: "special",
+      label: "Special goal type",
+      isSet: (d) => d.specialGoalType !== undefined,
+      initialise: (d) => applySpecialGoalPreset(d, SPECIAL_GOAL_PRESETS[0]?.type),
+      clear: (d) => applySpecialGoalPreset(d, undefined)
+    },
+    {
+      id: "wheel",
+      label: "Wheel area",
+      isSet: (d) => d.wheelAreaId !== undefined,
+      initialise: () => ({ wheelAreaId: wheelAreas[0]?.id }),
+      clear: () => ({ wheelAreaId: undefined })
+    },
+    {
+      id: "pillar",
+      label: "Pillar",
+      isSet: (d) => d.ppfPillar !== undefined,
+      initialise: () => ({ ppfPillar: "personal" }),
+      clear: () => ({ ppfPillar: undefined })
+    }
+  ];
 
-  const setMin = (raw: string) => {
-    const n = fromDisplayAmount(raw, minAmountUnit);
-    if (minUnit === "day") {
-      update({ minMinutesPerDay: n, minMinutesPerWeek: undefined });
-    } else {
-      update({ minMinutesPerWeek: n, minMinutesPerDay: undefined });
-    }
-  };
-  const setMax = (raw: string) => {
-    const parsed = fromDisplayAmount(raw, maxAmountUnit);
-    const n = parsed === undefined ? undefined : Math.max(1, parsed);
-    if (maxUnit === "day") {
-      update({ maxMinutesPerDay: n, maxMinutesPerWeek: undefined });
-    } else {
-      update({ maxMinutesPerWeek: n, maxMinutesPerDay: undefined });
-    }
-  };
+  // Wheel area only appears when the user has any wheel areas configured.
+  const visibleConstraints = constraints.filter(
+    (c) => c.id !== "wheel" || wheelAreas.length > 0
+  );
+  const setConstraints = visibleConstraints.filter((c) => c.isSet(draft));
+  const unsetConstraints = visibleConstraints.filter((c) => !c.isSet(draft));
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <Field label="Min time (optional)" hint="Reserved before equal share.">
-        <div className="flex items-center gap-1">
-          <input
-            type="number"
-            min={0}
-            step={minAmountUnit === "hours" ? 0.25 : 15}
-            value={toDisplayAmount(minMinutes, minAmountUnit)}
-            onChange={(e) => setMin(e.target.value)}
-            placeholder="0"
-            className="field flex-1"
-            autoFocus={autoFocus}
-          />
-          <UnitToggle
-            value={minAmountUnit}
-            onChange={setMinAmountUnit}
-            ariaLabel="Min amount unit"
-            options={[
-              { value: "hours", label: "h" },
-              { value: "minutes", label: "m" }
-            ]}
-          />
-          <UnitToggle value={minUnit} onChange={(v) => setMinUnit(v as "week" | "day")} />
+    <div className="flex flex-col gap-3">
+      {setConstraints.length === 0 ? (
+        <p className="text-xs text-ink-400">
+          No constraints set — this goal gets an equal share of free time. Add a constraint below
+          to refine.
+        </p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {setConstraints.map((c) => (
+            <ConstraintRow
+              key={c.id}
+              label={c.label}
+              onRemove={() => update(c.clear(draft))}
+            >
+              <ConstraintBody
+                id={c.id}
+                draft={draft}
+                update={update}
+                wheelAreas={wheelAreas}
+              />
+            </ConstraintRow>
+          ))}
         </div>
-      </Field>
-      <Field label="Max time (optional)" hint="Cap to keep this goal in check.">
-        <div className="flex items-center gap-1">
-          <input
-            type="number"
-            min={0}
-            step={maxAmountUnit === "hours" ? 0.25 : 15}
-            value={toDisplayAmount(maxMinutes, maxAmountUnit)}
-            onChange={(e) => setMax(e.target.value)}
-            placeholder="∞"
-            className="field flex-1"
-          />
-          <UnitToggle
-            value={maxAmountUnit}
-            onChange={setMaxAmountUnit}
-            ariaLabel="Max amount unit"
-            options={[
-              { value: "hours", label: "h" },
-              { value: "minutes", label: "m" }
-            ]}
-          />
-          <UnitToggle value={maxUnit} onChange={(v) => setMaxUnit(v as "week" | "day")} />
+      )}
+
+      {unsetConstraints.length > 0 && (
+        <div className="flex flex-col gap-1 border-t border-ink-200 pt-3 dark:border-ink-600">
+          <span className="text-[11px] uppercase tracking-wide text-ink-400">Add constraint</span>
+          <div className="flex flex-wrap gap-2">
+            {unsetConstraints.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => update(c.initialise(draft))}
+                className="rounded-full border border-ink-200 px-2.5 py-1 text-xs text-ink-600 hover:border-accent hover:text-accent dark:border-ink-600 dark:text-ink-200"
+              >
+                + {c.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </Field>
-      <Field label="Times per week (optional)" hint="Spread across N days.">
+      )}
+    </div>
+  );
+}
+
+function ConstraintRow({
+  label,
+  children,
+  onRemove
+}: {
+  label: string;
+  children: React.ReactNode;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-ink-200 bg-ink-50/50 p-2 dark:border-ink-600 dark:bg-ink-900/40">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium">{label}</span>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${label}`}
+          title={`Remove ${label}`}
+          className="rounded p-0.5 text-ink-400 hover:bg-ink-100 hover:text-ink-900 dark:hover:bg-ink-600/40 dark:hover:text-ink-100"
+        >
+          ✕
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ConstraintBody({
+  id,
+  draft,
+  update,
+  wheelAreas
+}: {
+  id: ConstraintId;
+  draft: GoalDraft;
+  update: (changes: Partial<GoalDraft>) => void;
+  wheelAreas: WheelOption[];
+}) {
+  switch (id) {
+    case "min-week":
+      return <DurationField value={draft.minMinutesPerWeek} onChange={(v) => update({ minMinutesPerWeek: v })} hint="Reserved before equal share." />;
+    case "min-day":
+      return <DurationField value={draft.minMinutesPerDay} onChange={(v) => update({ minMinutesPerDay: v })} hint="Daily floor on scheduled days." />;
+    case "max-week":
+      return <DurationField value={draft.maxMinutesPerWeek} onChange={(v) => update({ maxMinutesPerWeek: v === undefined ? undefined : Math.max(1, v) })} hint="Weekly ceiling." />;
+    case "max-day":
+      return <DurationField value={draft.maxMinutesPerDay} onChange={(v) => update({ maxMinutesPerDay: v === undefined ? undefined : Math.max(1, v) })} hint="Daily cap so this doesn't dominate a day." />;
+    case "frequency":
+      return (
         <input
           type="number"
           min={1}
@@ -700,24 +810,32 @@ function OptionsEditor({
               frequencyPerWeek: e.target.value === "" ? undefined : Number(e.target.value)
             })
           }
-          placeholder="any"
+          placeholder="3"
           className="field"
         />
-      </Field>
-      <Field
-        label="Pin to day(s) (optional)"
-        hint="Choose which weekdays this goal can occur on."
-      >
-        <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+      );
+    case "days": {
+      const pinnedDays = draft.daysOfWeek?.length
+        ? draft.daysOfWeek
+        : draft.dayOfWeek
+          ? [draft.dayOfWeek]
+          : [];
+      return (
+        <div className="grid grid-cols-7 gap-1">
           {DAY_OPTIONS.map((d) => {
             const checked = pinnedDays.includes(d.value);
             return (
               <label
                 key={d.value}
-                className="inline-flex items-center gap-1 rounded-md border border-ink-200 px-2 py-1 text-xs dark:border-ink-600"
+                className={`flex cursor-pointer items-center justify-center rounded border px-1 py-1 text-[11px] ${
+                  checked
+                    ? "border-accent bg-accent text-accent-fg"
+                    : "border-ink-200 hover:border-accent/40 dark:border-ink-600"
+                }`}
               >
                 <input
                   type="checkbox"
+                  className="sr-only"
                   checked={checked}
                   onChange={(e) => {
                     const next = e.target.checked
@@ -729,13 +847,15 @@ function OptionsEditor({
                     });
                   }}
                 />
-                <span>{d.label}</span>
+                {d.label}
               </label>
             );
           })}
         </div>
-      </Field>
-      <Field label="Energy mode" hint="When in the day this lands best.">
+      );
+    }
+    case "energy":
+      return (
         <select
           value={draft.energyMode ?? "neutral"}
           onChange={(e) => update({ energyMode: e.target.value as EnergyMode })}
@@ -745,8 +865,9 @@ function OptionsEditor({
           <option value="neutral">Neutral</option>
           <option value="hyperaware">Scanning (afternoon)</option>
         </select>
-      </Field>
-      <Field label="Special goal type (optional)" hint="Routine/timemap-aware preset.">
+      );
+    case "special":
+      return (
         <select
           value={draft.specialGoalType ?? ""}
           onChange={(e) => {
@@ -755,31 +876,31 @@ function OptionsEditor({
           }}
           className="field"
         >
-          <option value="">None</option>
+          <option value="">— Pick a preset —</option>
           {SPECIAL_GOAL_PRESETS.map((preset) => (
             <option key={preset.type} value={preset.type}>
               {preset.label}
             </option>
           ))}
         </select>
-      </Field>
-      {wheelAreas.length > 0 && (
-        <Field label="Wheel area (optional)">
-          <select
-            value={draft.wheelAreaId ?? ""}
-            onChange={(e) => update({ wheelAreaId: e.target.value || undefined })}
-            className="field"
-          >
-            <option value="">—</option>
-            {wheelAreas.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-      <Field label="Pillar (optional)" hint="Personal / Professional / Financial.">
+      );
+    case "wheel":
+      return (
+        <select
+          value={draft.wheelAreaId ?? ""}
+          onChange={(e) => update({ wheelAreaId: e.target.value || undefined })}
+          className="field"
+        >
+          <option value="">—</option>
+          {wheelAreas.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+      );
+    case "pillar":
+      return (
         <select
           value={draft.ppfPillar ?? ""}
           onChange={(e) =>
@@ -792,26 +913,58 @@ function OptionsEditor({
           <option value="professional">Professional</option>
           <option value="financial">Financial</option>
         </select>
-      </Field>
-    </div>
-  );
+      );
+  }
 }
 
-function Field({
-  label,
-  hint,
-  children
+/**
+ * Combined number + h/m unit toggle for any "minutes" field. Stores minutes
+ * internally and lets the user input either decimal hours (1.5) or whole
+ * minutes (90). Defaults to hours since most goals are expressed that way.
+ */
+function DurationField({
+  value,
+  onChange,
+  hint
 }: {
-  label: string;
+  value: number | undefined;
+  onChange: (next: number | undefined) => void;
   hint?: string;
-  children: React.ReactNode;
 }) {
+  const [unit, setUnit] = useState<"hours" | "minutes">("hours");
+
+  const display = value === undefined ? "" : unit === "hours" ? String(value / 60) : String(value);
+
+  const onInput = (raw: string) => {
+    if (raw === "") return onChange(undefined);
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    onChange(Math.max(0, Math.round(unit === "hours" ? n * 60 : n)));
+  };
+
   return (
-    <label className="flex flex-col gap-1 text-xs">
-      <span className="font-medium">{label}</span>
-      {children}
-      {hint ? <span className="text-ink-400">{hint}</span> : null}
-    </label>
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1">
+        <input
+          type="number"
+          min={0}
+          step={unit === "hours" ? 0.25 : 15}
+          value={display}
+          onChange={(e) => onInput(e.target.value)}
+          className="field flex-1"
+        />
+        <UnitToggle
+          value={unit}
+          onChange={(v) => setUnit(v as "hours" | "minutes")}
+          ariaLabel="Unit"
+          options={[
+            { value: "hours", label: "h" },
+            { value: "minutes", label: "m" }
+          ]}
+        />
+      </div>
+      {hint ? <span className="text-[11px] text-ink-400">{hint}</span> : null}
+    </div>
   );
 }
 

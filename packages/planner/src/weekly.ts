@@ -224,7 +224,13 @@ function distributeMinutes(
   // Pass 1: reserve floors.
   let floorTotal = 0;
   for (const p of prepared) {
-    const floor = p.norm.minMinutesPerWeek ?? 0;
+    const minFloor = p.norm.minMinutesPerWeek ?? 0;
+    // Weekly min/max are orthogonal constraints: if both are present, the
+    // effective weekly floor cannot exceed the weekly cap.
+    const floor =
+      p.norm.maxMinutesPerWeek !== undefined
+        ? Math.min(minFloor, p.norm.maxMinutesPerWeek)
+        : minFloor;
     p.effectiveMinutes = floor;
     floorTotal += floor;
   }

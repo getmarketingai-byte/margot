@@ -234,6 +234,46 @@ describe("allocateWeek", () => {
     }
   });
 
+  it("applies weekly and daily caps together when both are set", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "dual-cap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "bounded",
+            title: "Bounded",
+            minMinutesPerWeek: 900,
+            maxMinutesPerWeek: 300,
+            maxMinutesPerDay: 60,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+
+    const target = result.metrics.perGoal["bounded"]!.targetMinutes;
+    expect(target).toBeLessThanOrEqual(300);
+
+    const byDay: Record<number, number> = {};
+    for (const b of result.blocks.filter((block) => block.goalId === "bounded")) {
+      const dayIdx = Math.floor((b.startMs - weekStartMs) / DAY_MS);
+      const mins = (b.endMs - b.startMs) / 60_000;
+      byDay[dayIdx] = (byDay[dayIdx] ?? 0) + mins;
+    }
+    for (const mins of Object.values(byDay)) {
+      expect(mins).toBeLessThanOrEqual(60);
+    }
+  });
+
   it("flags overcommitment when floors exceed available time (proportional default)", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     // One day's worth of busy events for all 7 days to drastically reduce free time.
