@@ -10,6 +10,7 @@
  */
 
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
+import type { SystemBlock } from "@/lib/week-blocks";
 
 interface WeekCalendarProps {
   /** Monday 00:00 of the week being rendered, expressed as epoch ms. */
@@ -20,6 +21,12 @@ interface WeekCalendarProps {
   busy: readonly BusyEvent[];
   /** Planner's proposed blocks to render as the front layer. */
   proposed: readonly AllocatedBlock[];
+  /**
+   * Sleep + travel blocks the planner reserves around real events. Rendered
+   * as a middle layer with their own visual style so users can see them but
+   * not confuse them with goal blocks or genuine calendar events.
+   */
+  system?: readonly SystemBlock[];
   /** First hour shown on the grid (default 6). */
   startHour?: number;
   /** Last hour shown on the grid, exclusive (default 22). */
@@ -33,7 +40,7 @@ interface WeekCalendarProps {
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const PX_PER_HOUR = 36;
+const PX_PER_HOUR = 30;
 
 interface PositionedBlock {
   dayIndex: number; // 0=Mon ... 6=Sun
@@ -95,8 +102,9 @@ function isoWeekdayIndex(weekday: string): number {
 
 /**
  * Position a single time interval against the visible grid window. Returns
- * null when the entire interval lies outside the window or on a day other
- * than the seven we're showing.
+ * one positioned block per day the interval covers — sleep blocks routinely
+ * cross midnight, so a single 23:00 → 07:00 interval becomes two blocks
+ * (one on day N, one on day N+1).
  */
 function position(
   startMs: number,
@@ -106,32 +114,44 @@ function position(
   startHour: number,
   endHour: number,
   title: string
-): PositionedBlock | null {
-  // Normalise the start within the week we're showing: which day index?
+): PositionedBlock[] {
   const startParts = partsInTimezone(startMs, timezone);
   const weekParts = partsInTimezone(weekStartMs, timezone);
-  // Day index by counting whole local days between startParts and weekParts.
-  // We approximate by composing local midnight ms via UTC and calendar math.
-  const dayIndex = daysBetween(weekParts, startParts);
-  if (dayIndex < 0 || dayIndex > 6) return null;
-
+  const startDayIndex = daysBetween(weekParts, startParts);
   const startMinuteOfDay = startParts.hour * 60 + startParts.minute;
   const durationMin = Math.max(15, Math.floor((endMs - startMs) / 60_000));
-  const endMinuteOfDay = startMinuteOfDay + durationMin;
+  const endMinuteAbs = startMinuteOfDay + durationMin;
 
   const windowStart = startHour * 60;
   const windowEnd = endHour * 60;
-  if (endMinuteOfDay <= windowStart) return null;
-  if (startMinuteOfDay >= windowEnd) return null;
+  const out: PositionedBlock[] = [];
 
-  const clippedTop = startMinuteOfDay < windowStart;
-  const clippedBottom = endMinuteOfDay > windowEnd;
-  const topMin = Math.max(windowStart, startMinuteOfDay);
-  const bottomMin = Math.min(windowEnd, endMinuteOfDay);
-  const topPx = ((topMin - windowStart) / 60) * PX_PER_HOUR;
-  const heightPx = Math.max(8, ((bottomMin - topMin) / 60) * PX_PER_HOUR);
+  // Walk day by day: each iteration consumes [thisDayStart, min(endMinuteAbs, 1440))
+  // expressed in minutes-from-startDay00:00.
+  let cursor = startMinuteOfDay;
+  let dayIndex = startDayIndex;
+  while (cursor < endMinuteAbs && dayIndex >= 0 && dayIndex <= 6) {
+    const dayBoundary = dayIndex === startDayIndex ? 1440 : (dayIndex - startDayIndex + 1) * 1440;
+    const nextBoundary = Math.min(endMinuteAbs, dayBoundary);
+    // Convert the absolute-from-startDay minutes into minutes-of-this-day.
+    const thisDayBase = (dayIndex - startDayIndex) * 1440;
+    const localStart = cursor - thisDayBase;
+    const localEnd = nextBoundary - thisDayBase;
 
-  return { dayIndex, topPx, heightPx, title, clippedTop, clippedBottom };
+    if (localEnd > windowStart && localStart < windowEnd) {
+      const clippedTop = localStart < windowStart;
+      const clippedBottom = localEnd > windowEnd;
+      const topMin = Math.max(windowStart, localStart);
+      const bottomMin = Math.min(windowEnd, localEnd);
+      const topPx = ((topMin - windowStart) / 60) * PX_PER_HOUR;
+      const heightPx = Math.max(8, ((bottomMin - topMin) / 60) * PX_PER_HOUR);
+      out.push({ dayIndex, topPx, heightPx, title, clippedTop, clippedBottom });
+    }
+
+    cursor = nextBoundary;
+    dayIndex++;
+  }
+  return out;
 }
 
 /**
@@ -152,8 +172,9 @@ export function WeekCalendar({
   timezone,
   busy,
   proposed,
-  startHour = 6,
-  endHour = 22,
+  system = [],
+  startHour = 5,
+  endHour = 24,
   compact = false
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
@@ -165,35 +186,33 @@ export function WeekCalendar({
     : "grid-cols-[3rem_repeat(7,minmax(0,1fr))]";
 
   // Build positioned arrays once, dropping events outside the window.
-  const busyPositions = busy
-    .map((b) => ({
-      ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title),
-      busy: true
-    }))
-    .filter((p): p is PositionedBlock & { busy: true } => p !== null && "dayIndex" in p);
-
-  const proposedPositions = proposed
-    .map((b) => ({
-      ...position(
-        b.startMs,
-        b.endMs,
-        weekStartMs,
-        timezone,
-        startHour,
-        endHour,
-        b.title
-      ),
-      isSegment: Boolean(b.segment)
-    }))
-    .filter(
-      (p): p is PositionedBlock & { isSegment: boolean } => p !== null && "dayIndex" in p
+  const busyPositions: PositionedBlock[] = [];
+  for (const b of busy) {
+    busyPositions.push(
+      ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title)
     );
+  }
+
+  const systemPositions: Array<PositionedBlock & { kind: SystemBlock["system"] }> = [];
+  for (const b of system) {
+    const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+    for (const s of slices) systemPositions.push({ ...s, kind: b.system });
+  }
+
+  const proposedPositions: Array<PositionedBlock & { isSegment: boolean }> = [];
+  for (const b of proposed) {
+    const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+    for (const s of slices) proposedPositions.push({ ...s, isSegment: Boolean(b.segment) });
+  }
+
+  const hasSleep = systemPositions.some((p) => p.kind === "sleep");
+  const hasTravel = systemPositions.some((p) => p.kind === "travel");
 
   return (
     <div className="card p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
         <div className="font-semibold">This week</div>
-        <Legend />
+        <Legend hasSleep={hasSleep} hasTravel={hasTravel} />
       </div>
       <div className="overflow-x-auto">
         <div className={`grid ${minWidthClass} ${gridColsClass} gap-1`}>
@@ -216,6 +235,11 @@ export function WeekCalendar({
                 .map((p, i) => (
                   <BusyBlock key={`b${i}`} block={p} />
                 ))}
+              {systemPositions
+                .filter((p) => p.dayIndex === dayIdx)
+                .map((p, i) => (
+                  <SystemBlockView key={`s${i}`} block={p} />
+                ))}
               {proposedPositions
                 .filter((p) => p.dayIndex === dayIdx)
                 .map((p, i) => (
@@ -229,16 +253,28 @@ export function WeekCalendar({
   );
 }
 
-function Legend() {
+function Legend({ hasSleep, hasTravel }: { hasSleep: boolean; hasTravel: boolean }) {
   return (
-    <div className="flex items-center gap-3 text-ink-400">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-400">
       <span className="inline-flex items-center gap-1">
         <span
           aria-hidden
           className="block h-3 w-3 rounded-sm border border-ink-300 bg-ink-200/70 dark:border-ink-600 dark:bg-ink-600/40"
         />
-        Existing events
+        Existing
       </span>
+      {hasSleep && (
+        <span className="inline-flex items-center gap-1">
+          <span aria-hidden className="block h-3 w-3 rounded-sm bg-indigo-300/60 dark:bg-indigo-400/40" />
+          Sleep
+        </span>
+      )}
+      {hasTravel && (
+        <span className="inline-flex items-center gap-1">
+          <span aria-hidden className="block h-3 w-3 rounded-sm bg-amber-300/60 dark:bg-amber-400/40" />
+          Travel
+        </span>
+      )}
       <span className="inline-flex items-center gap-1">
         <span aria-hidden className="block h-3 w-3 rounded-sm bg-accent" />
         Proposed
@@ -321,6 +357,29 @@ function BusyBlock({ block }: { block: PositionedBlock }) {
       <span className="line-clamp-2 leading-tight">{block.title}</span>
       {block.clippedTop && <span className="sr-only">starts earlier</span>}
       {block.clippedBottom && <span className="sr-only">ends later</span>}
+    </div>
+  );
+}
+
+function SystemBlockView({
+  block
+}: {
+  block: PositionedBlock & { kind: SystemBlock["system"] };
+}) {
+  // Sleep gets a calm violet; travel gets a warm amber. Both sit between the
+  // grey "existing" layer and the solid accent "proposed" layer in z-order so
+  // the user reads them as platform-reserved time, not user-chosen blocks.
+  const styles =
+    block.kind === "sleep"
+      ? "bg-indigo-200/70 text-indigo-900 dark:bg-indigo-500/30 dark:text-indigo-100"
+      : "bg-amber-200/70 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100";
+  return (
+    <div
+      title={block.title}
+      className={`absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] ${styles}`}
+      style={{ top: block.topPx, height: block.heightPx }}
+    >
+      <span className="line-clamp-2 leading-tight">{block.title}</span>
     </div>
   );
 }

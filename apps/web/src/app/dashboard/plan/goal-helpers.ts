@@ -103,8 +103,14 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   if (goal.frequencyPerWeek !== undefined) {
     chips.push({ key: "frequency", label: `${goal.frequencyPerWeek}×/wk` });
   }
-  if (goal.dayOfWeek) {
-    chips.push({ key: "day", label: DAY_LABELS[goal.dayOfWeek] ?? goal.dayOfWeek });
+  const pinnedDays = goal.daysOfWeek?.length
+    ? goal.daysOfWeek
+    : goal.dayOfWeek
+      ? [goal.dayOfWeek]
+      : [];
+  if (pinnedDays.length > 0) {
+    const dayLabel = pinnedDays.map((d) => DAY_LABELS[d] ?? d).join(" ");
+    chips.push({ key: "day", label: dayLabel });
   }
   if (goal.energyMode && goal.energyMode !== "neutral") {
     chips.push({ key: "energy", label: ENERGY_LABELS[goal.energyMode] });

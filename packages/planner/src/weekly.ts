@@ -10,7 +10,7 @@
  *   2. Reserve any non-negotiable consistency segments first (they cannot be
  *      displaced by goals).
  *   3. Allocate each goal greedily by priority, respecting:
- *        - per-day goal constraints (`dayOfWeek`, earliest/latestHour)
+ *        - per-day goal constraints (`dayOfWeek` / `daysOfWeek`, earliest/latestHour)
  *        - the user's `energyOrdering.mode`
  *        - Wheel-of-Life weekly minute floors per area
  *        - PPF minimum-touches and minimum-percent targets
@@ -402,15 +402,16 @@ function allocateGoal(
   let remainingMinutes = prepared.effectiveMinutes;
   if (remainingMinutes <= 0) return;
 
-  const allowedDays = goal.dayOfWeek
-    ? [DAY_INDEX[goal.dayOfWeek]]
-    : [0, 1, 2, 3, 4, 5, 6];
+  const allowedDays =
+    goal.daysOfWeek && goal.daysOfWeek.length > 0
+      ? goal.daysOfWeek.map((d) => DAY_INDEX[d])
+      : goal.dayOfWeek
+        ? [DAY_INDEX[goal.dayOfWeek]]
+        : [0, 1, 2, 3, 4, 5, 6];
 
   // How many days do we want this goal to occupy? frequencyPerWeek wins,
   // else a day-pinned goal stays on its single day, else spread across all 7.
-  const targetDays = goal.dayOfWeek
-    ? 1
-    : Math.min(allowedDays.length, norm.frequencyPerWeek ?? allowedDays.length);
+  const targetDays = Math.min(allowedDays.length, norm.frequencyPerWeek ?? allowedDays.length);
 
   // Per-day budget = total / targetDays, clamped by maxMinutesPerDay.
   let perDay = Math.ceil(remainingMinutes / targetDays);

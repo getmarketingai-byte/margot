@@ -108,6 +108,38 @@ describe("allocateWeek", () => {
     }
   });
 
+  it("respects multi-day pinning when daysOfWeek is set", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
+    const result = allocateWeek({
+      plan: {
+        id: "multi-day",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "md",
+            title: "Multi-day goal",
+            targetMinutes: 180,
+            daysOfWeek: ["tuesday", "thursday"],
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const blocks = result.blocks.filter((b) => b.goalId === "md");
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const b of blocks) {
+      const dayIdx = Math.floor((b.startMs - weekStartMs) / DAY_MS);
+      expect([1, 3]).toContain(dayIdx); // Tue or Thu only
+    }
+  });
+
   it("equal-shares free time across constraint-free goals", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const result = allocateWeek({

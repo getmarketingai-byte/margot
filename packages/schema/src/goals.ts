@@ -53,6 +53,11 @@ export const weeklyGoalSchema = z.object({
   /** When set, the goal must land on this day; otherwise the allocator floats it. */
   dayOfWeek: dayOfWeek.optional(),
   /**
+   * Optional set of allowed weekdays. This supersedes `dayOfWeek` when present
+   * and lets a goal be pinned to multiple days.
+   */
+  daysOfWeek: z.array(dayOfWeek).min(1).max(7).optional(),
+  /**
    * Legacy 1–5 priority. The new UI surfaces priority as goal order only; this
    * field stays for back-compat but defaults to 3 and is no longer required.
    */

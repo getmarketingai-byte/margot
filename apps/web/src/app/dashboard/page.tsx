@@ -8,6 +8,7 @@ import { loadSettings } from "@/lib/settings-store";
 import { loadLatestSnapshot } from "@/lib/snapshots";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
+import { computeSystemBlocks } from "@/lib/week-blocks";
 import { formatMinutes } from "./plan/goal-helpers";
 import { WeekCalendar } from "./week-calendar";
 
@@ -45,9 +46,10 @@ export default async function DashboardHome() {
     weekStartMs,
     weekEndMs
   ).catch(() => []);
+  const systemBlocks = computeSystemBlocks(weekStartMs, busy, settings.sleep, settings.travel);
   const allocation = allocateWeek({
     plan: planWithTz,
-    busy,
+    busy: [...busy, ...systemBlocks],
     settings,
     weekStartMs,
     weekEndMs
@@ -91,11 +93,12 @@ export default async function DashboardHome() {
         />
       )}
 
-      {(busy.length > 0 || allocation.blocks.length > 0) && (
+      {(busy.length > 0 || allocation.blocks.length > 0 || systemBlocks.length > 0) && (
         <WeekCalendar
           weekStartMs={weekStartMs}
           timezone={settings.timezone}
           busy={busy}
+          system={systemBlocks}
           proposed={allocation.blocks}
         />
       )}

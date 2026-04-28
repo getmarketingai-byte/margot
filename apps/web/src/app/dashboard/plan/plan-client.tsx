@@ -567,6 +567,7 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.minMinutesPerDay !== undefined) draft.minMinutesPerDay = goal.minMinutesPerDay;
   if (goal.maxMinutesPerDay !== undefined) draft.maxMinutesPerDay = goal.maxMinutesPerDay;
   if (goal.frequencyPerWeek !== undefined) draft.frequencyPerWeek = goal.frequencyPerWeek;
+  if (goal.daysOfWeek !== undefined) draft.daysOfWeek = goal.daysOfWeek;
   if (goal.dayOfWeek !== undefined) draft.dayOfWeek = goal.dayOfWeek;
   if (goal.wheelAreaId !== undefined) draft.wheelAreaId = goal.wheelAreaId;
   if (goal.ppfPillar !== undefined) draft.ppfPillar = goal.ppfPillar;
@@ -596,16 +597,33 @@ function OptionsEditor({
   const [maxUnit, setMaxUnit] = useState<"week" | "day">(
     draft.maxMinutesPerDay !== undefined ? "day" : "week"
   );
+  const [minAmountUnit, setMinAmountUnit] = useState<"hours" | "minutes">("hours");
+  const [maxAmountUnit, setMaxAmountUnit] = useState<"hours" | "minutes">("hours");
 
-  const minValue =
-    minUnit === "day" ? draft.minMinutesPerDay : draft.minMinutesPerWeek;
-  const maxValue =
-    maxUnit === "day" ? draft.maxMinutesPerDay : draft.maxMinutesPerWeek;
+  const minMinutes = minUnit === "day" ? draft.minMinutesPerDay : draft.minMinutesPerWeek;
+  const maxMinutes = maxUnit === "day" ? draft.maxMinutesPerDay : draft.maxMinutesPerWeek;
 
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
+  const pinnedDays = draft.daysOfWeek?.length
+    ? draft.daysOfWeek
+    : draft.dayOfWeek
+      ? [draft.dayOfWeek]
+      : [];
+
+  const toDisplayAmount = (minutes: number | undefined, amountUnit: "hours" | "minutes") => {
+    if (minutes === undefined) return "";
+    return amountUnit === "hours" ? String(minutes / 60) : String(minutes);
+  };
+  const fromDisplayAmount = (raw: string, amountUnit: "hours" | "minutes") => {
+    if (raw === "") return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    const minutes = amountUnit === "hours" ? n * 60 : n;
+    return Math.max(0, Math.round(minutes));
+  };
 
   const setMin = (raw: string) => {
-    const n = raw === "" ? undefined : Math.max(0, Math.round(Number(raw)));
+    const n = fromDisplayAmount(raw, minAmountUnit);
     if (minUnit === "day") {
       update({ minMinutesPerDay: n, minMinutesPerWeek: undefined });
     } else {
@@ -613,7 +631,8 @@ function OptionsEditor({
     }
   };
   const setMax = (raw: string) => {
-    const n = raw === "" ? undefined : Math.max(1, Math.round(Number(raw)));
+    const parsed = fromDisplayAmount(raw, maxAmountUnit);
+    const n = parsed === undefined ? undefined : Math.max(1, parsed);
     if (maxUnit === "day") {
       update({ maxMinutesPerDay: n, maxMinutesPerWeek: undefined });
     } else {
@@ -628,14 +647,23 @@ function OptionsEditor({
           <input
             type="number"
             min={0}
-            step={15}
-            value={minValue ?? ""}
+            step={minAmountUnit === "hours" ? 0.25 : 15}
+            value={toDisplayAmount(minMinutes, minAmountUnit)}
             onChange={(e) => setMin(e.target.value)}
             placeholder="0"
             className="field flex-1"
             autoFocus={autoFocus}
           />
-          <UnitToggle value={minUnit} onChange={setMinUnit} />
+          <UnitToggle
+            value={minAmountUnit}
+            onChange={setMinAmountUnit}
+            ariaLabel="Min amount unit"
+            options={[
+              { value: "hours", label: "h" },
+              { value: "minutes", label: "m" }
+            ]}
+          />
+          <UnitToggle value={minUnit} onChange={(v) => setMinUnit(v as "week" | "day")} />
         </div>
       </Field>
       <Field label="Max time (optional)" hint="Cap to keep this goal in check.">
@@ -643,13 +671,22 @@ function OptionsEditor({
           <input
             type="number"
             min={0}
-            step={15}
-            value={maxValue ?? ""}
+            step={maxAmountUnit === "hours" ? 0.25 : 15}
+            value={toDisplayAmount(maxMinutes, maxAmountUnit)}
             onChange={(e) => setMax(e.target.value)}
             placeholder="∞"
             className="field flex-1"
           />
-          <UnitToggle value={maxUnit} onChange={setMaxUnit} />
+          <UnitToggle
+            value={maxAmountUnit}
+            onChange={setMaxAmountUnit}
+            ariaLabel="Max amount unit"
+            options={[
+              { value: "hours", label: "h" },
+              { value: "minutes", label: "m" }
+            ]}
+          />
+          <UnitToggle value={maxUnit} onChange={(v) => setMaxUnit(v as "week" | "day")} />
         </div>
       </Field>
       <Field label="Times per week (optional)" hint="Spread across N days.">
@@ -667,21 +704,36 @@ function OptionsEditor({
           className="field"
         />
       </Field>
-      <Field label="Pin to day (optional)" hint="Lock the goal to a single day.">
-        <select
-          value={draft.dayOfWeek ?? ""}
-          onChange={(e) =>
-            update({ dayOfWeek: (e.target.value || undefined) as DayOfWeek | undefined })
-          }
-          className="field"
-        >
-          <option value="">Floating</option>
-          {DAY_OPTIONS.map((d) => (
-            <option key={d.value} value={d.value}>
-              {d.label}
-            </option>
-          ))}
-        </select>
+      <Field
+        label="Pin to day(s) (optional)"
+        hint="Choose which weekdays this goal can occur on."
+      >
+        <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+          {DAY_OPTIONS.map((d) => {
+            const checked = pinnedDays.includes(d.value);
+            return (
+              <label
+                key={d.value}
+                className="inline-flex items-center gap-1 rounded-md border border-ink-200 px-2 py-1 text-xs dark:border-ink-600"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                      ? [...pinnedDays, d.value]
+                      : pinnedDays.filter((day) => day !== d.value);
+                    update({
+                      daysOfWeek: next.length > 0 ? next : undefined,
+                      dayOfWeek: undefined
+                    });
+                  }}
+                />
+                <span>{d.label}</span>
+              </label>
+            );
+          })}
+        </div>
       </Field>
       <Field label="Energy mode" hint="When in the day this lands best.">
         <select
@@ -765,31 +817,39 @@ function Field({
 
 function UnitToggle({
   value,
-  onChange
+  onChange,
+  ariaLabel,
+  options
 }: {
-  value: "week" | "day";
-  onChange: (v: "week" | "day") => void;
+  value: string;
+  onChange: (v: string) => void;
+  ariaLabel?: string;
+  options?: ReadonlyArray<{ value: string; label: string }>;
 }) {
+  const toggleOptions = options ?? [
+    { value: "week", label: "/wk" },
+    { value: "day", label: "/day" }
+  ];
   return (
     <div
       role="radiogroup"
-      aria-label="Unit"
+      aria-label={ariaLabel ?? "Unit"}
       className="flex shrink-0 overflow-hidden rounded-md border border-ink-200 text-xs dark:border-ink-600"
     >
-      {(["week", "day"] as const).map((unit) => (
+      {toggleOptions.map((unit) => (
         <button
-          key={unit}
+          key={unit.value}
           type="button"
           role="radio"
-          aria-checked={value === unit}
-          onClick={() => onChange(unit)}
+          aria-checked={value === unit.value}
+          onClick={() => onChange(unit.value)}
           className={`px-2 py-1 ${
-            value === unit
+            value === unit.value
               ? "bg-accent text-accent-fg"
               : "text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
           }`}
         >
-          /{unit === "week" ? "wk" : "day"}
+          {unit.label}
         </button>
       ))}
     </div>

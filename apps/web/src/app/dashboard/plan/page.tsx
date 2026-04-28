@@ -6,6 +6,7 @@ import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
+import { computeSystemBlocks } from "@/lib/week-blocks";
 import { PlanClient } from "./plan-client";
 import { WeekCalendar } from "../week-calendar";
 
@@ -43,7 +44,17 @@ export default async function PlanPage() {
     weekStartMs,
     weekEndMs
   ).catch(() => []);
-  const allocation = allocateWeek({ plan, busy, settings, weekStartMs, weekEndMs });
+  // System blocks (sleep + travel) reserve time around real events. They're
+  // merged into the busy stream so goals don't land on top of them, and
+  // surfaced separately to the calendar for distinct visual styling.
+  const systemBlocks = computeSystemBlocks(weekStartMs, busy, settings.sleep, settings.travel);
+  const allocation = allocateWeek({
+    plan,
+    busy: [...busy, ...systemBlocks],
+    settings,
+    weekStartMs,
+    weekEndMs
+  });
 
   const scheduledByGoal: Record<string, number> = {};
   const effectiveTargetByGoal: Record<string, number> = {};
@@ -108,6 +119,7 @@ export default async function PlanPage() {
               weekStartMs={weekStartMs}
               timezone={settings.timezone}
               busy={busy}
+              system={systemBlocks}
               proposed={allocation.blocks}
               compact
             />
@@ -115,13 +127,14 @@ export default async function PlanPage() {
           <details className="card lg:hidden" open>
             <summary className="cursor-pointer text-sm font-semibold">Preview this week</summary>
             <p className="mt-1 text-xs text-ink-400">
-              Existing events from your connected calendars sit behind the proposed blocks below.
+              Existing events sit behind sleep, travel, and your proposed goal blocks.
             </p>
             <div className="mt-3">
               <WeekCalendar
                 weekStartMs={weekStartMs}
                 timezone={settings.timezone}
                 busy={busy}
+                system={systemBlocks}
                 proposed={allocation.blocks}
               />
             </div>
@@ -136,24 +149,27 @@ function CalendarPreview({
   weekStartMs,
   timezone,
   busy,
+  system,
   proposed,
   compact
 }: {
   weekStartMs: number;
   timezone: string;
   busy: Parameters<typeof WeekCalendar>[0]["busy"];
+  system: Parameters<typeof WeekCalendar>[0]["system"];
   proposed: Parameters<typeof WeekCalendar>[0]["proposed"];
   compact: boolean;
 }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="px-1 text-xs text-ink-400">
-        Existing events sit behind the proposed blocks.
+        Existing events sit behind sleep, travel, and your proposed goal blocks.
       </div>
       <WeekCalendar
         weekStartMs={weekStartMs}
         timezone={timezone}
         busy={busy}
+        system={system}
         proposed={proposed}
         compact={compact}
       />
