@@ -33,7 +33,7 @@ function commit(
 ): Promise<void> {
   return saveDailyReview(userId, review).then(() => {
     revalidatePath("/dashboard/review");
-    revalidatePath("/dashboard/review/weekly");
+    revalidatePath("/dashboard/week-review");
     revalidatePath("/dashboard/plan");
   });
 }

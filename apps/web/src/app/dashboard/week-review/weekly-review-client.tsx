@@ -9,7 +9,7 @@ import type {
 } from "@calendar-automations/schema";
 import type { GoalRollup, PaceStatus } from "@/lib/review-rollup";
 import { goalColorFromKey } from "@/lib/goal-colors";
-import { formatMinutes } from "../../plan/goal-helpers";
+import { formatMinutes } from "../plan/goal-helpers";
 import { applyCatchUp, clearCatchUp, upsertBurchardWeekly } from "./actions";
 
 interface WeeklyReviewClientProps {

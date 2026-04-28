@@ -25,7 +25,7 @@ async function loadForUser(weekStart?: string): Promise<{
 
 function commit(userId: string, review: WeeklyReview): Promise<void> {
   return saveWeeklyReview(userId, review).then(() => {
-    revalidatePath("/dashboard/review/weekly");
+    revalidatePath("/dashboard/week-review");
     revalidatePath("/dashboard/review");
     revalidatePath("/dashboard/plan");
   });

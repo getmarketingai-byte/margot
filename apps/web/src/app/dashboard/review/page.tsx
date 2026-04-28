@@ -202,7 +202,7 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
         </p>
         <div className="mt-2 text-xs">
           <Link
-            href="/dashboard/review/weekly"
+            href="/dashboard/week-review"
             className="text-accent hover:underline"
           >
             Week review →

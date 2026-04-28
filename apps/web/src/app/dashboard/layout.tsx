@@ -9,6 +9,7 @@ const PRIMARY_NAV = [
   { href: "/dashboard/plan", label: "Perfect Week" },
   { href: "/dashboard/energy", label: "Planning" },
   { href: "/dashboard/review", label: "Day sheet" },
+  { href: "/dashboard/week-review", label: "Week review" },
   { href: "/dashboard/calendars", label: "Calendars" }
 ];
 

@@ -445,7 +445,7 @@ function CatchUpBanner({
           </p>
         </div>
         <Link
-          href="/dashboard/review/weekly"
+          href="/dashboard/week-review"
           className="btn-secondary text-xs"
         >
           Adjust catch-up
