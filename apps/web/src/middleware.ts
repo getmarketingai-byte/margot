@@ -11,6 +11,7 @@ export default auth((req) => {
   if (!session?.user?.id) {
     const url = nextUrl.clone();
     url.pathname = "/api/auth/signin";
+    url.searchParams.set("callbackUrl", "/dashboard");
     return NextResponse.redirect(url);
   }
   // Subscription gating is enforced at the data layer (feed routes) so the

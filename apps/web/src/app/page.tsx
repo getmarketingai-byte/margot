@@ -55,7 +55,7 @@ export default function LandingPage() {
         <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">{PRODUCT.tagline}</h1>
         <p className="text-ink-600 dark:text-ink-200 sm:text-lg">{PRODUCT.shortDescription}</p>
         <div className="flex flex-wrap gap-3">
-          <Link href="/api/auth/signin" className="btn-primary">
+          <Link href="/api/auth/signin?callbackUrl=/dashboard" className="btn-primary">
             Sign in with Google
           </Link>
           <Link href="/dashboard" className="btn-secondary">

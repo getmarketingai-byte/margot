@@ -88,7 +88,7 @@ export default function FaqPage() {
           <Link href={CANONICAL_URLS.billing} className="btn-secondary">
             Open billing
           </Link>
-          <Link href="/api/auth/signin" className="btn-primary">
+          <Link href="/api/auth/signin?callbackUrl=/dashboard" className="btn-primary">
             Sign in to see plans
           </Link>
         </div>
