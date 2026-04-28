@@ -323,6 +323,22 @@ export const energyOrderingSchema = z.object({
 });
 export type EnergyOrderingSettings = z.infer<typeof energyOrderingSchema>;
 
+/* ─────────────────────────── 13. Allocator settings ──────────────────────── */
+
+export const allocatorSettingsSchema = z.object({
+  /**
+   * What to do when the sum of goal minimums exceeds the available free time.
+   *
+   *   "proportional": scale every floor down by the same ratio so each goal
+   *   still gets a fair share of what's available (default).
+   *
+   *   "strict": pay floors in goal-order until time runs out, leaving later
+   *   goals at zero. Surfaces them in a "not scheduled this week" list.
+   */
+  starvationMode: z.enum(["proportional", "strict"]).default("proportional")
+});
+export type AllocatorSettings = z.infer<typeof allocatorSettingsSchema>;
+
 /* ──────────────────────────── Composite ─────────────────────────────────── */
 
 export const userSettingsSchema = z.object({
@@ -343,7 +359,8 @@ export const userSettingsSchema = z.object({
   ppf: ppfSettingsSchema.default({} as never),
   hpp: hppRhythmSettingsSchema.default({} as never),
   consistency: consistencySettingsSchema.default({} as never),
-  energyOrdering: energyOrderingSchema.default({} as never)
+  energyOrdering: energyOrderingSchema.default({} as never),
+  allocator: allocatorSettingsSchema.default({} as never)
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 

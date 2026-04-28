@@ -40,7 +40,8 @@ export default async function CalendarsPage() {
   let calendarsLoadError = false;
   try {
     calendars = await listGoogleCalendars(userId);
-  } catch {
+  } catch (error) {
+    console.error("[calendars] failed to load Google calendars", error);
     calendarsLoadError = true;
   }
   const selected = new Set(

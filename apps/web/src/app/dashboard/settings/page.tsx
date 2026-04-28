@@ -40,8 +40,7 @@ export default async function SettingsPage() {
       <header>
         <h1 className="text-2xl font-semibold">Settings</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Schema version {settings.schemaVersion}. Changes regenerate your iCal feed on the next
-          job run.
+          Account-level basics. Changes regenerate your iCal feed on the next refresh.
         </p>
       </header>
 

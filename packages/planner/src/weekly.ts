@@ -22,6 +22,7 @@
  */
 
 import type {
+  AllocatorSettings,
   ConsistencySegment,
   EnergyOrderingSettings,
   PpfPillarKey,
@@ -33,15 +34,19 @@ import type {
 import type {
   DayOfWeek,
   EnergyMode,
+  NormalisedGoalTime,
   WeeklyGoal,
   WeeklyPlan
 } from "@calendar-automations/schema";
+import { normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps } from "./intervals";
 import { hourInTz, dateKeyInTz } from "./time";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Round all minute decisions to a 15-minute grid. */
+const QUANTUM = 15;
 
 const DAY_INDEX: Record<DayOfWeek, number> = {
   monday: 0,
@@ -82,6 +87,17 @@ export interface WeekMetrics {
   ppfGaps: Array<{ pillar: PpfPillarKey; reason: "minPercent" | "minTouches" }>;
   /** Total available minutes vs scheduled minutes. */
   utilisation: { availableMinutes: number; scheduledMinutes: number };
+  /**
+   * Set when goal floors exceed the available free time. UI surfaces this so
+   * the user can choose to relax a floor or add free time.
+   */
+  overcommitted?: {
+    neededMin: number;
+    availableMin: number;
+    mode: AllocatorSettings["starvationMode"];
+  };
+  /** Goals that received zero minutes (only populated under "strict" mode). */
+  notScheduled: Array<{ goalId: string; title: string; reason: "starved" }>;
 }
 
 export interface AllocateInput {
@@ -96,6 +112,16 @@ export interface AllocateInput {
 export interface AllocateResult {
   blocks: AllocatedBlock[];
   metrics: WeekMetrics;
+}
+
+/** Internal: a goal augmented with the bounds the allocator actually uses. */
+interface PreparedGoal {
+  goal: WeeklyGoal;
+  norm: NormalisedGoalTime;
+  /** Minutes the allocator will try to schedule across the week. */
+  effectiveMinutes: number;
+  /** Order in the user's list, used as the priority tie-breaker. */
+  index: number;
 }
 
 export function allocateWeek(input: AllocateInput): AllocateResult {
@@ -114,7 +140,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   const blocks: AllocatedBlock[] = [];
 
-  // Step 2: reserve non-negotiable segments.
+  // Reserve non-negotiable segments first — they cannot be displaced by goals.
   if (settings.consistency.enabled) {
     for (const seg of settings.consistency.segments) {
       if (!seg.nonNegotiable) continue;
@@ -122,29 +148,158 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     }
   }
 
-  // Step 3: allocate goals greedily by (priority desc, targetMinutes desc).
-  const sortedGoals = [...plan.goals].sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    return b.targetMinutes - a.targetMinutes;
+  // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
+  const wheelTopUps = wheelTopUpGoals(plan.goals, settings.wheel);
+  const goalsForAllocation = [...plan.goals, ...wheelTopUps];
+
+  // Three-pass distribution.
+  const totalFreeMin = days.reduce(
+    (acc, d) =>
+      acc + d.gaps.reduce((a, g) => a + Math.floor((g.endMs - g.startMs) / MS_PER_MIN), 0),
+    0
+  );
+  const overcommit = { mode: settings.allocator.starvationMode };
+  const { prepared, overcommitted, notScheduled } = distributeMinutes(
+    goalsForAllocation,
+    totalFreeMin,
+    overcommit
+  );
+
+  // Pass 3 — placement: schedule each prepared goal, day by day, honouring
+  // per-day caps. Order matters when free time is scarce, so we sort:
+  //   1. floor-bearing goals first (so their minimums actually land),
+  //   2. then by user-provided list order,
+  //   3. then by remaining minutes desc as a final tie-breaker.
+  prepared.sort((a, b) => {
+    const aHasFloor = (a.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
+    const bHasFloor = (b.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
+    if (aHasFloor !== bHasFloor) return aHasFloor - bHasFloor;
+    if (a.index !== b.index) return a.index - b.index;
+    return b.effectiveMinutes - a.effectiveMinutes;
   });
 
-  // Apply Wheel-of-Life floors as virtual goals, if any unmet by user goals.
-  const wheelTopUps = wheelTopUpGoals(sortedGoals, settings.wheel);
-  const allGoals = [...sortedGoals, ...wheelTopUps];
-
-  for (const goal of allGoals) {
-    allocateGoal(goal, days, blocks, settings.energyOrdering, tz);
+  for (const p of prepared) {
+    if (p.effectiveMinutes <= 0) continue;
+    allocateGoal(p, days, blocks, settings.energyOrdering, tz);
   }
 
-  // Step 4: within each day, sort to preserve the energy curve.
   if (settings.energyOrdering.mode !== "ignore") {
     sortBlocksByEnergyCurve(blocks, settings.energyOrdering);
   } else {
     blocks.sort((a, b) => a.startMs - b.startMs);
   }
 
-  const metrics = computeMetrics(plan, blocks, days, settings.wheel, settings.ppf);
+  const metrics = computeMetrics(plan, prepared, blocks, days, settings.wheel, settings.ppf);
+  if (overcommitted) metrics.overcommitted = overcommitted;
+  metrics.notScheduled = notScheduled;
   return { blocks, metrics };
+}
+
+/**
+ * Pass 1 + Pass 2: derive each goal's `effectiveMinutes` for the week.
+ *
+ *   - Pass 1 reserves every goal's `minMinutesPerWeek` as a floor.
+ *   - Pass 2 distributes the remaining free time evenly across goals that have
+ *     not yet hit their `maxMinutesPerWeek`. Goals with no time fields ("equal
+ *     share" goals) start at 0 and receive their slice in this pass.
+ *   - When floors exceed `totalFreeMin`, we either scale floors proportionally
+ *     (default) or pay them in user order until time runs out (strict).
+ */
+function distributeMinutes(
+  goals: readonly WeeklyGoal[],
+  totalFreeMin: number,
+  starvation: { mode: AllocatorSettings["starvationMode"] }
+): {
+  prepared: PreparedGoal[];
+  overcommitted: WeekMetrics["overcommitted"];
+  notScheduled: WeekMetrics["notScheduled"];
+} {
+  const prepared: PreparedGoal[] = goals.map((goal, index) => ({
+    goal,
+    norm: normaliseGoalTime(goal),
+    effectiveMinutes: 0,
+    index
+  }));
+
+  // Pass 1: reserve floors.
+  let floorTotal = 0;
+  for (const p of prepared) {
+    const floor = p.norm.minMinutesPerWeek ?? 0;
+    p.effectiveMinutes = floor;
+    floorTotal += floor;
+  }
+
+  let overcommitted: WeekMetrics["overcommitted"];
+  const notScheduled: WeekMetrics["notScheduled"] = [];
+
+  if (floorTotal > totalFreeMin) {
+    overcommitted = {
+      neededMin: floorTotal,
+      availableMin: totalFreeMin,
+      mode: starvation.mode
+    };
+    if (starvation.mode === "proportional") {
+      const ratio = totalFreeMin / Math.max(1, floorTotal);
+      for (const p of prepared) {
+        p.effectiveMinutes = quantise(p.effectiveMinutes * ratio);
+      }
+    } else {
+      // Strict: pay floors in goal order until time runs out, zero the rest.
+      let budget = totalFreeMin;
+      for (const p of prepared) {
+        const want = p.effectiveMinutes;
+        const give = Math.min(want, Math.max(0, budget));
+        p.effectiveMinutes = quantise(give);
+        budget -= give;
+        if (give < want) {
+          notScheduled.push({ goalId: p.goal.id, title: p.goal.title, reason: "starved" });
+        }
+      }
+    }
+    return { prepared, overcommitted, notScheduled };
+  }
+
+  // Pass 2: equal-share the remainder up to each goal's ceiling.
+  let remainder = totalFreeMin - floorTotal;
+  // Anyone whose effective minutes is below their cap (or who has no cap) is
+  // eligible to receive more time. Equal-share goals (no time fields at all)
+  // and goals with a floor below max both count.
+  const eligible = () =>
+    prepared.filter((p) => {
+      const cap = p.norm.maxMinutesPerWeek;
+      // Pinned-target goals (min == max via legacy) shouldn't grow.
+      if (cap !== undefined && p.effectiveMinutes >= cap) return false;
+      // Goals that explicitly opted out of equal share by setting only a floor
+      // still grow — having a floor doesn't disqualify you from extra time.
+      // Goals with NO bounds at all are equal-share too.
+      return true;
+    });
+
+  // We iterate up to `prepared.length` rounds, capping or fully consuming.
+  let rounds = prepared.length + 1;
+  while (remainder >= QUANTUM && rounds-- > 0) {
+    const set = eligible();
+    if (set.length === 0) break;
+    const share = quantise(remainder / set.length);
+    if (share <= 0) break;
+    let consumed = 0;
+    for (const p of set) {
+      const cap = p.norm.maxMinutesPerWeek;
+      const headroom = cap === undefined ? share : Math.max(0, cap - p.effectiveMinutes);
+      const give = Math.min(share, headroom, remainder - consumed);
+      if (give <= 0) continue;
+      p.effectiveMinutes += give;
+      consumed += give;
+    }
+    if (consumed === 0) break;
+    remainder -= consumed;
+  }
+
+  return { prepared, overcommitted, notScheduled };
+}
+
+function quantise(min: number): number {
+  return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
 }
 
 /* ──────────────────────────── helpers ───────────────────────────────────── */
@@ -210,7 +365,12 @@ function wheelTopUpGoals(
   const minutesByArea: Record<string, number> = {};
   for (const g of realGoals) {
     if (!g.wheelAreaId) continue;
-    minutesByArea[g.wheelAreaId] = (minutesByArea[g.wheelAreaId] ?? 0) + g.targetMinutes;
+    // Estimate how much existing goals are already committing to this area.
+    // We use the simplest available signal — the floor (or legacy target) — so
+    // wheel top-ups only fire when the user clearly hasn't covered the area.
+    const norm = normaliseGoalTime(g);
+    const committed = norm.minMinutesPerWeek ?? norm.maxMinutesPerWeek ?? 0;
+    minutesByArea[g.wheelAreaId] = (minutesByArea[g.wheelAreaId] ?? 0) + committed;
   }
   const topUps: WeeklyGoal[] = [];
   for (const area of wheel.areas) {
@@ -220,7 +380,7 @@ function wheelTopUpGoals(
       topUps.push({
         id: `wheel-topup:${area.id}`,
         title: `${area.label} (Wheel floor)`,
-        targetMinutes: gap,
+        minMinutesPerWeek: gap,
         priority: 2,
         energyMode: "neutral",
         wheelAreaId: area.id,
@@ -232,42 +392,85 @@ function wheelTopUpGoals(
 }
 
 function allocateGoal(
-  goal: WeeklyGoal,
+  prepared: PreparedGoal,
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   blocks: AllocatedBlock[],
   energy: EnergyOrderingSettings,
   tz: string
 ): void {
-  let remainingMinutes = goal.targetMinutes;
+  const { goal, norm } = prepared;
+  let remainingMinutes = prepared.effectiveMinutes;
+  if (remainingMinutes <= 0) return;
+
   const allowedDays = goal.dayOfWeek
     ? [DAY_INDEX[goal.dayOfWeek]]
     : [0, 1, 2, 3, 4, 5, 6];
 
-  // Spread evenly when floating; concentrate when day-pinned.
-  const perDay = goal.dayOfWeek
-    ? goal.targetMinutes
-    : Math.ceil(goal.targetMinutes / allowedDays.length);
+  // How many days do we want this goal to occupy? frequencyPerWeek wins,
+  // else a day-pinned goal stays on its single day, else spread across all 7.
+  const targetDays = goal.dayOfWeek
+    ? 1
+    : Math.min(allowedDays.length, norm.frequencyPerWeek ?? allowedDays.length);
 
-  for (const dayIdx of allowedDays) {
-    if (remainingMinutes <= 0) break;
-    const day = days[dayIdx]!;
-    const slot = pickGapForGoal(day.gaps, goal, perDay, energy, tz);
-    if (!slot) continue;
-    const usedMinutes = Math.min(remainingMinutes, perDay, slot.minutes);
-    const ms = usedMinutes * MS_PER_MIN;
-    const { startMs, endMs } = placeBlockInGap(slot.gap, ms, goal, tz);
-    consumeFromGaps(day.gaps, startMs, endMs);
-    blocks.push({
-      goalId: goal.id,
-      title: goal.title,
-      startMs,
-      endMs,
-      energyMode: goal.energyMode,
-      ...(goal.wheelAreaId !== undefined ? { wheelAreaId: goal.wheelAreaId } : {}),
-      ...(goal.ppfPillar !== undefined ? { ppfPillar: goal.ppfPillar } : {}),
-      ...(goal.hp6Habit !== undefined ? { hp6Habit: goal.hp6Habit } : {})
-    });
-    remainingMinutes -= usedMinutes;
+  // Per-day budget = total / targetDays, clamped by maxMinutesPerDay.
+  let perDay = Math.ceil(remainingMinutes / targetDays);
+  if (norm.maxMinutesPerDay !== undefined) {
+    perDay = Math.min(perDay, norm.maxMinutesPerDay);
+  }
+  if (perDay <= 0) return;
+
+  // If the user set a daily floor, ensure each scheduled day lands at least that.
+  const minPerDay = norm.minMinutesPerDay ?? 0;
+  const perDayBudget = Math.max(perDay, minPerDay);
+
+  // We may need to walk the days more than once when frequencyPerWeek limits
+  // us to N days but our first pass couldn't place the full budget. Two rounds
+  // is plenty: once to land each day's first chunk, once to top up days that
+  // had headroom.
+  for (let pass = 0; pass < 2 && remainingMinutes > 0; pass++) {
+    let daysScheduledThisPass = 0;
+    for (const dayIdx of allowedDays) {
+      if (remainingMinutes <= 0) break;
+      if (norm.frequencyPerWeek !== undefined && pass === 0 && daysScheduledThisPass >= targetDays)
+        break;
+      const day = days[dayIdx]!;
+      const dayMinutesAlready = blocks
+        .filter((b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs)
+        .reduce((acc, b) => acc + Math.floor((b.endMs - b.startMs) / MS_PER_MIN), 0);
+      const dayHeadroom =
+        norm.maxMinutesPerDay !== undefined
+          ? Math.max(0, norm.maxMinutesPerDay - dayMinutesAlready)
+          : perDayBudget;
+      if (dayHeadroom < QUANTUM) continue;
+      const slot = pickGapForGoal(day.gaps, goal, dayHeadroom, energy, tz);
+      if (!slot) continue;
+      const wantThisDay = Math.min(remainingMinutes, perDayBudget, dayHeadroom);
+      const usedMinutes = Math.min(wantThisDay, slot.minutes);
+      if (usedMinutes < QUANTUM) continue;
+      // Honour minMinutesPerDay: never place a tiny block when the user asked
+      // for at least N minutes, unless the gap can't accommodate.
+      if (minPerDay > 0 && usedMinutes < minPerDay && slot.minutes >= minPerDay) {
+        // Try again with a bigger ask.
+        const bigger = Math.min(remainingMinutes, dayHeadroom, slot.minutes);
+        if (bigger < minPerDay) continue;
+      }
+      const ms = usedMinutes * MS_PER_MIN;
+      const { startMs, endMs } = placeBlockInGap(slot.gap, ms, goal, tz);
+      consumeFromGaps(day.gaps, startMs, endMs);
+      blocks.push({
+        goalId: goal.id,
+        title: goal.title,
+        startMs,
+        endMs,
+        energyMode: goal.energyMode,
+        ...(goal.wheelAreaId !== undefined ? { wheelAreaId: goal.wheelAreaId } : {}),
+        ...(goal.ppfPillar !== undefined ? { ppfPillar: goal.ppfPillar } : {}),
+        ...(goal.hp6Habit !== undefined ? { hp6Habit: goal.hp6Habit } : {})
+      });
+      remainingMinutes -= usedMinutes;
+      daysScheduledThisPass++;
+    }
+    if (daysScheduledThisPass === 0) break;
   }
 }
 
@@ -334,14 +537,23 @@ function sortBlocksByEnergyCurve(
 
 function computeMetrics(
   plan: WeeklyPlan,
+  prepared: readonly PreparedGoal[],
   blocks: readonly AllocatedBlock[],
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   wheel: WheelSettings,
   ppf: PpfSettings
 ): WeekMetrics {
   const perGoal: Record<string, { scheduledMinutes: number; targetMinutes: number }> = {};
+  // Target = the bounds the allocator decided to pursue this week, which for
+  // legacy goals matches `targetMinutes` and for new goals reflects the
+  // floor + equal-share allocation.
+  const preparedById = new Map(prepared.map((p) => [p.goal.id, p] as const));
   for (const g of plan.goals) {
-    perGoal[g.id] = { scheduledMinutes: 0, targetMinutes: g.targetMinutes };
+    const p = preparedById.get(g.id);
+    perGoal[g.id] = {
+      scheduledMinutes: 0,
+      targetMinutes: p?.effectiveMinutes ?? g.targetMinutes ?? 0
+    };
   }
 
   const wheelMinutes: Record<string, number> = {};
@@ -403,7 +615,8 @@ function computeMetrics(
     ppfTouches,
     ppfPercent,
     ppfGaps,
-    utilisation: { availableMinutes, scheduledMinutes: totalScheduled }
+    utilisation: { availableMinutes, scheduledMinutes: totalScheduled },
+    notScheduled: []
   };
 }
 

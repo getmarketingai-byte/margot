@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 
 const FEEDS: { kind: FeedKind; name: string; description: string }[] = [
   { kind: "all", name: "Everything", description: "All generated events in one feed." },
-  { kind: "weekly", name: "Weekly goals", description: "Goal blocks + non-negotiable segments." },
-  { kind: "timemap", name: "Time map", description: "Routine and timemap band events." },
+  { kind: "weekly", name: "Perfect Week goals", description: "Goal blocks + non-negotiable segments." },
+  { kind: "timemap", name: "Time map", description: "Routine and time-map events." },
   { kind: "sleep", name: "Sleep", description: "Computed sleep blocks." },
   { kind: "travel", name: "Travel", description: "Drive blocks generated from event locations." }
 ];

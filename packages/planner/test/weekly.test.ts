@@ -107,4 +107,146 @@ describe("allocateWeek", () => {
       expect(dayIdx).toBe(4); // Friday is day 4 (0=Mon)
     }
   });
+
+  it("equal-shares free time across constraint-free goals", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "equal",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          { id: "a", title: "A", priority: 3, energyMode: "neutral", ppfHorizon: "unspecified" },
+          { id: "b", title: "B", priority: 3, energyMode: "neutral", ppfHorizon: "unspecified" },
+          { id: "c", title: "C", priority: 3, energyMode: "neutral", ppfHorizon: "unspecified" }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const targets = ["a", "b", "c"].map((id) => result.metrics.perGoal[id]!.targetMinutes);
+    const max = Math.max(...targets);
+    const min = Math.min(...targets);
+    expect(max - min).toBeLessThanOrEqual(15);
+    expect(min).toBeGreaterThan(0);
+  });
+
+  it("honours minMinutesPerWeek as a floor before equal-share", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "floor",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "admin",
+            title: "Admin",
+            minMinutesPerWeek: 300,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "free",
+            title: "Free",
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["admin"]!.targetMinutes).toBeGreaterThanOrEqual(300);
+  });
+
+  it("clamps daily allocation to maxMinutesPerDay", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "cap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "admin",
+            title: "Admin",
+            minMinutesPerWeek: 600,
+            maxMinutesPerDay: 60,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const adminBlocks = result.blocks.filter((b) => b.goalId === "admin");
+    const byDay: Record<number, number> = {};
+    for (const b of adminBlocks) {
+      const dayIdx = Math.floor((b.startMs - weekStartMs) / DAY_MS);
+      const mins = (b.endMs - b.startMs) / 60_000;
+      byDay[dayIdx] = (byDay[dayIdx] ?? 0) + mins;
+    }
+    for (const mins of Object.values(byDay)) {
+      expect(mins).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("flags overcommitment when floors exceed available time (proportional default)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    // One day's worth of busy events for all 7 days to drastically reduce free time.
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      busy.push({
+        id: `b${d}`,
+        startMs: weekStartMs + d * DAY_MS + 0,
+        endMs: weekStartMs + d * DAY_MS + 23 * HOUR_MS,
+        busy: true
+      });
+    }
+    const result = allocateWeek({
+      plan: {
+        id: "starved",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "a",
+            title: "A",
+            minMinutesPerWeek: 600,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "b",
+            title: "B",
+            minMinutesPerWeek: 600,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.overcommitted).toBeDefined();
+    expect(result.metrics.overcommitted!.mode).toBe("proportional");
+    expect(result.metrics.overcommitted!.neededMin).toBeGreaterThan(
+      result.metrics.overcommitted!.availableMin
+    );
+  });
 });
