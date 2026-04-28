@@ -2,6 +2,8 @@ import { revalidatePath } from "next/cache";
 import { routingProviderSchema } from "@calendar-automations/schema";
 import { auth } from "@/lib/auth";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
+import { PRODUCT } from "@/lib/marketing";
+import { FeedbackForm } from "./feedback-form";
 
 export const dynamic = "force-dynamic";
 
@@ -321,6 +323,15 @@ export default async function SettingsPage() {
             <button type="submit" className="btn-primary w-full">Save weather settings</button>
           </div>
         </form>
+      </section>
+
+      <section className="card">
+        <h2 className="text-sm font-semibold">Bug or feature request</h2>
+        <p className="mt-1 text-xs text-ink-400">
+          Found a bug or have an idea? This opens your mail client with the details prefilled so
+          you can review and send.
+        </p>
+        <FeedbackForm contactEmail={PRODUCT.contactEmail} userEmail={session?.user?.email ?? null} />
       </section>
 
       <details className="card">
