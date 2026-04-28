@@ -62,16 +62,18 @@ export const timemapSettingsSchema = z.object({
   cumulativeDeepWork: z.boolean().default(false),
   morningRoutine: z
     .object({
+      enabled: z.boolean().default(false),
       title: z.string().default("[MorningRoutine]"),
       minutes: positiveInt.default(30)
     })
-    .default({ title: "[MorningRoutine]", minutes: 30 }),
+    .default({ enabled: false, title: "[MorningRoutine]", minutes: 30 }),
   shutdownRoutine: z
     .object({
+      enabled: z.boolean().default(false),
       title: z.string().default("[ShutdownRoutine]"),
       minutes: positiveInt.default(30)
     })
-    .default({ title: "[ShutdownRoutine]", minutes: 30 }),
+    .default({ enabled: false, title: "[ShutdownRoutine]", minutes: 30 }),
   errands: z
     .object({
       title: z.string().default("[Errands]"),

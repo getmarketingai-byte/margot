@@ -37,6 +37,10 @@ interface WeekCalendarProps {
    * stays the same so block heights remain readable.
    */
   compact?: boolean;
+  /** Subset of day indexes to render (Mon=0 ... Sun=6). Defaults to all days. */
+  dayIndices?: readonly number[];
+  /** Heading label for the calendar card. */
+  title?: string;
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -175,15 +179,21 @@ export function WeekCalendar({
   system = [],
   startHour = 5,
   endHour = 24,
-  compact = false
+  compact = false,
+  dayIndices,
+  title = "This week"
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
   const minWidthClass = compact ? "min-w-[420px]" : "min-w-[640px]";
   const timeColClass = compact ? "w-8" : "w-12";
+  const days = (dayIndices && dayIndices.length > 0 ? [...dayIndices] : [0, 1, 2, 3, 4, 5, 6]).filter(
+    (d) => d >= 0 && d <= 6
+  );
+  const dayCols = days.length || 7;
   const gridColsClass = compact
-    ? "grid-cols-[2rem_repeat(7,minmax(0,1fr))]"
-    : "grid-cols-[3rem_repeat(7,minmax(0,1fr))]";
+    ? `grid-cols-[2rem_repeat(${dayCols},minmax(0,1fr))]`
+    : `grid-cols-[3rem_repeat(${dayCols},minmax(0,1fr))]`;
 
   // Build positioned arrays once, dropping events outside the window.
   const busyPositions: PositionedBlock[] = [];
@@ -207,23 +217,30 @@ export function WeekCalendar({
 
   const hasSleep = systemPositions.some((p) => p.kind === "sleep");
   const hasTravel = systemPositions.some((p) => p.kind === "travel");
+  const hasRoutine = systemPositions.some((p) => p.kind === "routine");
 
   return (
     <div className="card p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
-        <div className="font-semibold">This week</div>
-        <Legend hasSleep={hasSleep} hasTravel={hasTravel} />
+        <div className="font-semibold">{title}</div>
+        <Legend hasSleep={hasSleep} hasTravel={hasTravel} hasRoutine={hasRoutine} />
       </div>
       <div className="overflow-x-auto">
         <div className={`grid ${minWidthClass} ${gridColsClass} gap-1`}>
           <div className={timeColClass} />
-          {DAY_LABELS.map((d, i) => (
-            <DayHeader key={d} label={d} dayIndex={i} weekStartMs={weekStartMs} timezone={timezone} />
+          {days.map((dayIdx) => (
+            <DayHeader
+              key={dayIdx}
+              label={DAY_LABELS[dayIdx] ?? ""}
+              dayIndex={dayIdx}
+              weekStartMs={weekStartMs}
+              timezone={timezone}
+            />
           ))}
 
           <HourColumn startHour={startHour} endHour={endHour} />
 
-          {Array.from({ length: 7 }).map((_, dayIdx) => (
+          {days.map((dayIdx) => (
             <div
               key={dayIdx}
               className="relative rounded border border-ink-200 dark:border-ink-600"
@@ -253,7 +270,15 @@ export function WeekCalendar({
   );
 }
 
-function Legend({ hasSleep, hasTravel }: { hasSleep: boolean; hasTravel: boolean }) {
+function Legend({
+  hasSleep,
+  hasTravel,
+  hasRoutine
+}: {
+  hasSleep: boolean;
+  hasTravel: boolean;
+  hasRoutine: boolean;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-400">
       <span className="inline-flex items-center gap-1">
@@ -267,6 +292,12 @@ function Legend({ hasSleep, hasTravel }: { hasSleep: boolean; hasTravel: boolean
         <span className="inline-flex items-center gap-1">
           <span aria-hidden className="block h-3 w-3 rounded-sm bg-indigo-300/60 dark:bg-indigo-400/40" />
           Sleep
+        </span>
+      )}
+      {hasRoutine && (
+        <span className="inline-flex items-center gap-1">
+          <span aria-hidden className="block h-3 w-3 rounded-sm bg-emerald-300/60 dark:bg-emerald-400/40" />
+          Routine
         </span>
       )}
       {hasTravel && (
@@ -366,13 +397,16 @@ function SystemBlockView({
 }: {
   block: PositionedBlock & { kind: SystemBlock["system"] };
 }) {
-  // Sleep gets a calm violet; travel gets a warm amber. Both sit between the
-  // grey "existing" layer and the solid accent "proposed" layer in z-order so
-  // the user reads them as platform-reserved time, not user-chosen blocks.
+  // Sleep gets a calm violet; travel gets a warm amber; routines get a soft
+  // emerald. All three sit between the grey "existing" layer and the solid
+  // accent "proposed" layer in z-order so the user reads them as
+  // platform-reserved time, not user-chosen blocks.
   const styles =
     block.kind === "sleep"
       ? "bg-indigo-200/70 text-indigo-900 dark:bg-indigo-500/30 dark:text-indigo-100"
-      : "bg-amber-200/70 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100";
+      : block.kind === "travel"
+        ? "bg-amber-200/70 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100"
+        : "bg-emerald-200/70 text-emerald-900 dark:bg-emerald-500/30 dark:text-emerald-100";
   return (
     <div
       title={block.title}

@@ -89,6 +89,43 @@ async function updateEnergy(formData: FormData): Promise<void> {
   revalidatePath("/dashboard/constraints");
 }
 
+async function updateRoutines(formData: FormData): Promise<void> {
+  "use server";
+  const session = await auth();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const morningEnabled = formData.get("morning_enabled") === "on";
+  const shutdownEnabled = formData.get("shutdown_enabled") === "on";
+  const morningMinutes = Math.max(
+    0,
+    Math.min(180, Number(formData.get("morning_minutes") ?? settings.timemap.morningRoutine.minutes))
+  );
+  const shutdownMinutes = Math.max(
+    0,
+    Math.min(180, Number(formData.get("shutdown_minutes") ?? settings.timemap.shutdownRoutine.minutes))
+  );
+  await saveSettings(userId, {
+    ...settings,
+    timemap: {
+      ...settings.timemap,
+      morningRoutine: {
+        ...settings.timemap.morningRoutine,
+        enabled: morningEnabled,
+        minutes: morningMinutes
+      },
+      shutdownRoutine: {
+        ...settings.timemap.shutdownRoutine,
+        enabled: shutdownEnabled,
+        minutes: shutdownMinutes
+      }
+    }
+  });
+  revalidatePath("/dashboard/constraints");
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/plan");
+}
+
 async function updateAllocator(formData: FormData): Promise<void> {
   "use server";
   const session = await auth();
@@ -120,6 +157,67 @@ export default async function ConstraintsPage() {
           independent; leave them collapsed if you don&apos;t need them.
         </p>
       </header>
+
+      <details className="card" open>
+        <summary className="cursor-pointer text-sm font-semibold">Daily routines</summary>
+        <p className="mt-1 text-xs text-ink-400">
+          Reserve a wind-down before bed and a buffer after waking. We&apos;ll place these
+          right around the sleep blocks so goals don&apos;t schedule on top.
+        </p>
+        <form action={updateRoutines} className="mt-3 grid gap-3 sm:grid-cols-2">
+          <fieldset className="rounded border border-ink-200 p-2 dark:border-ink-600">
+            <legend className="text-xs font-medium">Morning routine</legend>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                name="morning_enabled"
+                defaultChecked={settings.timemap.morningRoutine.enabled}
+              />
+              <span>Reserve time after wake</span>
+            </label>
+            <label className="mt-2 flex flex-col gap-1 text-xs">
+              Minutes
+              <input
+                type="number"
+                name="morning_minutes"
+                min={0}
+                max={180}
+                step={5}
+                defaultValue={settings.timemap.morningRoutine.minutes}
+                className="field"
+              />
+            </label>
+          </fieldset>
+          <fieldset className="rounded border border-ink-200 p-2 dark:border-ink-600">
+            <legend className="text-xs font-medium">Shutdown routine</legend>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                name="shutdown_enabled"
+                defaultChecked={settings.timemap.shutdownRoutine.enabled}
+              />
+              <span>Reserve time before bed</span>
+            </label>
+            <label className="mt-2 flex flex-col gap-1 text-xs">
+              Minutes
+              <input
+                type="number"
+                name="shutdown_minutes"
+                min={0}
+                max={180}
+                step={5}
+                defaultValue={settings.timemap.shutdownRoutine.minutes}
+                className="field"
+              />
+            </label>
+          </fieldset>
+          <div className="sm:col-span-2">
+            <button type="submit" className="btn-primary w-full text-xs">
+              Save routines
+            </button>
+          </div>
+        </form>
+      </details>
 
       <details className="card" open>
         <summary className="cursor-pointer text-sm font-semibold">When you&apos;re overcommitted</summary>

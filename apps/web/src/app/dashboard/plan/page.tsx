@@ -8,6 +8,7 @@ import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
 import { computeSystemBlocks } from "@/lib/week-blocks";
 import { PlanClient } from "./plan-client";
+import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +48,14 @@ export default async function PlanPage() {
   // System blocks (sleep + travel) reserve time around real events. They're
   // merged into the busy stream so goals don't land on top of them, and
   // surfaced separately to the calendar for distinct visual styling.
-  const systemBlocks = computeSystemBlocks(weekStartMs, busy, settings.sleep, settings.travel);
+  const systemBlocks = computeSystemBlocks(
+    weekStartMs,
+    busy,
+    settings.sleep,
+    settings.travel,
+    settings.timezone,
+    settings.timemap
+  );
   const allocation = allocateWeek({
     plan,
     busy: [...busy, ...systemBlocks],
@@ -81,66 +89,70 @@ export default async function PlanPage() {
         />
       ) : null}
 
-      {/* Two-column on lg+: goals on the left, sticky calendar preview on the right. */}
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div className="flex flex-col gap-5">
-          <PlanClient
-            initialGoals={plan.goals}
-            freeMinutesThisWeek={allocation.metrics.utilisation.availableMinutes}
-            wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
-            scheduledByGoal={scheduledByGoal}
-            effectiveTargetByGoal={effectiveTargetByGoal}
-          />
-
-          {allocation.metrics.notScheduled.length > 0 && (
-            <section className="card border-amber-300/40">
-              <h2 className="text-sm font-semibold">Not scheduled this week</h2>
-              <p className="text-xs text-ink-400">
-                With strict mode on, these goals didn&apos;t fit. Either soften their floors or
-                switch to proportional in Constraints.
-              </p>
-              <ul className="mt-2 list-disc pl-5 text-sm">
-                {allocation.metrics.notScheduled.map((n) => (
-                  <li key={n.goalId}>{n.title}</li>
-                ))}
-              </ul>
-            </section>
-          )}
-        </div>
-
-        {/*
-          On large screens this column becomes a sticky right rail so the
-          calendar stays visible while the goals list scrolls. On small
-          screens it stacks below the goals as a collapsible details block.
-        */}
-        <aside className="lg:sticky lg:top-6 lg:self-start">
-          <div className="hidden lg:block">
-            <CalendarPreview
-              weekStartMs={weekStartMs}
-              timezone={settings.timezone}
-              busy={busy}
-              system={systemBlocks}
-              proposed={allocation.blocks}
-              compact
+      <ResizableColumns
+        left={
+          <div className="flex flex-col gap-5">
+            <PlanClient
+              initialGoals={plan.goals}
+              freeMinutesThisWeek={allocation.metrics.utilisation.availableMinutes}
+              wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
+              scheduledByGoal={scheduledByGoal}
+              effectiveTargetByGoal={effectiveTargetByGoal}
             />
+
+            {allocation.metrics.notScheduled.length > 0 && (
+              <section className="card border-amber-300/40">
+                <h2 className="text-sm font-semibold">Not scheduled this week</h2>
+                <p className="text-xs text-ink-400">
+                  With strict mode on, these goals didn&apos;t fit. Either soften their floors or
+                  switch to proportional in Constraints.
+                </p>
+                <ul className="mt-2 list-disc pl-5 text-sm">
+                  {allocation.metrics.notScheduled.map((n) => (
+                    <li key={n.goalId}>{n.title}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </div>
-          <details className="card lg:hidden" open>
-            <summary className="cursor-pointer text-sm font-semibold">Preview this week</summary>
-            <p className="mt-1 text-xs text-ink-400">
-              Existing events sit behind sleep, travel, and your proposed goal blocks.
-            </p>
-            <div className="mt-3">
-              <WeekCalendar
-                weekStartMs={weekStartMs}
-                timezone={settings.timezone}
-                busy={busy}
-                system={systemBlocks}
-                proposed={allocation.blocks}
-              />
+        }
+        right={
+          <>
+            {/*
+              On large screens this column becomes a sticky right rail so the
+              calendar stays visible while the goals list scrolls. On small
+              screens it stacks below the goals as a collapsible details block.
+            */}
+            <div className="lg:sticky lg:top-6 lg:self-start">
+              <div className="hidden lg:block">
+                <CalendarPreview
+                  weekStartMs={weekStartMs}
+                  timezone={settings.timezone}
+                  busy={busy}
+                  system={systemBlocks}
+                  proposed={allocation.blocks}
+                  compact
+                />
+              </div>
+              <details className="card lg:hidden" open>
+                <summary className="cursor-pointer text-sm font-semibold">Preview this week</summary>
+                <p className="mt-1 text-xs text-ink-400">
+                  Existing events sit behind sleep, travel, and your proposed goal blocks.
+                </p>
+                <div className="mt-3">
+                  <WeekCalendar
+                    weekStartMs={weekStartMs}
+                    timezone={settings.timezone}
+                    busy={busy}
+                    system={systemBlocks}
+                    proposed={allocation.blocks}
+                  />
+                </div>
+              </details>
             </div>
-          </details>
-        </aside>
-      </div>
+          </>
+        }
+      />
     </div>
   );
 }

@@ -19,7 +19,7 @@ const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 6
 };
 
-function partsInTimezone(ms: number, timezone: string) {
+export function partsInTimezone(ms: number, timezone: string) {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     year: "numeric",
@@ -52,7 +52,7 @@ function partsInTimezone(ms: number, timezone: string) {
  * guess by reading back what timezone-aware formatting reports and correcting
  * for the offset. Two iterations are sufficient even across DST gaps.
  */
-function localMidnightMs(year: number, month: number, day: number, timezone: string): number {
+export function localMidnightMs(year: number, month: number, day: number, timezone: string): number {
   let guess = Date.UTC(year, month - 1, day);
   for (let i = 0; i < 3; i++) {
     const parts = partsInTimezone(guess, timezone);

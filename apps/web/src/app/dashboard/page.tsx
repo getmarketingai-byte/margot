@@ -28,6 +28,22 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   return { ...stored, id: row.id, weekStart, timezone };
 }
 
+function isoWeekdayIndexNow(timezone: string): number {
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
+    new Date()
+  );
+  const map: Record<string, number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6
+  };
+  return map[weekday] ?? 0;
+}
+
 export default async function DashboardHome() {
   const session = await auth();
   const userId = session!.user!.id!;
@@ -46,7 +62,14 @@ export default async function DashboardHome() {
     weekStartMs,
     weekEndMs
   ).catch(() => []);
-  const systemBlocks = computeSystemBlocks(weekStartMs, busy, settings.sleep, settings.travel);
+  const systemBlocks = computeSystemBlocks(
+    weekStartMs,
+    busy,
+    settings.sleep,
+    settings.travel,
+    settings.timezone,
+    settings.timemap
+  );
   const allocation = allocateWeek({
     plan: planWithTz,
     busy: [...busy, ...systemBlocks],
@@ -64,11 +87,30 @@ export default async function DashboardHome() {
   );
   const progress = targetMin > 0 ? Math.min(100, Math.round((scheduledMin / targetMin) * 100)) : 0;
 
-  // Pull the next 3 events that haven't ended yet.
+  const todayIndex = isoWeekdayIndexNow(settings.timezone);
+  const todayStartMs = weekStartMs + todayIndex * 24 * 60 * 60 * 1000;
+  const tomorrowStartMs = todayStartMs + 24 * 60 * 60 * 1000;
+
+  // Pull the next 3 generated events from both persisted snapshot output and
+  // the current in-memory allocation so the panel is always data-backed.
   const now = Date.now();
-  const upcoming = (snapshot?.events ?? [])
+  const upcoming = [
+    ...(snapshot?.events ?? []).map((e) => ({
+      uid: e.uid,
+      title: e.title,
+      startMs: e.startMs,
+      endMs: e.endMs
+    })),
+    ...allocation.blocks.map((b) => ({
+      uid: `${b.goalId}-${b.startMs}-${b.endMs}`,
+      title: b.title,
+      startMs: b.startMs,
+      endMs: b.endMs
+    }))
+  ]
     .filter((e) => e.endMs > now)
     .sort((a, b) => a.startMs - b.startMs)
+    .filter((e, i, arr) => i === 0 || !(e.startMs === arr[i - 1]!.startMs && e.title === arr[i - 1]!.title))
     .slice(0, 3);
 
   return (
@@ -93,17 +135,19 @@ export default async function DashboardHome() {
         />
       )}
 
+      <UpNext upcoming={upcoming} />
+
       {(busy.length > 0 || allocation.blocks.length > 0 || systemBlocks.length > 0) && (
         <WeekCalendar
           weekStartMs={weekStartMs}
           timezone={settings.timezone}
-          busy={busy}
-          system={systemBlocks}
-          proposed={allocation.blocks}
+          title="Today's schedule"
+          dayIndices={[todayIndex]}
+          busy={busy.filter((e) => e.endMs > todayStartMs && e.startMs < tomorrowStartMs)}
+          system={systemBlocks.filter((e) => e.endMs > todayStartMs && e.startMs < tomorrowStartMs)}
+          proposed={allocation.blocks.filter((e) => e.endMs > todayStartMs && e.startMs < tomorrowStartMs)}
         />
       )}
-
-      <UpNext upcoming={upcoming} />
 
       <section className="card flex flex-col gap-3">
         <h2 className="text-sm font-semibold">Quick actions</h2>

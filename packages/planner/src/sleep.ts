@@ -1,10 +1,25 @@
 /**
- * Sleep block placement — port of the core ideas in Sleep.gs.
+ * Sleep block placement — port of the core ideas in `Sleep.gs`.
  *
- * Reserves up to `durationHours` per night ending at the configured ideal wake
- * (or earlier when a busy event forces an earlier wake). Adapts around busy
- * events that fall inside the sleep window (e.g. shift work) by either
- * shifting the block or splitting it into two halves of at least `minBlockHours`.
+ * The legacy contract has three layers, smallest to largest:
+ *
+ *   1. **Target window.** Sleep ends at `targetEndMs` (the user's ideal wake,
+ *      possibly pulled earlier by an outbound drive) and runs back
+ *      `durationHours`. If nothing busy overlaps that span we use it as-is.
+ *
+ *   2. **Search window.** When the target collides with a busy event we widen
+ *      to `[windowStartMs, windowEndMs]` (typically 20:00 the night before
+ *      through 12:00 the wake day) and look for the first gap big enough.
+ *
+ *   3. **Split fallback.** If no single gap fits the desired duration we
+ *      pick the two largest gaps that each meet `minBlockHours` and split
+ *      the night across them. If even that fails we fall back to the largest
+ *      remaining gap and flag it as `underMinimum` so the caller can warn.
+ *
+ * The legacy code also refuses to "sleep in" off a late drive home — that
+ * concern is handled by the caller, which extends drive-home end times by
+ * `bufferAfterDriveHomeMinutes` before passing them in here. By the time we
+ * see the busy stream the drive-home buffer already shows up as occupied.
  */
 
 import type { SleepSettings } from "@calendar-automations/schema";
@@ -17,55 +32,100 @@ export interface PlacedSleep extends Interval {
   underMinimum: boolean;
 }
 
+export interface PlaceSleepOptions {
+  /**
+   * Preferred wake time in epoch ms. When provided, the placer first tries
+   * to schedule `[targetEndMs - durationHours, targetEndMs]` and only widens
+   * the search if that span overlaps a busy event. Defaults to `windowEndMs`
+   * for backward compatibility.
+   */
+  targetEndMs?: number;
+}
+
 const MS_PER_HOUR = 60 * 60 * 1000;
 
 /**
- * Build sleep blocks for each night's window in the planning range.
+ * Build sleep blocks for a single night's window.
  *
- * `windowStartMs` is the start of the first night's window (configured
- * `sleepBeginHour` on day D-1 in user TZ); the caller is responsible for
- * computing per-night windows in their timezone.
+ * `windowStartMs` is the earliest the user could plausibly sleep on this
+ * night (typically `sleep.windowStartHour` the day before in user TZ);
+ * `windowEndMs` is the latest acceptable wake time (typically
+ * `sleep.windowEndHour` on the wake day).
  */
 export function placeSleepBlock(
   windowStartMs: number,
   windowEndMs: number,
   busy: readonly BusyEvent[],
-  sleep: SleepSettings
+  sleep: SleepSettings,
+  options: PlaceSleepOptions = {}
 ): PlacedSleep[] {
   const merged = collectBusyIntervals(busy, windowStartMs, windowEndMs);
-  const gaps = freeGaps(windowStartMs, windowEndMs, merged);
   const desiredMs = sleep.durationHours * MS_PER_HOUR;
   const minMs = sleep.minBlockHours * MS_PER_HOUR;
 
-  // Prefer one contiguous block ending at windowEnd.
-  const trailing = gaps[gaps.length - 1];
-  if (trailing && trailing.endMs - trailing.startMs >= desiredMs) {
-    const start = trailing.endMs - desiredMs;
-    return [{ startMs: start, endMs: trailing.endMs, split: false, underMinimum: false }];
-  }
+  // 1. Target window: ideal wake time, walking back the desired duration.
+  //    The target lives inside the search window, so clamping is enough to
+  //    keep us from scheduling sleep before the user's "earliest bedtime".
+  const requestedEnd = options.targetEndMs ?? windowEndMs;
+  const targetEnd = Math.min(Math.max(requestedEnd, windowStartMs), windowEndMs);
+  const targetStart = Math.max(windowStartMs, targetEnd - desiredMs);
 
-  // Otherwise split across the two largest gaps that each meet minBlock.
-  const eligible = gaps.filter((g) => g.endMs - g.startMs >= minMs);
-  if (eligible.length === 0) {
-    if (gaps.length === 0) return [];
-    const fallback = gaps[gaps.length - 1]!;
+  if (targetEnd - targetStart >= minMs && !overlapsAny(targetStart, targetEnd, merged)) {
     return [
       {
-        startMs: fallback.startMs,
-        endMs: fallback.endMs,
+        startMs: targetStart,
+        endMs: targetEnd,
         split: false,
-        underMinimum: true
+        underMinimum: targetEnd - targetStart < desiredMs
       }
     ];
   }
-  eligible.sort((a, b) => b.endMs - b.startMs - (a.endMs - a.startMs));
-  const picks = eligible.slice(0, 2).sort((a, b) => a.startMs - b.startMs);
-  const total = picks.reduce((a, b) => a + (b.endMs - b.startMs), 0);
-  const isSplit = picks.length > 1;
-  return picks.map((p) => ({
-    startMs: p.startMs,
-    endMs: Math.min(p.endMs, p.startMs + desiredMs),
-    split: isSplit,
-    underMinimum: total < desiredMs
-  }));
+
+  // 2. Search window: prefer the latest gap that fits — that keeps sleep
+  //    near the target wake when the conflict was earlier in the night.
+  const gaps = freeGaps(windowStartMs, windowEndMs, merged);
+  if (gaps.length === 0) return [];
+
+  for (let i = gaps.length - 1; i >= 0; i--) {
+    const gap = gaps[i]!;
+    if (gap.endMs - gap.startMs >= desiredMs) {
+      const start = Math.max(gap.startMs, gap.endMs - desiredMs);
+      return [{ startMs: start, endMs: gap.endMs, split: false, underMinimum: false }];
+    }
+  }
+
+  // 3. Split fallback: two largest gaps meeting minBlockHours.
+  const eligible = gaps.filter((g) => g.endMs - g.startMs >= minMs);
+  if (eligible.length >= 2) {
+    eligible.sort((a, b) => b.endMs - b.startMs - (a.endMs - a.startMs));
+    const picks = eligible.slice(0, 2).sort((a, b) => a.startMs - b.startMs);
+    const total = picks.reduce((sum, p) => sum + (p.endMs - p.startMs), 0);
+    return picks.map((p) => ({
+      startMs: p.startMs,
+      endMs: Math.min(p.endMs, p.startMs + desiredMs),
+      split: true,
+      underMinimum: total < desiredMs
+    }));
+  }
+
+  // 4. Last resort: the single largest gap, marked underMinimum.
+  let largest = gaps[0]!;
+  for (const g of gaps) {
+    if (g.endMs - g.startMs > largest.endMs - largest.startMs) largest = g;
+  }
+  return [
+    {
+      startMs: largest.startMs,
+      endMs: largest.endMs,
+      split: false,
+      underMinimum: true
+    }
+  ];
+}
+
+function overlapsAny(startMs: number, endMs: number, busy: readonly Interval[]): boolean {
+  for (const b of busy) {
+    if (b.startMs < endMs && b.endMs > startMs) return true;
+  }
+  return false;
 }
