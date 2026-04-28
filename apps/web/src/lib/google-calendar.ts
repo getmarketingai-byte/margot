@@ -7,8 +7,12 @@
 
 import { google, type calendar_v3 } from "googleapis";
 import { eq, and } from "drizzle-orm";
-import type { BusyEvent } from "@calendar-automations/planner";
-import type { CalendarSource } from "@calendar-automations/schema";
+import { freeGaps, mergeIntervals, type BusyEvent, type Interval } from "@calendar-automations/planner";
+import {
+  calendarBusyModeForSource,
+  normaliseCalendarSource,
+  type CalendarSource
+} from "@calendar-automations/schema";
 import { db, schema } from "./db/index";
 
 interface GoogleAccount {
@@ -78,19 +82,23 @@ export async function fetchGoogleBusy(
   sources: readonly CalendarSource[],
   windowStartMs: number,
   windowEndMs: number
-): Promise<BusyEvent[]> {
+): Promise<{ busyEvents: BusyEvent[]; goalAvailabilityWindows: Record<string, Interval[]> }> {
   const account = await loadGoogleAccount(userId);
-  if (!account) return [];
+  if (!account) return { busyEvents: [], goalAvailabilityWindows: {} };
   const auth = buildOauthClient(account);
   const cal = google.calendar({ version: "v3", auth });
-  const out: BusyEvent[] = [];
+  const busyEvents: BusyEvent[] = [];
+  const blockedByGoal: Record<string, Interval[]> = {};
 
   for (const source of sources) {
-    if (source.provider !== "google" || !source.countAsBusy) continue;
+    const normalized = normaliseCalendarSource(source);
+    if (normalized.provider !== "google") continue;
+    const mode = calendarBusyModeForSource(normalized);
+    if (mode === "ignore") continue;
     let pageToken: string | undefined;
     do {
       const res = await cal.events.list({
-        calendarId: source.externalId,
+        calendarId: normalized.externalId,
         timeMin: new Date(windowStartMs).toISOString(),
         timeMax: new Date(windowEndMs).toISOString(),
         singleEvents: true,
@@ -102,14 +110,22 @@ export async function fetchGoogleBusy(
         const start = ev.start?.dateTime ?? ev.start?.date;
         const end = ev.end?.dateTime ?? ev.end?.date;
         if (!start || !end || !ev.id) continue;
-        const busy =
-          source.treatTransparentAsFree && ev.transparency === "transparent" ? false : true;
-        out.push({
-          sourceId: ev.id,
+        const startMs = new Date(start).getTime();
+        const endMs = new Date(end).getTime();
+        if (endMs <= startMs) continue;
+        const eventIsBusy = mode === "all-events" ? true : ev.transparency !== "transparent";
+        if (mode === "invert-free-busy") {
+          const goalId = normalized.availabilityGoalId;
+          if (!goalId || !eventIsBusy) continue;
+          (blockedByGoal[goalId] ??= []).push({ startMs, endMs });
+          continue;
+        }
+        busyEvents.push({
+          sourceId: `${normalized.externalId}:${ev.id}`,
           title: ev.summary ?? "(no title)",
-          startMs: new Date(start).getTime(),
-          endMs: new Date(end).getTime(),
-          busy,
+          startMs,
+          endMs,
+          busy: eventIsBusy,
           ...(ev.location ? { location: ev.location } : {}),
           source: "google"
         });
@@ -118,5 +134,11 @@ export async function fetchGoogleBusy(
     } while (pageToken);
   }
 
-  return out;
+  const goalAvailabilityWindows: Record<string, Interval[]> = {};
+  for (const [goalId, blocked] of Object.entries(blockedByGoal)) {
+    const mergedBlocked = mergeIntervals(blocked);
+    goalAvailabilityWindows[goalId] = freeGaps(windowStartMs, windowEndMs, mergedBlocked);
+  }
+
+  return { busyEvents, goalAvailabilityWindows };
 }

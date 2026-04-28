@@ -9,16 +9,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { renderIcs } from "@calendar-automations/planner";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { findFeedByToken, filterEventsForFeed } from "@/lib/feeds";
+import { findFeedByToken, filterEventsForFeed, normalizeTimemapTitlesForIcs } from "@/lib/feeds";
 import {
   FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS,
   runRegenerateForUser
 } from "@/lib/regenerate-user-snapshot";
 import { loadLatestSnapshot } from "@/lib/snapshots";
-import { hasActiveSubscription } from "@/lib/subscription";
+import { getBillingState } from "@/lib/subscription";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** Length of the gated placeholder event. Long enough to stand out in a day view. */
+const GATE_EVENT_DURATION_MS = 4 * 60 * 60 * 1000;
 
 export async function GET(
   _req: NextRequest,
@@ -34,10 +37,15 @@ export async function GET(
     ? await db.select().from(schema.users).where(eq(schema.users.id, feed.userId)).limit(1)
     : [];
   const user = userRows[0];
-  const subscribed = hasActiveSubscription(user?.subscriptionStatus ?? "none");
+  const billing = getBillingState({
+    subscriptionStatus: user?.subscriptionStatus ?? "none",
+    trialEndsAt: user?.trialEndsAt ?? null,
+    paymentGateBypass: user?.paymentGateBypass ?? false
+  });
+  const allowed = billing.allowed;
 
   let snapshot = await loadLatestSnapshot(feed.userId);
-  if (subscribed && db) {
+  if (allowed && db) {
     const stale =
       !snapshot ||
       Date.now() - snapshot.generatedAt >= FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS;
@@ -53,9 +61,11 @@ export async function GET(
 
   const events = snapshot ? filterEventsForFeed(snapshot.events, feed.feed) : [];
 
-  // When subscription lapses, return a single explanatory event rather than 404
-  // so users see a clear in-calendar message inside their existing app.
-  const finalEvents = subscribed
+  // When access is denied, return a single 4-hour explanatory event rather than
+  // 404 so users see an unmissable in-calendar message inside their existing
+  // app and can find their way back to the dashboard to resolve it.
+  const gateStartMs = Date.now();
+  const finalEvents = allowed
     ? events
     : [
         {
@@ -64,14 +74,15 @@ export async function GET(
           title: "Subscription required to refresh schedule",
           description:
             "Your Calendar Automations subscription is inactive. Visit the dashboard to resume.",
-          startMs: Date.now(),
-          endMs: Date.now() + 30 * 60 * 1000,
+          startMs: gateStartMs,
+          endMs: gateStartMs + GATE_EVENT_DURATION_MS,
           busy: false,
           tags: []
         }
       ];
 
-  const ics = renderIcs(finalEvents, {
+  const icsEvents = normalizeTimemapTitlesForIcs(finalEvents);
+  const ics = renderIcs(icsEvents, {
     calendarName: `Calendar Automations · ${feed.feed}`,
     domain: "calendar-automations",
     refreshIntervalMinutes: 30

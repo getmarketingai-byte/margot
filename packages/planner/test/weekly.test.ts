@@ -321,4 +321,44 @@ describe("allocateWeek", () => {
       result.metrics.overcommitted!.availableMin
     );
   });
+
+  it("restricts a goal to inverted-calendar availability windows", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
+    const result = allocateWeek({
+      plan: {
+        id: "availability",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "friend-call",
+            title: "Friend call",
+            minMinutesPerWeek: 120,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      goalAvailabilityWindows: {
+        "friend-call": [
+          // Tuesday 10:00-12:00 UTC only.
+          {
+            startMs: weekStartMs + DAY_MS + 10 * HOUR_MS,
+            endMs: weekStartMs + DAY_MS + 12 * HOUR_MS
+          }
+        ]
+      },
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+
+    const blocks = result.blocks.filter((b) => b.goalId === "friend-call");
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block.startMs).toBeGreaterThanOrEqual(weekStartMs + DAY_MS + 10 * HOUR_MS);
+      expect(block.endMs).toBeLessThanOrEqual(weekStartMs + DAY_MS + 12 * HOUR_MS);
+    }
+  });
 });

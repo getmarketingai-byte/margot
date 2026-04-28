@@ -103,6 +103,11 @@ export interface WeekMetrics {
 export interface AllocateInput {
   plan: WeeklyPlan;
   busy: readonly BusyEvent[];
+  /**
+   * Optional per-goal windows where that goal is allowed to be placed.
+   * Used by "invert-free-busy" calendar sources (friend availability).
+   */
+  goalAvailabilityWindows?: Record<string, Interval[]>;
   settings: UserSettings;
   /** Window covered by `busy`. Defaults to the seven days from plan.weekStart. */
   weekStartMs?: number;
@@ -180,7 +185,14 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   for (const p of prepared) {
     if (p.effectiveMinutes <= 0) continue;
-    allocateGoal(p, days, blocks, settings.energyOrdering, tz);
+    allocateGoal(
+      p,
+      days,
+      blocks,
+      settings.energyOrdering,
+      tz,
+      input.goalAvailabilityWindows?.[p.goal.id]
+    );
   }
 
   if (settings.energyOrdering.mode !== "ignore") {
@@ -402,7 +414,8 @@ function allocateGoal(
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   blocks: AllocatedBlock[],
   energy: EnergyOrderingSettings,
-  tz: string
+  tz: string,
+  availabilityWindows?: readonly Interval[]
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
@@ -449,7 +462,11 @@ function allocateGoal(
           ? Math.max(0, norm.maxMinutesPerDay - dayMinutesAlready)
           : perDayBudget;
       if (dayHeadroom < QUANTUM) continue;
-      const slot = pickGapForGoal(day.gaps, goal, dayHeadroom, energy, tz);
+      const candidateGaps = availabilityWindows
+        ? intersectWithAvailability(day.gaps, availabilityWindows, day.startMs, day.endMs)
+        : day.gaps;
+      if (candidateGaps.length === 0) continue;
+      const slot = pickGapForGoal(candidateGaps, goal, dayHeadroom, energy, tz);
       if (!slot) continue;
       const wantThisDay = Math.min(remainingMinutes, perDayBudget, dayHeadroom);
       const usedMinutes = Math.min(wantThisDay, slot.minutes);
@@ -479,6 +496,27 @@ function allocateGoal(
     }
     if (daysScheduledThisPass === 0) break;
   }
+}
+
+function intersectWithAvailability(
+  gaps: readonly Interval[],
+  availabilityWindows: readonly Interval[],
+  dayStartMs: number,
+  dayEndMs: number
+): Interval[] {
+  const dayWindows = availabilityWindows.filter(
+    (w) => w.endMs > dayStartMs && w.startMs < dayEndMs
+  );
+  if (dayWindows.length === 0) return [];
+  const out: Interval[] = [];
+  for (const gap of gaps) {
+    for (const window of dayWindows) {
+      const startMs = Math.max(gap.startMs, window.startMs);
+      const endMs = Math.min(gap.endMs, window.endMs);
+      if (endMs > startMs) out.push({ startMs, endMs });
+    }
+  }
+  return out;
 }
 
 function pickGapForGoal(

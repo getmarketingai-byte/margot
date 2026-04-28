@@ -21,16 +21,54 @@ const positiveNumber = z.number().nonnegative();
 
 /* ──────────────────────────── 1. Calendars & sources ─────────────────────── */
 
+export const calendarBusyModeSchema = z.enum([
+  "ignore",
+  "busy-only",
+  "all-events",
+  "invert-free-busy"
+]);
+export type CalendarBusyMode = z.infer<typeof calendarBusyModeSchema>;
+
 export const calendarSourceSchema = z.object({
   id: z.string().min(1),
   provider: z.enum(["google", "microsoft", "ics"]),
   externalId: z.string().min(1),
   displayName: z.string().min(1),
   color: z.string().optional(),
+  /**
+   * Canonical busy-mode selector used by new UI surfaces.
+   *
+   * Optional for backwards compatibility with existing rows that only store
+   * `countAsBusy`/`treatTransparentAsFree`.
+   */
+  busyMode: calendarBusyModeSchema.optional(),
+  /**
+   * Goal that must be scheduled inside this source's free windows when
+   * `busyMode` is `invert-free-busy`.
+   */
+  availabilityGoalId: z.string().min(1).optional(),
   countAsBusy: z.boolean().default(true),
   treatTransparentAsFree: z.boolean().default(true)
 });
 export type CalendarSource = z.infer<typeof calendarSourceSchema>;
+
+export function calendarBusyModeForSource(source: CalendarSource): CalendarBusyMode {
+  if (source.busyMode) return source.busyMode;
+  if (!source.countAsBusy) return "ignore";
+  return source.treatTransparentAsFree ? "busy-only" : "all-events";
+}
+
+export function normaliseCalendarSource(source: CalendarSource): CalendarSource {
+  const busyMode = calendarBusyModeForSource(source);
+  return {
+    ...source,
+    busyMode,
+    // Keep legacy booleans in sync so existing readers remain correct.
+    countAsBusy: busyMode === "busy-only" || busyMode === "all-events",
+    treatTransparentAsFree: busyMode !== "all-events",
+    availabilityGoalId: busyMode === "invert-free-busy" ? source.availabilityGoalId : undefined
+  };
+}
 
 export const calendarsSettingsSchema = z.object({
   sources: z.array(calendarSourceSchema).default([]),
@@ -419,15 +457,22 @@ export type UserSettings = z.infer<typeof userSettingsSchema>;
  * the current schema. Older versions can be upgraded here as new versions land.
  */
 export function migrateSettings(raw: unknown): UserSettings {
+  let parsed: UserSettings;
   if (raw && typeof raw === "object" && "schemaVersion" in raw) {
     const version = (raw as { schemaVersion: unknown }).schemaVersion;
     if (version === SETTINGS_SCHEMA_VERSION) {
-      return userSettingsSchema.parse(raw);
+      parsed = userSettingsSchema.parse(raw);
+      parsed.calendars.sources = parsed.calendars.sources.map((source) =>
+        normaliseCalendarSource(source)
+      );
+      return parsed;
     }
     // Future: if (version === 1) { raw = migrate1to2(raw); }
   }
-  return userSettingsSchema.parse({
+  parsed = userSettingsSchema.parse({
     ...(raw as object | null | undefined),
     schemaVersion: SETTINGS_SCHEMA_VERSION
   });
+  parsed.calendars.sources = parsed.calendars.sources.map((source) => normaliseCalendarSource(source));
+  return parsed;
 }

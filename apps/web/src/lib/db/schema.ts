@@ -36,6 +36,13 @@ export const users = pgTable("user", {
   subscriptionId: text("subscriptionId"),
   subscriptionPriceId: text("subscriptionPriceId"),
   subscriptionPeriodEnd: timestamp("subscriptionPeriodEnd", { mode: "date" }),
+  // App-side 7-day no-card trial. Set on user creation; checked by the feed
+  // gate even when `subscriptionStatus` is still "none".
+  trialEndsAt: timestamp("trialEndsAt", { mode: "date" }),
+  // Operator escape hatch. When true, the paid-feature gate is bypassed
+  // regardless of subscription/trial state. Set directly via SQL for trusted
+  // accounts (see ensure_uptodate.sql for the canonical update statement).
+  paymentGateBypass: boolean("paymentGateBypass").notNull().default(false),
   createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull()
 });
 

@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
+import { loadBillingState } from "@/lib/billing-state-server";
 import { AccountMenu } from "./account-menu";
+import { BillingBanner } from "./billing-banner";
 
 const PRIMARY_NAV = [
   { href: "/dashboard", label: "Today" },
@@ -19,6 +21,7 @@ const ACCOUNT_LINKS = [
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/api/auth/signin?callbackUrl=/dashboard");
+  const billing = await loadBillingState(session.user.id);
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 pb-28 pt-6 sm:max-w-4xl lg:max-w-6xl xl:max-w-7xl">
@@ -34,6 +37,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
           }}
         />
       </header>
+
+      <BillingBanner state={billing} />
 
       <main className="flex-1">{children}</main>
 

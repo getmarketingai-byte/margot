@@ -11,7 +11,9 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
+import { eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
+import { TRIAL_LENGTH_MS } from "./subscription";
 
 const authUrl = process.env.AUTH_URL ?? process.env.NEXTAUTH_URL;
 if (process.env.NODE_ENV === "production" && (!authUrl || authUrl.includes("localhost"))) {
@@ -58,6 +60,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.id = user.id;
       }
       return session;
+    }
+  },
+  events: {
+    // Seed the 7-day no-card trial when a user row is first created. Stripe
+    // subscription columns remain null until/unless they upgrade via Checkout.
+    async createUser({ user }) {
+      if (!db || !user.id) return;
+      try {
+        await db
+          .update(schema.users)
+          .set({ trialEndsAt: new Date(Date.now() + TRIAL_LENGTH_MS) })
+          .where(eq(schema.users.id, user.id));
+      } catch (err) {
+        console.error("[auth] failed to seed trialEndsAt", { userId: user.id, err });
+      }
     }
   }
 });

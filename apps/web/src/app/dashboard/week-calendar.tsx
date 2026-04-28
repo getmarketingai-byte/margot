@@ -245,12 +245,13 @@ export function WeekCalendar({
   const hasSleep = systemPositions.some((p) => p.kind === "sleep");
   const hasTravel = systemPositions.some((p) => p.kind === "travel");
   const hasRoutine = systemPositions.some((p) => p.kind === "routine");
+  const hasWeather = systemPositions.some((p) => p.kind === "weather");
 
   return (
     <div className="card p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
         <div className="font-semibold">{title}</div>
-        <Legend hasSleep={hasSleep} hasTravel={hasTravel} hasRoutine={hasRoutine} />
+        <Legend hasSleep={hasSleep} hasTravel={hasTravel} hasRoutine={hasRoutine} hasWeather={hasWeather} />
       </div>
       <div className="overflow-x-auto">
         <div className={`grid ${minWidthClass} gap-1`} style={{ gridTemplateColumns }}>
@@ -311,11 +312,13 @@ export function WeekCalendar({
 function Legend({
   hasSleep,
   hasTravel,
-  hasRoutine
+  hasRoutine,
+  hasWeather
 }: {
   hasSleep: boolean;
   hasTravel: boolean;
   hasRoutine: boolean;
+  hasWeather: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-400">
@@ -342,6 +345,12 @@ function Legend({
         <span className="inline-flex items-center gap-1">
           <span aria-hidden className="block h-3 w-3 rounded-sm bg-amber-300/60 dark:bg-amber-400/40" />
           Travel
+        </span>
+      )}
+      {hasWeather && (
+        <span className="inline-flex items-center gap-1">
+          <span aria-hidden className="block h-3 w-3 rounded-sm bg-sky-300/60 dark:bg-sky-400/40" />
+          Outside
         </span>
       )}
       <span className="inline-flex items-center gap-1">
@@ -445,6 +454,22 @@ function SystemBlockSlice({
   };
   pxPerHour: number;
 }) {
+  if (block.kind === "weather") {
+    return (
+      <div
+        title={block.title}
+        aria-label="Outside window"
+        className="absolute left-0.5 rounded-full border border-sky-400/80 bg-sky-300/70 dark:border-sky-300/80 dark:bg-sky-400/45"
+        style={{
+          top: block.topPx,
+          height: block.heightPx,
+          width: 4,
+          backgroundImage:
+            "repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 2px, rgba(255,255,255,0.05) 2px 4px)"
+        }}
+      />
+    );
+  }
   // Sleep gets a calm violet; travel gets a warm amber; routines get a soft
   // emerald. All three sit between the grey "existing" layer and the solid
   // accent "proposed" layer in z-order so the user reads them as

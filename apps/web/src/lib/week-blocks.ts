@@ -39,7 +39,7 @@ const MINUTE_MS = 60 * 1000;
 
 export interface SystemBlock extends BusyEvent {
   /** Distinguishes which subsystem produced the block (for UI styling). */
-  system: "sleep" | "travel" | "routine";
+  system: "sleep" | "travel" | "routine" | "weather";
   /**
    * Optional UI hint:
    *   - "split" / "underMinimum"  — sleep

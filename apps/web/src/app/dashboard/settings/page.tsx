@@ -71,6 +71,49 @@ async function updateTravel(formData: FormData): Promise<void> {
   revalidatePath("/dashboard/plan");
 }
 
+async function updateWeather(formData: FormData): Promise<void> {
+  "use server";
+  const session = await auth();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+
+  const next = {
+    ...settings,
+    weather: {
+      ...settings.weather,
+      enabled: formData.get("weather_enabled") === "on",
+      niceWeather: {
+        ...settings.weather.niceWeather,
+        maxRainProbabilityPercent: Math.max(
+          0,
+          Math.min(
+            100,
+            Number(
+              formData.get("maxRainProbabilityPercent") ??
+                settings.weather.niceWeather.maxRainProbabilityPercent
+            )
+          )
+        ),
+        minTempC: Math.max(-20, Math.min(50, Number(formData.get("minTempC") ?? settings.weather.niceWeather.minTempC))),
+        maxTempC: Math.max(-20, Math.min(60, Number(formData.get("maxTempC") ?? settings.weather.niceWeather.maxTempC))),
+        maxWindKmh: Math.max(
+          0,
+          Math.min(200, Number(formData.get("maxWindKmh") ?? settings.weather.niceWeather.maxWindKmh))
+        ),
+        maxUv: Math.max(0, Math.min(20, Number(formData.get("maxUv") ?? settings.weather.niceWeather.maxUv)))
+      },
+      useSunriseSunsetBeyondForecast: formData.get("useSunriseSunsetBeyondForecast") === "on",
+      extendInsideOutsideBeyondForecast: formData.get("extendInsideOutsideBeyondForecast") === "on"
+    }
+  };
+
+  await saveSettings(userId, next);
+  revalidatePath("/dashboard/settings");
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/plan");
+}
+
 export default async function SettingsPage() {
   const session = await auth();
   const userId = session!.user!.id!;
@@ -184,6 +227,98 @@ export default async function SettingsPage() {
           </label>
           <div className="sm:col-span-2">
             <button type="submit" className="btn-primary w-full">Save travel settings</button>
+          </div>
+        </form>
+      </section>
+
+      <section className="card">
+        <h2 className="text-sm font-semibold">Weather suitability for outside blocks</h2>
+        <p className="mt-1 text-xs text-ink-400">
+          These thresholds decide when an hour is considered suitable for <code>[Outside]</code>.
+          Saved per user and used for generated timemap weather blocks.
+        </p>
+        <form action={updateWeather} className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="flex items-center gap-2 text-xs sm:col-span-2">
+            <input type="checkbox" name="weather_enabled" defaultChecked={settings.weather.enabled} />
+            <span>Enable weather-based outside blocks</span>
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Max rain probability (%)
+            <input
+              name="maxRainProbabilityPercent"
+              type="number"
+              min={0}
+              max={100}
+              defaultValue={settings.weather.niceWeather.maxRainProbabilityPercent}
+              className="field"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Min temperature (C)
+            <input
+              name="minTempC"
+              type="number"
+              min={-20}
+              max={50}
+              step={0.5}
+              defaultValue={settings.weather.niceWeather.minTempC}
+              className="field"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Max temperature (C)
+            <input
+              name="maxTempC"
+              type="number"
+              min={-20}
+              max={60}
+              step={0.5}
+              defaultValue={settings.weather.niceWeather.maxTempC}
+              className="field"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Max wind (km/h)
+            <input
+              name="maxWindKmh"
+              type="number"
+              min={0}
+              max={200}
+              step={1}
+              defaultValue={settings.weather.niceWeather.maxWindKmh}
+              className="field"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Max UV index
+            <input
+              name="maxUv"
+              type="number"
+              min={0}
+              max={20}
+              step={0.5}
+              defaultValue={settings.weather.niceWeather.maxUv}
+              className="field"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              name="useSunriseSunsetBeyondForecast"
+              defaultChecked={settings.weather.useSunriseSunsetBeyondForecast}
+            />
+            <span>Use sunrise/sunset beyond forecast horizon</span>
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              name="extendInsideOutsideBeyondForecast"
+              defaultChecked={settings.weather.extendInsideOutsideBeyondForecast}
+            />
+            <span>Extend inside/outside beyond forecast horizon</span>
+          </label>
+          <div className="sm:col-span-2">
+            <button type="submit" className="btn-primary w-full">Save weather settings</button>
           </div>
         </form>
       </section>

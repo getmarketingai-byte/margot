@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { type WeeklyPlan } from "@calendar-automations/schema";
-import { allocateWeek } from "@calendar-automations/planner";
+import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
 import { auth } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
@@ -9,6 +9,7 @@ import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
 import { computeSystemBlocks } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
+import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
@@ -84,12 +85,13 @@ export default async function PlanPage() {
   const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
   const nextWeekStartMs = weekEndMs;
   const nextWeekEndMs = nextWeekStartMs + 7 * 24 * 60 * 60 * 1000;
-  const busyAll = await fetchGoogleBusy(
+  const busyFetch = await fetchGoogleBusy(
     userId,
     settings.calendars.sources,
     weekStartMs,
     nextWeekEndMs
-  ).catch(() => []);
+  ).catch(() => ({ busyEvents: [], goalAvailabilityWindows: {} }));
+  const busyAll = busyFetch.busyEvents;
   const busy = busyAll.filter((e) => e.endMs > weekStartMs && e.startMs < weekEndMs);
   const busyNextWeek = busyAll.filter((e) => e.endMs > nextWeekStartMs && e.startMs < nextWeekEndMs);
   // System blocks (sleep + travel) reserve time around real events. They're
@@ -119,6 +121,7 @@ export default async function PlanPage() {
   const allocation = allocateWeek({
     plan,
     busy: [...busy, ...systemBlocks],
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     settings,
     weekStartMs,
     weekEndMs
@@ -126,12 +129,32 @@ export default async function PlanPage() {
   const allocationNextWeek = allocateWeek({
     plan,
     busy: [...busyNextWeek, ...nextWeekSystemBlocks],
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     settings,
     weekStartMs: nextWeekStartMs,
     weekEndMs: nextWeekEndMs
   });
   const busyForCalendar = [...busy, ...busyNextWeek];
-  const systemBlocksForCalendar = [...systemBlocks, ...nextWeekSystemBlocks];
+  const weatherPreviewBlocks = (
+    await buildWeatherTimemapEvents({
+      userId,
+      windowStartMs: weekStartMs,
+      windowEndMs: nextWeekEndMs,
+      weather: settings.weather,
+      stableUid: buildStableUid
+    })
+  )
+    .filter((e) => e.title === "[Outside]")
+    .map((e) => ({
+      sourceId: `weather-${e.startMs}-${e.endMs}`,
+      title: e.title,
+      startMs: e.startMs,
+      endMs: e.endMs,
+      busy: true,
+      source: "internal" as const,
+      system: "weather" as const
+    }));
+  const systemBlocksForCalendar = [...systemBlocks, ...nextWeekSystemBlocks, ...weatherPreviewBlocks];
   const proposedForCalendar = [...allocation.blocks, ...allocationNextWeek.blocks];
 
   const scheduledByGoal: Record<string, number> = {};

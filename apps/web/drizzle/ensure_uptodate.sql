@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS "user" (
   "subscriptionId" text,
   "subscriptionPriceId" text,
   "subscriptionPeriodEnd" timestamp,
+  "trialEndsAt" timestamp,
+  "paymentGateBypass" boolean DEFAULT false NOT NULL,
   "createdAt" timestamp DEFAULT now() NOT NULL
 );
 
@@ -27,8 +29,22 @@ ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "subscriptionStatus" text DEFAULT 'n
 ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "subscriptionId" text;
 ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "subscriptionPriceId" text;
 ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "subscriptionPeriodEnd" timestamp;
+ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "trialEndsAt" timestamp;
+ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "paymentGateBypass" boolean DEFAULT false;
+ALTER TABLE "user" ALTER COLUMN "paymentGateBypass" SET DEFAULT false;
+UPDATE "user" SET "paymentGateBypass" = false WHERE "paymentGateBypass" IS NULL;
+ALTER TABLE "user" ALTER COLUMN "paymentGateBypass" SET NOT NULL;
+-- Backfill: existing users without an explicit trial get 7 days from now so
+-- they aren't immediately gated when this column is introduced.
+UPDATE "user"
+SET "trialEndsAt" = NOW() + INTERVAL '7 days'
+WHERE "trialEndsAt" IS NULL
+  AND ("subscriptionStatus" IS NULL OR "subscriptionStatus" = 'none');
 ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "createdAt" timestamp DEFAULT now();
 ALTER TABLE "user" ALTER COLUMN "createdAt" SET NOT NULL;
+
+-- Operator override: enable for a specific account by replacing the email.
+--   UPDATE "user" SET "paymentGateBypass" = true WHERE "email" = 'you@example.com';
 
 CREATE UNIQUE INDEX IF NOT EXISTS "user_email_unique" ON "user" ("email");
 

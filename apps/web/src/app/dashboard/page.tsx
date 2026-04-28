@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { type WeeklyPlan } from "@calendar-automations/schema";
-import { allocateWeek } from "@calendar-automations/planner";
+import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
 import { auth } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
@@ -9,6 +9,7 @@ import { loadLatestSnapshot } from "@/lib/snapshots";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
+import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { formatMinutes } from "./plan/goal-helpers";
 import { WeekCalendar } from "./week-calendar";
 
@@ -56,12 +57,13 @@ export default async function DashboardHome() {
 
   const weekStartMs = localMondayMidnightMs(settings.timezone);
   const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
-  const busy = await fetchGoogleBusy(
+  const busyFetch = await fetchGoogleBusy(
     userId,
     settings.calendars.sources,
     weekStartMs,
     weekEndMs
-  ).catch(() => []);
+  ).catch(() => ({ busyEvents: [], goalAvailabilityWindows: {} }));
+  const busy = busyFetch.busyEvents;
   const systemBlocks = await buildSystemBlocks({
     userId,
     settings,
@@ -69,9 +71,30 @@ export default async function DashboardHome() {
     busy,
     overrides: overridesFromPlan(planWithTz)
   });
+  const weatherPreviewBlocks = (
+    await buildWeatherTimemapEvents({
+      userId,
+      windowStartMs: weekStartMs,
+      windowEndMs: weekEndMs,
+      weather: settings.weather,
+      stableUid: buildStableUid
+    })
+  )
+    .filter((e) => e.title === "[Outside]")
+    .map((e) => ({
+      sourceId: `weather-${e.startMs}-${e.endMs}`,
+      title: e.title,
+      startMs: e.startMs,
+      endMs: e.endMs,
+      busy: true,
+      source: "internal" as const,
+      system: "weather" as const
+    }));
+  const systemBlocksForPreview = [...systemBlocks, ...weatherPreviewBlocks];
   const allocation = allocateWeek({
     plan: planWithTz,
     busy: [...busy, ...systemBlocks],
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     settings,
     weekStartMs,
     weekEndMs
@@ -144,7 +167,7 @@ export default async function DashboardHome() {
           title="Today's schedule"
           dayIndices={[todayIndex]}
           busy={busy.filter((e) => e.endMs > todayStartMs && e.startMs < tomorrowStartMs)}
-          system={systemBlocks.filter((e) => e.endMs > todayStartMs && e.startMs < tomorrowStartMs)}
+          system={systemBlocksForPreview.filter((e) => e.endMs > todayStartMs && e.startMs < tomorrowStartMs)}
           proposed={allocation.blocks.filter((e) => e.endMs > todayStartMs && e.startMs < tomorrowStartMs)}
         />
       )}

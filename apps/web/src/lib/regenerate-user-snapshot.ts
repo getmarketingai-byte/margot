@@ -10,6 +10,7 @@ import { db, schema } from "./db/index";
 import { fetchGoogleBusy } from "./google-calendar";
 import { loadSettings } from "./settings-store";
 import { saveSnapshot } from "./snapshots";
+import { buildWeatherTimemapEvents } from "./weather-timemap";
 
 /** Minimum age of the latest snapshot before a feed request triggers Google + replan. */
 export const FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS = 3 * 60 * 1000;
@@ -43,7 +44,13 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
   const days = settings.calendars.schedulingWindowDays;
   const window = { startMs: now, endMs: now + days * 24 * 60 * 60 * 1000 };
 
-  const busy = await fetchGoogleBusy(userId, settings.calendars.sources, window.startMs, window.endMs);
+  const busyFetch = await fetchGoogleBusy(
+    userId,
+    settings.calendars.sources,
+    window.startMs,
+    window.endMs
+  );
+  const busy = busyFetch.busyEvents;
 
   const planRows = await db
     .select()
@@ -54,14 +61,31 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
   const plan = planRow ? (planRow.data as WeeklyPlan) : null;
 
   const events =
-    plan ? allocateWeek({ plan, busy, settings }).blocks.map((b) => toGeneratedEvent(userId, plan, b)) : [];
+    plan
+      ? allocateWeek({
+          plan,
+          busy,
+          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+          settings
+        }).blocks.map((b) => toGeneratedEvent(userId, plan, b))
+      : [];
+
+  const weatherTimemapEvents = await buildWeatherTimemapEvents({
+    userId,
+    windowStartMs: window.startMs,
+    windowEndMs: window.endMs,
+    weather: settings.weather,
+    stableUid: buildStableUid
+  });
+
+  const mergedEvents = [...events, ...weatherTimemapEvents].sort((a, b) => a.startMs - b.startMs);
 
   await saveSnapshot(userId, {
     generatedAt: Date.now(),
     windowStartMs: window.startMs,
     windowEndMs: window.endMs,
-    events
+    events: mergedEvents
   });
 
-  return { eventCount: events.length };
+  return { eventCount: mergedEvents.length };
 }

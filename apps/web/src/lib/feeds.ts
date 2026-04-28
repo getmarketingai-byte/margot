@@ -73,3 +73,29 @@ export function filterEventsForFeed(
     }
   });
 }
+
+function ensureBracketedTitle(title: string): string {
+  const trimmed = title.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
+  return `[${trimmed}]`;
+}
+
+/**
+ * Timemap-like events should render in ICS with bracketed titles so SkedPal
+ * rules can match consistently regardless of where the event originated.
+ */
+export function normalizeTimemapTitlesForIcs(
+  events: readonly GeneratedEvent[]
+): GeneratedEvent[] {
+  return events.map((event) => {
+    if (
+      event.kind === "timemap" ||
+      event.kind === "routine" ||
+      event.kind === "errand" ||
+      event.kind === "gym"
+    ) {
+      return { ...event, title: ensureBracketedTitle(event.title) };
+    }
+    return event;
+  });
+}
