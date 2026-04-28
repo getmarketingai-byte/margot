@@ -9,8 +9,25 @@
 
 import { urlsFor } from "@calendar-automations/marketing";
 
-export const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ?? "https://calendar-automations.app";
+const DEFAULT_SITE_URL = "https://calendar-automations.app";
+
+function normaliseSiteUrl(raw: string | undefined): string {
+  if (!raw) return DEFAULT_SITE_URL;
+  const trimmed = raw.trim().replace(/\/$/, "");
+  if (!trimmed) return DEFAULT_SITE_URL;
+
+  const withProtocol = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  try {
+    return new URL(withProtocol).toString().replace(/\/$/, "");
+  } catch {
+    return DEFAULT_SITE_URL;
+  }
+}
+
+export const SITE_URL = normaliseSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
 
 export const CANONICAL_URLS = urlsFor(SITE_URL);
 

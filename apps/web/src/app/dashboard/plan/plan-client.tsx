@@ -955,7 +955,7 @@ function DurationField({
         />
         <UnitToggle
           value={unit}
-          onChange={(v) => setUnit(v as "hours" | "minutes")}
+          onChange={setUnit}
           ariaLabel="Unit"
           options={[
             { value: "hours", label: "h" },
@@ -974,14 +974,14 @@ function UnitToggle({
   ariaLabel,
   options
 }: {
-  value: string;
-  onChange: (v: string) => void;
+  value: "hours" | "minutes";
+  onChange: (v: "hours" | "minutes") => void;
   ariaLabel?: string;
-  options?: ReadonlyArray<{ value: string; label: string }>;
+  options?: ReadonlyArray<{ value: "hours" | "minutes"; label: string }>;
 }) {
   const toggleOptions = options ?? [
-    { value: "week", label: "/wk" },
-    { value: "day", label: "/day" }
+    { value: "hours", label: "h" },
+    { value: "minutes", label: "m" }
   ];
   return (
     <div
