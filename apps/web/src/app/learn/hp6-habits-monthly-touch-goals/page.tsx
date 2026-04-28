@@ -94,6 +94,22 @@ export default function Page() {
         <li>Monthly strategy day (default first Monday, configurable).</li>
       </ul>
 
+      <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Habit tags versus a task scheduler</h2>
+      <p>
+        Task schedulers — SkedPal, Reclaim, Motion, Sunsama — operate at the wrong cadence for
+        HP6. Their unit of work is a task with a deadline; HP6&apos;s unit of work is a habit with
+        a monthly minimum-touch count. A scheduler will happily slot a one-off &ldquo;courage&rdquo;
+        block into the calendar if you remember to add it, but it will not warn you that
+        Demonstrate courage has been at zero touches for three weeks. That is the gap Calendar
+        Automations fills.
+      </p>
+      <p>
+        Run them together. Mark your scheduler&apos;s calendar as a busy source. The HP6 monthly
+        minimums then get distributed across the gaps the scheduler does not claim, with the
+        even-spread bias preserved. Your scheduler keeps doing reactive task flow; the habit
+        scaffolding sits one layer above it.
+      </p>
+
       <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Common failure modes</h2>
       <p>
         The most common HP6 failure mode is over-touching the easy habits and under-touching the

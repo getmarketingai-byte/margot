@@ -97,6 +97,24 @@ export default function Page() {
         thirty minutes you said you wanted for a phone call with your sister is actually there.
       </p>
 
+      <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Wheel floors versus a task scheduler</h2>
+      <p>
+        If you already use SkedPal, Reclaim, Motion, or Sunsama, you have a tool that is
+        excellent at one thing: turning a task list with deadlines and priorities into a
+        feasible schedule. None of those tools answer the question &ldquo;did this week
+        respect my Wheel of Life floors?&rdquo; They were not built to. Their job is to make
+        Tuesday&apos;s deadline survive a meeting that ran long; your job is to make sure the
+        relationships floor still gets sixty minutes when that happens.
+      </p>
+      <p>
+        Run them together. Mark the calendar your scheduler writes to as a busy source in the
+        Calendars page. Calendar Automations will then allocate floor minutes into the gaps that
+        your scheduler has not already claimed — so the body floor lands at 6 AM before the
+        scheduler&apos;s deep-work block at 9, and the relationships floor lands at 7 PM after
+        the scheduler has run out of work to schedule. The two surfaces compose; neither has to
+        understand the other.
+      </p>
+
       <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Practical starting set</h2>
       <p>
         For most operators we recommend starting with eight areas: physical body, emotions and

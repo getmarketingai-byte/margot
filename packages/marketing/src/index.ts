@@ -13,7 +13,7 @@
 export const PRODUCT = {
   name: "Calendar Automations",
   legalName: "Calendar Automations",
-  contactEmail: "autocalender@neutrino.au",
+  contactEmail: "autocalendar@neutrino.au",
   tagline: "The balance layer for your existing scheduler.",
   shortDescription:
     "A framework-driven weekly planning layer that runs alongside SkedPal, Reclaim, Motion, Sunsama, or any task-driven scheduler. Reads your calendar over read-only OAuth, allocates Wheel of Life / PPF / HP6 goals into the gaps with energy-aware ordering, and publishes the result as a private iCal feed your existing calendar app subscribes to.",
@@ -166,6 +166,14 @@ export type Article = {
 
 export const ARTICLES: ReadonlyArray<Article> = [
   {
+    slug: "skedpal-companion",
+    title: "Using Calendar Automations as a SkedPal companion (and with Reclaim, Motion, Sunsama)",
+    description:
+      "How to run Calendar Automations alongside an existing task scheduler so the two do not fight over your calendar — what goes where, how to mark the scheduler's blocks as busy, and how priority conflicts are resolved.",
+    publishedAt: "2026-04-28",
+    keywords: ["SkedPal companion", "Reclaim alternative", "Motion alongside", "Sunsama balance", "scheduler companion"]
+  },
+  {
     slug: "ical-vs-calendar-write",
     title: "iCal subscription vs Calendar API write: which one should a planning app use?",
     description:
@@ -223,11 +231,11 @@ export const ARTICLES: ReadonlyArray<Article> = [
   },
   {
     slug: "perfect-week-allocation-walkthrough",
-    title: "A perfect-week allocation walkthrough, step by step",
+    title: "A balanced-week allocation walkthrough, step by step",
     description:
-      "An end-to-end example: connecting calendars, configuring goals, applying balance constraints, ordering by energy, and reading the resulting iCal feed.",
+      "An end-to-end example: pointing at the calendar your scheduler already writes to, configuring framework goals, applying balance constraints, ordering by energy, and reading the resulting iCal feed.",
     publishedAt: "2026-04-28",
-    keywords: ["perfect week", "weekly planning", "allocation", "walkthrough"]
+    keywords: ["balanced week", "weekly planning", "allocation", "walkthrough", "scheduler companion"]
   },
   {
     slug: "subscribing-icalendar-google-calendar",

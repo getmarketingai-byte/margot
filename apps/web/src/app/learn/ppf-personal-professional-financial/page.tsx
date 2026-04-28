@@ -88,6 +88,20 @@ export default function Page() {
         models compounds. The PPF constraint forces that minute count above zero.
       </p>
 
+      <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">PPF mix versus a task scheduler</h2>
+      <p>
+        Task schedulers like SkedPal, Reclaim, Motion, and Sunsama are excellent at allocating
+        Professional time — they were built for it. None of them ask whether a Personal touch
+        landed on Tuesday or whether the Financial pillar got its weekly thirty minutes. The mix
+        target is the part of the week your scheduler does not measure, because the inputs it
+        consumes (tasks, projects, deadlines) are nearly all Professional by definition.
+      </p>
+      <p>
+        Run them together. Mark the calendar your scheduler writes to as a busy source. Calendar
+        Automations will then place Personal and Financial touches into gaps the scheduler has
+        not claimed, so the mix target gets satisfied without a fight over the same slots.
+      </p>
+
       <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">A reasonable starting mix</h2>
       <p>
         For full-time operators, a reasonable starting mix is 60% Professional, 30% Personal, 10%

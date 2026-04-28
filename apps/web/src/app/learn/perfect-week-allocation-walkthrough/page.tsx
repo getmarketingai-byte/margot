@@ -22,8 +22,24 @@ export default function Page() {
   return (
     <ArticleLayout
       article={article}
-      answer="The end-to-end loop is six steps: connect the calendars you treat as busy sources, configure your frameworks (Wheel, PPF, HP6, energy ordering, consistency segments), enter weekly goals with tags, run the planner, copy the iCal feed URL into your calendar app, and review at the end of the week. The walkthrough below shows what each step looks like in practice."
+      answer="The end-to-end loop is seven steps: decide what your existing scheduler is doing first, connect the calendars you treat as busy sources (including the one your scheduler writes to), configure your frameworks (Wheel, PPF, HP6, energy ordering, consistency segments), enter weekly goals with tags, run the planner, copy the iCal feed URL into your calendar app, and review at the end of the week. The walkthrough below shows what each step looks like in practice."
     >
+      <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Step 0 — Know what your scheduler is doing</h2>
+      <p>
+        If you already use SkedPal, Reclaim, Motion, Sunsama, or any other task-driven
+        scheduler, do not rip it out. Calendar Automations is designed to compose with those
+        tools, not replace them. Your scheduler keeps owning reactive task flow — deadlines,
+        project hierarchies, auto-rescheduling. Calendar Automations owns weekly framework
+        balance — Wheel of Life floors, PPF mix targets, HP6 monthly habit touches.
+      </p>
+      <p>
+        The split that works in practice: tasks with deadlines and dependencies go in your
+        scheduler; recurring habit-shaped activities and weekly framework goals go in Calendar
+        Automations. If you have no existing scheduler, skip this step — Calendar Automations
+        works fine standalone, you just won&apos;t need the busy-source pointing trick described
+        in Step 1.
+      </p>
+
       <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Step 1 — Connect calendars</h2>
       <p>
         Sign in with Google. Calendar Automations requests two read-only Calendar scopes; there is
@@ -33,6 +49,14 @@ export default function Page() {
         you are unavailable for new work. Exclude calendars that are subscribed-but-informational
         (sports schedules, public holidays in regions you do not work in, your subscribed
         Calendar Automations feed once it exists).
+      </p>
+      <p>
+        If you came in with an existing scheduler, this is the step that makes them coexist:
+        include the calendar that scheduler writes to as a busy source. SkedPal&apos;s scheduled
+        blocks, Reclaim&apos;s task events, Motion&apos;s auto-allocated slots, and Sunsama&apos;s
+        daily plan all surface as events on a normal Google calendar — once that calendar is
+        marked busy, Calendar Automations will route around them and only fill the gaps your
+        scheduler did not claim.
       </p>
       <p>
         The setting is per-user and stored in the versioned <code>UserSettings</code> JSON; it
