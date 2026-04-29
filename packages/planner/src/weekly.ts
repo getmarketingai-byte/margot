@@ -293,6 +293,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       p,
       days,
       blocks,
+      busy,
       settings.energyOrdering,
       settings.placementPriority,
       fw,
@@ -842,6 +843,7 @@ function allocateGoal(
   prepared: PreparedGoal,
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   blocks: AllocatedBlock[],
+  busy: readonly BusyEvent[],
   energy: EnergyOrderingSettings,
   placement: PlacementPrioritySettings,
   frameworkInclusion: SchedulerFrameworkInclusion,
@@ -918,9 +920,10 @@ function allocateGoal(
       const dayMinutesAlready = blocks
         .filter((b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs)
         .reduce((acc, b) => acc + Math.floor((b.endMs - b.startMs) / MS_PER_MIN), 0);
+      const dayLoggedMinutes = loggedGoalBusyMinutesForDay(busy, goal.id, day.startMs, day.endMs);
       const dayHeadroom =
         norm.maxMinutesPerDay !== undefined
-          ? Math.max(0, norm.maxMinutesPerDay - dayMinutesAlready)
+          ? Math.max(0, norm.maxMinutesPerDay - (dayMinutesAlready + dayLoggedMinutes))
           : perDayBudget;
       if (dayHeadroom < QUANTUM) continue;
 
@@ -1035,6 +1038,24 @@ function allocateGoal(
       `[allocateWeek] Goal "${goal.title}" (${goal.id}) has ${remainingMinutes} min unscheduled after ${maxPasses} passes (availability/nice-weather squeeze).`
     );
   }
+}
+
+function loggedGoalBusyMinutesForDay(
+  busy: readonly BusyEvent[],
+  goalId: string,
+  dayStartMs: number,
+  dayEndMs: number
+): number {
+  const prefix = `daysheet-goal:${goalId}:`;
+  let total = 0;
+  for (const ev of busy) {
+    if (!ev.sourceId?.startsWith(prefix)) continue;
+    const startMs = Math.max(ev.startMs, dayStartMs);
+    const endMs = Math.min(ev.endMs, dayEndMs);
+    if (endMs <= startMs) continue;
+    total += Math.floor((endMs - startMs) / MS_PER_MIN);
+  }
+  return total;
 }
 
 function intersectWithAvailability(

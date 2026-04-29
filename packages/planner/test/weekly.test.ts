@@ -552,6 +552,53 @@ describe("allocateWeek", () => {
     }
   });
 
+  it("counts day-sheet logged goal minutes toward maxMinutesPerDay headroom", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
+    const mondayStart = weekStartMs;
+    const mondayNoon = mondayStart + 12 * HOUR_MS;
+    const loggedBusy: BusyEvent = {
+      sourceId: `daysheet-goal:workout:${mondayStart}:${mondayNoon}`,
+      title: "Workout (logged)",
+      startMs: mondayStart,
+      endMs: mondayNoon,
+      busy: true,
+      source: "internal"
+    };
+    const result = allocateWeek({
+      plan: {
+        id: "logged-cap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "workout",
+            title: "Workout",
+            minMinutesPerWeek: 120,
+            maxMinutesPerDay: 60,
+            daysOfWeek: ["monday", "tuesday"],
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [loggedBusy],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const mondayBlocks = result.blocks.filter(
+      (b) => b.goalId === "workout" && b.startMs >= mondayStart && b.startMs < mondayStart + DAY_MS
+    );
+    const tuesdayBlocks = result.blocks.filter(
+      (b) =>
+        b.goalId === "workout" &&
+        b.startMs >= mondayStart + DAY_MS &&
+        b.startMs < mondayStart + 2 * DAY_MS
+    );
+    expect(mondayBlocks.length).toBe(0);
+    expect(tuesdayBlocks.length).toBeGreaterThan(0);
+  });
+
   it("applies weekly and daily caps together when both are set", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const result = allocateWeek({
