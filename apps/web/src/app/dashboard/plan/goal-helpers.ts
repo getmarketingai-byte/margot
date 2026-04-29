@@ -25,6 +25,7 @@ export type ChipKind =
   | "max-day"
   | "frequency"
   | "day"
+  | "nice-weather"
   | "share"
   | "energy"
   | "polarity"
@@ -50,6 +51,7 @@ const SUMMARY_ROW_CHIP_KEYS = new Set<ChipKind>([
   "max-day",
   "frequency",
   "day",
+  "nice-weather",
   "share"
 ]);
 
@@ -159,6 +161,9 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   if (pinnedDays.length > 0) {
     const dayLabel = pinnedDays.map((d) => DAY_LABELS[d] ?? d).join(" ");
     chips.push({ key: "day", label: dayLabel });
+  }
+  if (goal.scheduleInNiceWeather === true) {
+    chips.push({ key: "nice-weather", label: "Nice weather" });
   }
   if (goal.energyMode && goal.energyMode !== "neutral") {
     chips.push({ key: "energy", label: ENERGY_LABELS[goal.energyMode] });

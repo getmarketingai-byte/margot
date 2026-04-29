@@ -165,7 +165,15 @@ export const weeklyGoalSchema = z.object({
    * remainder using this percentage alongside goals that omit it (they split
    * what is left equally). Ignored in `"finish-early"` mode.
    */
-  allocationSharePercent: z.number().int().min(1).max(100).optional()
+  allocationSharePercent: z.number().int().min(1).max(100).optional(),
+  /**
+   * When true, the weekly allocator only places this goal in intervals that
+   * overlap the user's timemap "[Outside]" windows (same definition as
+   * Settings → Weather). Callers pass merged forecast intervals into
+   * `allocateWeek({ niceWeatherWindows })`. If that list is empty (weather
+   * disabled, no overlap, etc.), the flag is ignored so goals are not starved.
+   */
+  scheduleInNiceWeather: z.boolean().optional()
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
 

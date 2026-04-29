@@ -654,6 +654,7 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.anchor !== undefined) draft.anchor = goal.anchor;
   if (goal.specialGoalType !== undefined) draft.specialGoalType = goal.specialGoalType;
   if (goal.allocationSharePercent !== undefined) draft.allocationSharePercent = goal.allocationSharePercent;
+  if (goal.scheduleInNiceWeather === true) draft.scheduleInNiceWeather = true;
   return draft;
 }
 
@@ -674,6 +675,7 @@ type ConstraintId =
   | "share-remainder"
   | "frequency"
   | "days"
+  | "nice-weather"
   | "energy"
   | "special"
   | "wheel"
@@ -756,6 +758,13 @@ function OptionsEditor({
       isSet: isDaySet,
       initialise: () => ({ daysOfWeek: ["monday"], dayOfWeek: undefined }),
       clear: () => ({ daysOfWeek: undefined, dayOfWeek: undefined })
+    },
+    {
+      id: "nice-weather",
+      label: "Nice weather slots",
+      isSet: (d) => d.scheduleInNiceWeather === true,
+      initialise: () => ({ scheduleInNiceWeather: true }),
+      clear: () => ({ scheduleInNiceWeather: undefined })
     },
     {
       id: "energy",
@@ -934,6 +943,14 @@ function ConstraintBody({
           placeholder="3"
           className="field"
         />
+      );
+    case "nice-weather":
+      return (
+        <p className="text-xs leading-relaxed text-ink-500 dark:text-ink-300">
+          Only schedule during timemap &quot;outside&quot; windows from your weather settings (same
+          layer as the green preview on the calendar). If weather is disabled or no forecast
+          overlaps your free time, this is ignored so the goal can still land.
+        </p>
       );
     case "days": {
       const pinnedDays = draft.daysOfWeek?.length

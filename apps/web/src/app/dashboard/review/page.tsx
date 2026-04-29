@@ -10,10 +10,11 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import {
+  filterSchedulingGoals,
   type AllocatedBlockSnapshot,
   type WeeklyPlan
 } from "@calendar-automations/schema";
-import { allocateWeek } from "@calendar-automations/planner";
+import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
@@ -25,13 +26,21 @@ import {
   partsInTimezone
 } from "@/lib/week";
 import {
+  isoDatesForWeek,
   isoDateInTz,
   loadDailyReview,
+  loadDailyReviewsInRange,
   loadWeeklyReview,
   saveDailyReview,
   todayIsoInTz
 } from "@/lib/review-store";
+import {
+  catchUpFloorsFromGoalRollups,
+  computeGoalRollups
+} from "@/lib/review-rollup";
+import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
+import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { DailyReviewClient } from "./daily-review-client";
 import { ReviewDatePicker } from "./date-picker";
 
@@ -144,21 +153,92 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
         busy,
         overrides: overridesFromPlan(plan)
       });
+      const sleepBlockMs = systemBlocks
+        .filter((b) => b.system === "sleep")
+        .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+      const weatherTimemapEvents = await buildWeatherTimemapEvents({
+        userId,
+        windowStartMs: weekStartMs,
+        windowEndMs: weekEndMs,
+        weather: settings.weather,
+        homeAddress: settings.travel.homeAddress,
+        geocodes: settings.travelCache?.geocodes,
+        stableUid: buildStableUid,
+        sleepBlockMs
+      });
+      const niceWeatherWindows = outsideNiceWeatherIntervalsInRange(
+        weatherTimemapEvents,
+        weekStartMs,
+        weekEndMs
+      );
       const weeklyReview = await loadWeeklyReview(
         userId,
         localMondayIso(tz),
         tz
       );
-      const allocation = allocateWeek({
-        plan,
-        busy: [...busy, ...systemBlocks],
-        goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-        settings,
-        weekStartMs,
-        weekEndMs,
-        catchUpFloors: weeklyReview.catchUpAdjustments,
-        weekAnchorDate: localMondayIso(tz)
-      });
+      const catchUpMode = settings.allocator.catchUpMode;
+      let allocation;
+      if (catchUpMode === "manual") {
+        allocation = allocateWeek({
+          plan,
+          busy: [...busy, ...systemBlocks],
+          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+          niceWeatherWindows,
+          settings,
+          weekStartMs,
+          weekEndMs,
+          catchUpFloors: weeklyReview.catchUpAdjustments ?? {},
+          weekAnchorDate: localMondayIso(tz)
+        });
+      } else {
+        const baselineAllocation = allocateWeek({
+          plan,
+          busy: [...busy, ...systemBlocks],
+          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+          niceWeatherWindows,
+          settings,
+          weekStartMs,
+          weekEndMs,
+          catchUpFloors: {},
+          weekAnchorDate: localMondayIso(tz)
+        });
+        const weekDates = isoDatesForWeek(weekStartMs, tz);
+        const dailyReviewsRange = await loadDailyReviewsInRange(
+          userId,
+          weekDates[0]!,
+          weekDates[weekDates.length - 1]!
+        );
+        const reviewsByDate = new Map(
+          dailyReviewsRange.map((r) => [r.date, r] as const)
+        );
+        const effectiveTargetBaseline: Record<string, number> = {};
+        for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
+          effectiveTargetBaseline[id] = m.targetMinutes;
+        }
+        const schedulingGoals = filterSchedulingGoals(plan.goals);
+        const todayIsoSnap = todayIsoInTz(tz);
+        const todayIdxSnap = weekDates.indexOf(todayIsoSnap);
+        const dayIndexSnap = todayIdxSnap >= 0 ? todayIdxSnap : 6;
+        const baselineRollups = computeGoalRollups({
+          goals: schedulingGoals,
+          reviewsByDate,
+          effectiveTargetByGoal: effectiveTargetBaseline,
+          weekDates,
+          dayIndex: dayIndexSnap
+        });
+        const catchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
+        allocation = allocateWeek({
+          plan,
+          busy: [...busy, ...systemBlocks],
+          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+          niceWeatherWindows,
+          settings,
+          weekStartMs,
+          weekEndMs,
+          catchUpFloors,
+          weekAnchorDate: localMondayIso(tz)
+        });
+      }
       const todaysBlocks: AllocatedBlockSnapshot[] = allocation.blocks
         .filter(
           (b) =>

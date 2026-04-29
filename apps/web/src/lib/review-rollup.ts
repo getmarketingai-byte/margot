@@ -7,10 +7,11 @@
  * Drizzle / Next into the dependency graph.
  */
 
-import type {
-  DailyReview,
-  EnergyState,
-  WeeklyGoal
+import {
+  catchUpFloorsFromRecommendations,
+  type DailyReview,
+  type EnergyState,
+  type WeeklyGoal
 } from "@calendar-automations/schema";
 
 export type PaceStatus = "ahead" | "on-track" | "behind" | "no-data";
@@ -136,6 +137,13 @@ export function computeGoalRollups(input: GoalRollupInput): GoalRollup[] {
       byDay
     };
   });
+}
+
+/** Floors for `allocateWeek` from rollup recommendations (positive only). */
+export function catchUpFloorsFromGoalRollups(
+  rollups: readonly GoalRollup[]
+): Record<string, number> {
+  return catchUpFloorsFromRecommendations(rollups);
 }
 
 /**

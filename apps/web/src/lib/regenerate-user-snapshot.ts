@@ -11,6 +11,7 @@ import { fetchGoogleBusy } from "./google-calendar";
 import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
 import { loadSettings } from "./settings-store";
 import { saveSnapshot } from "./snapshots";
+import { outsideNiceWeatherIntervalsInRange } from "./nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "./weather-timemap";
 import { buildSystemBlocks, overridesFromPlan } from "./system-blocks-server";
 import { isoCalendarDay, localMondayMidnightMs } from "./week";
@@ -102,6 +103,24 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     overrides: overridesFromPlan(plan ?? undefined),
     nowMs: now
   });
+  const sleepBlockMs = systemBlocks
+    .filter((b) => b.system === "sleep")
+    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+  const weatherTimemapEvents = await buildWeatherTimemapEvents({
+    userId,
+    windowStartMs: window.startMs,
+    windowEndMs: window.endMs,
+    weather: settings.weather,
+    homeAddress: settings.travel.homeAddress,
+    geocodes: settings.travelCache?.geocodes,
+    stableUid: buildStableUid,
+    sleepBlockMs
+  });
+  const niceWeatherWindows = outsideNiceWeatherIntervalsInRange(
+    weatherTimemapEvents,
+    weekStartMs,
+    weekEndMs
+  );
   const proposedBlocks =
     plan != null
       ? filterInvertedTimemapFromProposedBlocks(
@@ -109,6 +128,7 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
             plan,
             busy: [...busy, ...systemBlocks],
             goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+            niceWeatherWindows,
             settings,
             weekStartMs,
             weekEndMs,
@@ -126,18 +146,6 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     ...systemBlocks.map((b) => toGeneratedSystemEvent(userId, b)),
     ...gymTravelBlocks.map((b) => toGeneratedSystemEvent(userId, b))
   ];
-
-  const sleepBlockMs = systemBlocks
-    .filter((b) => b.system === "sleep")
-    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
-  const weatherTimemapEvents = await buildWeatherTimemapEvents({
-    userId,
-    windowStartMs: window.startMs,
-    windowEndMs: window.endMs,
-    weather: settings.weather,
-    stableUid: buildStableUid,
-    sleepBlockMs
-  });
 
   const mergedEvents = [...events, ...systemEvents, ...weatherTimemapEvents].sort(
     (a, b) => a.startMs - b.startMs

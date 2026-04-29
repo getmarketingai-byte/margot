@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type {
   BurchardWeeklyQuestions,
@@ -26,6 +27,9 @@ interface WeeklyReviewClientProps {
     improvements: Array<{ date: string; text: string }>;
     intentions: Array<{ date: string; text: string }>;
   };
+  catchUpMode: "automated" | "manual";
+  /** Floors the allocator uses this week (auto-derived or saved manual). */
+  allocatorCatchUpFloors: Record<string, number>;
 }
 
 const STATUS_LABEL: Record<PaceStatus, string> = {
@@ -50,7 +54,9 @@ export function WeeklyReviewClient({
   goals,
   energyTotals,
   drainCandidates,
-  dailyHighlights
+  dailyHighlights,
+  catchUpMode,
+  allocatorCatchUpFloors
 }: WeeklyReviewClientProps) {
   const [review, setReview] = useState<WeeklyReview>(initialReview);
   const [edits, setEdits] = useState<Record<string, number>>(
@@ -62,6 +68,7 @@ export function WeeklyReviewClient({
   // Pre-fill edits with the recommendations the first time we see new rollups
   // that have no existing adjustment. Lets the user just hit Apply.
   useEffect(() => {
+    if (catchUpMode !== "manual") return;
     setEdits((prev) => {
       const next = { ...prev };
       for (const r of rollups) {
@@ -71,7 +78,7 @@ export function WeeklyReviewClient({
       }
       return next;
     });
-  }, [rollups]);
+  }, [rollups, catchUpMode]);
 
   const goalById = useMemo(() => {
     const map = new Map<string, WeeklyGoal>();
@@ -119,18 +126,25 @@ export function WeeklyReviewClient({
     <div className="flex flex-col gap-5">
       <PaceBoard rollups={rollups} goalById={goalById} weekDates={weekDates} />
 
-      <CatchUpPlanner
-        rollups={rollups}
-        goalById={goalById}
-        edits={edits}
-        applied={review.catchUpAdjustments ?? {}}
-        appliedAt={review.appliedAt}
-        onChange={(goalId, minutes) =>
-          setEdits((prev) => ({ ...prev, [goalId]: minutes }))
-        }
-        onSubmit={submitCatchUp}
-        onReset={resetCatchUp}
-      />
+      {catchUpMode === "manual" ? (
+        <CatchUpPlanner
+          rollups={rollups}
+          goalById={goalById}
+          edits={edits}
+          applied={review.catchUpAdjustments ?? {}}
+          appliedAt={review.appliedAt}
+          onChange={(goalId, minutes) =>
+            setEdits((prev) => ({ ...prev, [goalId]: minutes }))
+          }
+          onSubmit={submitCatchUp}
+          onReset={resetCatchUp}
+        />
+      ) : (
+        <AutomatedCatchUpSummary
+          allocatorFloors={allocatorCatchUpFloors}
+          goalById={goalById}
+        />
+      )}
 
       <BurchardWeeklyCard
         questions={review.burchardQuestions}
@@ -254,6 +268,68 @@ function Sparkline({
         );
       })}
     </div>
+  );
+}
+
+function AutomatedCatchUpSummary({
+  allocatorFloors,
+  goalById
+}: {
+  allocatorFloors: Record<string, number>;
+  goalById: Map<string, WeeklyGoal>;
+}) {
+  const entries = Object.entries(allocatorFloors).filter(([, m]) => m > 0);
+  return (
+    <section className="card">
+      <header className="mb-3">
+        <h2 className="text-sm font-semibold">Catch-up</h2>
+        <p className="mt-1 text-xs text-ink-400">
+          Floors are calculated from your day sheet vs a baseline allocation (same logic as pace
+          recommendations). The Perfect Week allocator applies these extra weekly minimums—no Apply
+          needed.
+        </p>
+      </header>
+      {entries.length === 0 ? (
+        <p className="text-xs text-ink-400">
+          No extra catch-up floors this week. Goals that fall behind will gain floors here as you
+          log time.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {entries.map(([goalId, minutes]) => {
+            const goal = goalById.get(goalId);
+            if (!goal) return null;
+            const color = goalColorFromKey(goalId);
+            return (
+              <li
+                key={goalId}
+                className="rounded-md border border-ink-200 bg-white p-3 dark:border-ink-600 dark:bg-ink-900/60"
+                style={{ borderLeftColor: color, borderLeftWidth: 4 }}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium" style={{ color }}>
+                    {goal.title}
+                  </div>
+                  <span className="text-xs text-ink-600 dark:text-ink-200">
+                    +{minutes}m floor
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <p className="mt-3 text-xs text-ink-400">
+        To set floors yourself from this screen, switch to{" "}
+        <Link
+          href="/dashboard/energy#scheduling-constraints"
+          className="text-accent hover:underline"
+        >
+          manual catch-up
+        </Link>{" "}
+        under Scheduling rules on Planning.
+      </p>
+    </section>
   );
 }
 

@@ -2,8 +2,9 @@
 
 /**
  * Drag-to-move for weekly proposed goal blocks on the calendar (same pointer +
- * 15-minute snap behaviour as DraggableSystemBlock). Persists via
- * `setGoalBlockOverridesBatch` when a merged bar maps to multiple allocator slices.
+ * 15-minute vertical snap as DraggableSystemBlock; horizontal drag moves across
+ * day columns). Persists via `setGoalBlockOverridesBatch` when a merged bar
+ * maps to multiple allocator slices.
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
@@ -12,6 +13,23 @@ import { clearGoalDragOverrides, setGoalBlockOverridesBatch } from "./plan/actio
 
 const SNAP_MIN = 15;
 const MS_PER_MIN = 60_000;
+/** Calendar-day shift between columns (DST handled imperfectly; rare edge case). */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function weekDayIndexUnderPoint(clientX: number, clientY: number): number | null {
+  const els = document.elementsFromPoint(clientX, clientY);
+  for (const el of els) {
+    let node: Element | null = el;
+    while (node) {
+      if (node instanceof HTMLElement && node.dataset.weekDayIndex !== undefined) {
+        const n = Number(node.dataset.weekDayIndex);
+        return Number.isFinite(n) ? n : null;
+      }
+      node = node.parentElement;
+    }
+  }
+  return null;
+}
 
 export interface GoalCalendarSlice {
   dragKey: string;
@@ -29,6 +47,8 @@ interface DraggableProposedGoalBlockProps {
   opacity: number;
   goalId: string;
   slices: GoalCalendarSlice[];
+  /** Which week column this block sits in (same index as `WeekCalendar` day columns). */
+  dayIndex: number;
 }
 
 export function DraggableProposedGoalBlock({
@@ -39,15 +59,18 @@ export function DraggableProposedGoalBlock({
   backgroundColor,
   opacity,
   goalId,
-  slices
+  slices,
+  dayIndex
 }: DraggableProposedGoalBlockProps) {
   const elRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<{
     pointerId: number;
+    startX: number;
     startY: number;
     cancelled: boolean;
   } | null>(null);
   const [dragPx, setDragPx] = useState(0);
+  const [dragPxX, setDragPxX] = useState(0);
   const [pending, setPending] = useState(false);
 
   const pxPerMin = pxPerHour / 60;
@@ -73,17 +96,20 @@ export function DraggableProposedGoalBlock({
     el.setPointerCapture(e.pointerId);
     dragState.current = {
       pointerId: e.pointerId,
+      startX: e.clientX,
       startY: e.clientY,
       cancelled: false
     };
     setDragPx(0);
+    setDragPxX(0);
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
     const drag = dragState.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
-    const delta = e.clientY - drag.startY;
-    setDragPx(snapToGrid(delta));
+    const deltaY = e.clientY - drag.startY;
+    setDragPx(snapToGrid(deltaY));
+    setDragPxX(e.clientX - drag.startX);
   }
 
   async function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
@@ -93,14 +119,20 @@ export function DraggableProposedGoalBlock({
     if (el && el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
     dragState.current = null;
 
-    const rawDelta = e.clientY - drag.startY;
+    const rawDeltaY = e.clientY - drag.startY;
+    const rawDeltaX = e.clientX - drag.startX;
     setDragPx(0);
+    setDragPxX(0);
 
     if (drag.cancelled) return;
 
-    const deltaMs = snapDeltaMs(rawDelta);
+    const targetDay = weekDayIndexUnderPoint(e.clientX, e.clientY);
+    const dayDelta = targetDay !== null ? targetDay - dayIndex : 0;
+    const deltaMsVertical = snapDeltaMs(rawDeltaY);
+    const deltaMs = deltaMsVertical + dayDelta * DAY_MS;
+
     if (deltaMs === 0) {
-      if (Math.abs(rawDelta) < 4) dispatchGoalFocus(goalId);
+      if (Math.abs(rawDeltaY) < 4 && Math.abs(rawDeltaX) < 4) dispatchGoalFocus(goalId);
       return;
     }
 
@@ -127,6 +159,7 @@ export function DraggableProposedGoalBlock({
     if (!drag) return;
     drag.cancelled = true;
     setDragPx(0);
+    setDragPxX(0);
     const el = elRef.current;
     if (el && el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
     dragState.current = null;
@@ -158,8 +191,9 @@ export function DraggableProposedGoalBlock({
   }
 
   const bodyStyle: CSSProperties = {
-    top: topPx + dragPx,
+    top: topPx,
     height: heightPx,
+    transform: `translate(${dragPxX}px, ${dragPx}px)`,
     cursor: dragState.current ? "grabbing" : "grab",
     touchAction: "none",
     backgroundColor,
@@ -172,7 +206,7 @@ export function DraggableProposedGoalBlock({
       title={`${title} (proposed)`}
       role="button"
       tabIndex={0}
-      aria-label={`${title}. Drag vertically to move this goal slot.`}
+      aria-label={`${title}. Drag to move this goal slot within the week.`}
       className={`group absolute inset-x-0.5 z-20 select-none overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         hasSavedOverride ? "ring-1 ring-white/50" : ""
       }`}

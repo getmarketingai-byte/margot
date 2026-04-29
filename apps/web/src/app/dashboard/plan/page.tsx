@@ -19,10 +19,14 @@ import {
   loadWeeklyReview,
   todayIsoInTz
 } from "@/lib/review-store";
-import { computeGoalRollups } from "@/lib/review-rollup";
+import {
+  catchUpFloorsFromGoalRollups,
+  computeGoalRollups
+} from "@/lib/review-rollup";
 import { computeSystemBlocks } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
+import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
@@ -120,8 +124,7 @@ export default async function PlanPage() {
   const schedulingGoals = filterSchedulingGoals(plan.goals);
   const weekStartIso = localMondayIso(settings.timezone);
   const weeklyReview = await loadWeeklyReview(userId, weekStartIso, settings.timezone);
-  const catchUpFloors = weeklyReview.catchUpAdjustments;
-  const catchUpActive = Object.keys(catchUpFloors ?? {}).length > 0;
+  const catchUpMode = settings.allocator.catchUpMode;
 
   const weekStartMs = localMondayMidnightMs(settings.timezone);
   const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
@@ -160,39 +163,111 @@ export default async function PlanPage() {
     nextWeekResolver,
     settings.timemap
   );
-  const allocation = allocateWeek({
-    plan,
-    busy: [...busy, ...systemBlocks],
-    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-    settings,
-    weekStartMs,
-    weekEndMs,
-    catchUpFloors,
-    weekAnchorDate: plan.weekStart
+
+  const sleepBlockMs = [...systemBlocks, ...nextWeekSystemBlocks]
+    .filter((b) => b.system === "sleep")
+    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+  const weatherTimemapEvents = await buildWeatherTimemapEvents({
+    userId,
+    windowStartMs: weekStartMs,
+    windowEndMs: nextWeekEndMs,
+    weather: settings.weather,
+    homeAddress: settings.travel.homeAddress,
+    geocodes: settings.travelCache?.geocodes,
+    stableUid: buildStableUid,
+    sleepBlockMs
   });
+  const niceWeatherThisWeek = outsideNiceWeatherIntervalsInRange(
+    weatherTimemapEvents,
+    weekStartMs,
+    weekEndMs
+  );
+  const niceWeatherNextWeek = outsideNiceWeatherIntervalsInRange(
+    weatherTimemapEvents,
+    nextWeekStartMs,
+    nextWeekEndMs
+  );
+
+  const weekDates = isoDatesForWeek(weekStartMs, settings.timezone);
+  const dailyReviews = await loadDailyReviewsInRange(
+    userId,
+    weekDates[0]!,
+    weekDates[weekDates.length - 1]!
+  );
+  const reviewsByDate = new Map(dailyReviews.map((r) => [r.date, r] as const));
+  const todayIso = todayIsoInTz(settings.timezone);
+  const todayIdx = weekDates.indexOf(todayIso);
+  const dayIndex = todayIdx >= 0 ? todayIdx : 6;
+  const nextWeekAnchor = isoCalendarDay(nextWeekStartMs, settings.timezone);
+
+  let allocation;
+  let resolvedCatchUpFloors: Record<string, number>;
+
+  if (catchUpMode === "manual") {
+    resolvedCatchUpFloors = weeklyReview.catchUpAdjustments ?? {};
+    allocation = allocateWeek({
+      plan,
+      busy: [...busy, ...systemBlocks],
+      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: niceWeatherThisWeek,
+      settings,
+      weekStartMs,
+      weekEndMs,
+      catchUpFloors: resolvedCatchUpFloors,
+      weekAnchorDate: plan.weekStart
+    });
+  } else {
+    const baselineAllocation = allocateWeek({
+      plan,
+      busy: [...busy, ...systemBlocks],
+      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: niceWeatherThisWeek,
+      settings,
+      weekStartMs,
+      weekEndMs,
+      catchUpFloors: {},
+      weekAnchorDate: plan.weekStart
+    });
+    const effectiveTargetBaseline: Record<string, number> = {};
+    for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
+      effectiveTargetBaseline[id] = m.targetMinutes;
+    }
+    const baselineRollups = computeGoalRollups({
+      goals: schedulingGoals,
+      reviewsByDate,
+      effectiveTargetByGoal: effectiveTargetBaseline,
+      weekDates,
+      dayIndex
+    });
+    resolvedCatchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
+    allocation = allocateWeek({
+      plan,
+      busy: [...busy, ...systemBlocks],
+      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: niceWeatherThisWeek,
+      settings,
+      weekStartMs,
+      weekEndMs,
+      catchUpFloors: resolvedCatchUpFloors,
+      weekAnchorDate: plan.weekStart
+    });
+  }
+
   const allocationNextWeek = allocateWeek({
     plan,
     busy: [...busyNextWeek, ...nextWeekSystemBlocks],
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+    niceWeatherWindows: niceWeatherNextWeek,
     settings,
     weekStartMs: nextWeekStartMs,
     weekEndMs: nextWeekEndMs,
-    weekAnchorDate: isoCalendarDay(nextWeekStartMs, settings.timezone)
+    catchUpFloors: catchUpMode === "automated" ? {} : undefined,
+    weekAnchorDate: nextWeekAnchor
   });
+
+  const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
-  const sleepBlockMs = [...systemBlocks, ...nextWeekSystemBlocks]
-    .filter((b) => b.system === "sleep")
-    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
-  const weatherPreviewBlocks = (
-    await buildWeatherTimemapEvents({
-      userId,
-      windowStartMs: weekStartMs,
-      windowEndMs: nextWeekEndMs,
-      weather: settings.weather,
-      stableUid: buildStableUid,
-      sleepBlockMs
-    })
-  )
+  const weatherPreviewBlocks = weatherTimemapEvents
     .filter((e) => e.title === "[Outside]")
     .map((e) => ({
       sourceId: `weather-${e.startMs}-${e.endMs}`,
@@ -228,23 +303,13 @@ export default async function PlanPage() {
     effectiveTargetByGoal[id] = m.targetMinutes;
   }
 
-  // Pace rollups: pull this week's daily reviews and compute per-goal status
-  // so the PlanClient can render badges next to each goal title.
-  const weekDates = isoDatesForWeek(weekStartMs, settings.timezone);
-  const dailyReviews = await loadDailyReviewsInRange(
-    userId,
-    weekDates[0]!,
-    weekDates[weekDates.length - 1]!
-  );
-  const reviewsByDate = new Map(dailyReviews.map((r) => [r.date, r] as const));
-  const todayIso = todayIsoInTz(settings.timezone);
-  const todayIdx = weekDates.indexOf(todayIso);
+  // Pace rollups: day-sheet vs final allocator targets for badges.
   const goalRollups = computeGoalRollups({
     goals: schedulingGoals,
     reviewsByDate,
     effectiveTargetByGoal,
     weekDates,
-    dayIndex: todayIdx >= 0 ? todayIdx : 6
+    dayIndex
   });
   const paceByGoal: Record<
     string,
@@ -269,7 +334,11 @@ export default async function PlanPage() {
       </header>
 
       {catchUpActive && (
-        <CatchUpBanner adjustments={catchUpFloors} goals={schedulingGoals} />
+        <CatchUpBanner
+          adjustments={resolvedCatchUpFloors}
+          goals={schedulingGoals}
+          mode={catchUpMode}
+        />
       )}
 
       {allocation.metrics.overcommitted ? (
@@ -439,10 +508,12 @@ function CalendarPreview({
 
 function CatchUpBanner({
   adjustments,
-  goals
+  goals,
+  mode
 }: {
   adjustments: Record<string, number>;
   goals: WeeklyPlan["goals"];
+  mode: "automated" | "manual";
 }) {
   const titleById = new Map(goals.map((g) => [g.id, g.title] as const));
   const entries = Object.entries(adjustments).filter(([, mins]) => mins !== 0);
@@ -453,21 +524,22 @@ function CatchUpBanner({
       return `${title} ${sign}${mins}m`;
     })
     .join(", ");
+  const secondaryHref =
+    mode === "automated" ? "/dashboard/energy#scheduling-constraints" : "/dashboard/week-review";
+  const secondaryLabel = mode === "automated" ? "Catch-up settings" : "Adjust catch-up";
+  const blurb =
+    mode === "automated"
+      ? `Based on your day sheet vs baseline targets, extra weekly floors are applied for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`
+      : `Allocator is reserving extra time for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`;
   return (
     <section className="card border-amber-300/40 bg-amber-50/30 dark:bg-amber-900/10">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-semibold">Catch-up active</div>
-          <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">
-            Allocator is reserving extra time for {entries.length}{" "}
-            {entries.length === 1 ? "goal" : "goals"}: {summary}.
-          </p>
+          <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">{blurb}</p>
         </div>
-        <Link
-          href="/dashboard/week-review"
-          className="btn-secondary text-xs"
-        >
-          Adjust catch-up
+        <Link href={secondaryHref} className="btn-secondary text-xs">
+          {secondaryLabel}
         </Link>
       </div>
     </section>

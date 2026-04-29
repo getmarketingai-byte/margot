@@ -436,6 +436,7 @@ export function WeekCalendar({
             return (
             <div
               key={dayIdx}
+              data-week-day-index={dayIdx}
               className="relative rounded border border-ink-200 dark:border-ink-600"
               style={{ height: gridHeight }}
             >
@@ -714,6 +715,7 @@ function ProposedBlock({
         opacity={block.isSegment ? 0.72 : 1}
         goalId={goalId}
         slices={slices}
+        dayIndex={block.dayIndex}
       />
     );
   }

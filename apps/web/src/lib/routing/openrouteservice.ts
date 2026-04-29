@@ -20,11 +20,9 @@
  */
 
 import type { GeocodeCacheEntry } from "@calendar-automations/schema";
+import { geocodeAddressToCoords } from "../geocode-address";
 
 const ORS_DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car";
-const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
-const USER_AGENT = "calendar-automations/1.0 (https://github.com/marklewis)";
-const GEOCODE_STALE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export interface RoutingProviderClient {
   /**
@@ -42,62 +40,6 @@ export interface RoutingProviderClient {
 interface Coords {
   lat: number;
   lng: number;
-}
-
-const LATLNG_RE = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
-
-/**
- * Tries to interpret a string as "lat,lng". Lets the user store coordinates
- * directly in `homeAddress` (e.g. "−37.910156,145.107420") to bypass
- * geocoding for the most-frequent leg in the cache.
- */
-function parseLatLng(input: string): Coords | null {
-  const m = input.match(LATLNG_RE);
-  if (!m) return null;
-  const lat = Number(m[1]);
-  const lng = Number(m[2]);
-  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
-  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
-  return { lat, lng };
-}
-
-async function geocode(
-  address: string,
-  geocodes: Map<string, GeocodeCacheEntry>,
-  nowMs: number
-): Promise<Coords | null> {
-  const direct = parseLatLng(address);
-  if (direct) return direct;
-
-  const key = address.trim().toLowerCase();
-  const cached = geocodes.get(key);
-  if (cached && nowMs - cached.fetchedAtMs < GEOCODE_STALE_MS) {
-    return { lat: cached.lat, lng: cached.lng };
-  }
-
-  const url = `${NOMINATIM_URL}?format=json&limit=1&q=${encodeURIComponent(address)}`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
-      // Nominatim's TOS asks for caching; a 1-day revalidate is conservative.
-      next: { revalidate: 86_400 }
-    });
-  } catch {
-    return null;
-  }
-  if (!res.ok) return null;
-  const json = (await res.json().catch(() => null)) as
-    | Array<{ lat: string; lon: string }>
-    | null;
-  if (!Array.isArray(json) || json.length === 0) return null;
-  const first = json[0]!;
-  const lat = Number(first.lat);
-  const lng = Number(first.lon);
-  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
-
-  geocodes.set(key, { lat, lng, fetchedAtMs: nowMs });
-  return { lat, lng };
 }
 
 async function driveSeconds(origin: Coords, dest: Coords, apiKey: string): Promise<number | null> {
@@ -145,8 +87,8 @@ export function createOpenRouteServiceProvider(): RoutingProviderClient | null {
     async duration(origin, dest, ctx) {
       const nowMs = Date.now();
       const [originCoords, destCoords] = await Promise.all([
-        geocode(origin, ctx.geocodes, nowMs),
-        geocode(dest, ctx.geocodes, nowMs)
+        geocodeAddressToCoords(origin, ctx.geocodes, nowMs),
+        geocodeAddressToCoords(dest, ctx.geocodes, nowMs)
       ]);
       if (!originCoords || !destCoords) return null;
 

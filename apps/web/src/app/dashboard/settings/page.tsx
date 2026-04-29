@@ -1,9 +1,16 @@
 import { revalidatePath } from "next/cache";
-import { routingProviderSchema } from "@calendar-automations/schema";
+import { redirect } from "next/navigation";
+import {
+  routingProviderSchema,
+  settingsNeedHomeAddress,
+  type GeocodeCacheEntry
+} from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
+import { geocodeAddressToCoords } from "@/lib/geocode-address";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { PRODUCT } from "@/lib/marketing";
 import { FeedbackForm } from "./feedback-form";
+import { HomeAddressField } from "./home-address-field";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +52,11 @@ async function updateTravel(formData: FormData): Promise<void> {
   const providerParsed = routingProviderSchema.safeParse(providerRaw);
   const provider = providerParsed.success ? providerParsed.data : settings.travel.routingProvider;
 
+  const needHome = provider !== "disabled" || settings.weather.enabled;
+  if (needHome && homeAddressRaw === "") {
+    redirect("/dashboard/settings?e=home_required");
+  }
+
   const next = {
     ...settings,
     travel: {
@@ -60,6 +72,7 @@ async function updateTravel(formData: FormData): Promise<void> {
       )
     }
   };
+
   // When the user clears their home address or disables the provider we wipe
   // the per-leg cache so stale durations against the old origin can't sneak
   // back in. Geocodes are kept (they're keyed by address, not provider).
@@ -67,6 +80,18 @@ async function updateTravel(formData: FormData): Promise<void> {
   if (wipeLegs) {
     next.travelCache = { ...settings.travelCache, legs: {} };
   }
+
+  if (homeAddressRaw) {
+    const geoMap = new Map<string, GeocodeCacheEntry>(
+      Object.entries(next.travelCache?.geocodes ?? {}) as [string, GeocodeCacheEntry][]
+    );
+    const resolved = await geocodeAddressToCoords(homeAddressRaw, geoMap, Date.now());
+    if (resolved) {
+      next.weather = { ...next.weather, latitude: resolved.lat, longitude: resolved.lng };
+      next.travelCache = { ...next.travelCache, geocodes: Object.fromEntries(geoMap) };
+    }
+  }
+
   await saveSettings(userId, next);
   revalidatePath("/dashboard/settings");
   revalidatePath("/dashboard");
@@ -80,11 +105,16 @@ async function updateWeather(formData: FormData): Promise<void> {
   const userId = session.user.id;
   const settings = await loadSettings(userId);
 
+  const weatherEnabled = formData.get("weather_enabled") === "on";
+  if (weatherEnabled && !settings.travel.homeAddress?.trim()) {
+    redirect("/dashboard/settings?e=weather_needs_home");
+  }
+
   const next = {
     ...settings,
     weather: {
       ...settings.weather,
-      enabled: formData.get("weather_enabled") === "on",
+      enabled: weatherEnabled,
       niceWeather: {
         ...settings.weather.niceWeather,
         maxRainProbabilityPercent: Math.max(
@@ -116,10 +146,23 @@ async function updateWeather(formData: FormData): Promise<void> {
   revalidatePath("/dashboard/plan");
 }
 
-export default async function SettingsPage() {
+const SETTINGS_BANNERS: Record<string, string> = {
+  home_required:
+    "Add a home address (or disable weather-based outside blocks and routing) before saving travel settings.",
+  weather_needs_home:
+    "Save a home address under Travel & routing before enabling weather-based outside blocks — forecasts use that location."
+};
+
+export default async function SettingsPage({
+  searchParams
+}: {
+  searchParams: Promise<{ e?: string }>;
+}) {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
+  const params = await searchParams;
+  const banner = params.e ? SETTINGS_BANNERS[params.e] : undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -129,6 +172,15 @@ export default async function SettingsPage() {
           Account-level basics. Changes regenerate your iCal feed on the next refresh.
         </p>
       </header>
+
+      {banner ? (
+        <div
+          className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+          role="status"
+        >
+          {banner}
+        </div>
+      ) : null}
 
       <section className="card">
         <h2 className="text-sm font-semibold">Basics</h2>
@@ -181,23 +233,32 @@ export default async function SettingsPage() {
         <h2 className="text-sm font-semibold">Travel & routing</h2>
         <p className="mt-1 text-xs text-ink-400">
           We compute drive blocks around physical events. Add a home address and pick a routing
-          provider for real durations — otherwise we fall back to a flat estimate.
+          provider for real durations — otherwise we fall back to a flat estimate. The same address
+          is used for Open-Meteo forecasts when weather-based outside blocks are on (coordinates are
+          saved with your weather settings when you save here).
         </p>
         <form action={updateTravel} className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-xs sm:col-span-2">
-            Home address
-            <textarea
+          <div className="flex flex-col gap-1 text-xs sm:col-span-2">
+            <label htmlFor="home-address" className="font-normal">
+              Home address
+              {settingsNeedHomeAddress(settings) ? (
+                <span className="ml-1 text-red-600 dark:text-red-400">(required)</span>
+              ) : null}
+            </label>
+            <HomeAddressField
+              id="home-address"
               name="homeAddress"
-              rows={2}
               defaultValue={settings.travel.homeAddress ?? ""}
+              required={settingsNeedHomeAddress(settings)}
               placeholder="e.g. 123 Example St, Melbourne VIC 3000  —  or  -37.910156,145.107420"
-              className="field"
             />
             <span className="text-[11px] text-ink-400">
-              Used as the origin/destination for every drive leg. Leave blank to disable real
-              duration lookups.
+              Origin/destination for drive legs, and the location for weather suitability when that
+              feature is enabled. Use current location to paste GPS coordinates (you can edit the
+              text into a street address later). Leave blank only when routing is disabled and
+              weather-based outside blocks are off.
             </span>
-          </label>
+          </div>
           <label className="flex flex-col gap-1 text-xs">
             Routing provider
             <select
@@ -237,7 +298,10 @@ export default async function SettingsPage() {
         <h2 className="text-sm font-semibold">Weather suitability for outside blocks</h2>
         <p className="mt-1 text-xs text-ink-400">
           These thresholds decide when an hour is considered suitable for <code>[Outside]</code>.
-          Saved per user and used for generated timemap weather blocks.
+          Forecasts use your <span className="font-medium text-ink-700 dark:text-ink-200">home address</span>{" "}
+          from Travel
+          {" & "}routing (coordinates update when you save that section). When this is enabled, a home
+          address is required.
         </p>
         <form action={updateWeather} className="mt-3 grid gap-3 sm:grid-cols-2">
           <label className="flex items-center gap-2 text-xs sm:col-span-2">

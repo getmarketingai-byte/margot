@@ -64,6 +64,41 @@ const plan: WeeklyPlan = {
 };
 
 describe("allocateWeek", () => {
+  it("scheduleInNiceWeather limits placement to nice-weather windows", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const monday9 = weekStartMs + 9 * HOUR_MS;
+    const monday11 = weekStartMs + 11 * HOUR_MS;
+    const niceWeatherWindows = [{ startMs: monday9, endMs: monday11 }];
+    const outdoor = goal({
+      id: "out-walk",
+      title: "Walk",
+      minMinutesPerWeek: 45,
+      scheduleInNiceWeather: true
+    });
+    const soloPlan: WeeklyPlan = {
+      id: "plan-weather",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [outdoor],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const result = allocateWeek({
+      plan: soloPlan,
+      busy: [],
+      niceWeatherWindows,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      weekAnchorDate: "2026-04-27"
+    });
+    expect(result.metrics.perGoal["out-walk"]!.scheduledMinutes).toBeGreaterThan(0);
+    for (const b of result.blocks) {
+      expect(b.startMs).toBeGreaterThanOrEqual(monday9);
+      expect(b.endMs).toBeLessThanOrEqual(monday11);
+    }
+  });
+
   it("places goals into free gaps and reports per-goal scheduled minutes", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const busy: BusyEvent[] = [];

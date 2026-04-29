@@ -11,6 +11,7 @@
  *      displaced by goals).
  *   3. Allocate each goal greedily by priority, respecting:
  *        - per-day goal constraints (`dayOfWeek` / `daysOfWeek`, earliest/latestHour)
+ *        - optional `scheduleInNiceWeather` when `niceWeatherWindows` is non-empty
  *        - the user's `energyOrdering.mode`
  *        - Wheel-of-Life weekly minute floors per area
  *        - PPF minimum-touches and minimum-percent targets
@@ -146,6 +147,12 @@ export interface AllocateInput {
   weekStartMs?: number;
   weekEndMs?: number;
   /**
+   * Optional merged "[Outside]" / nice-weather intervals for the allocation
+   * window (`weekStartMs`..`weekEndMs`). Goals with `scheduleInNiceWeather`
+   * intersect free gaps with these windows when the array is non-empty.
+   */
+  niceWeatherWindows?: readonly Interval[];
+  /**
    * Optional per-goal catch-up adjustments in minutes.
    *
    * When the user is behind on a goal mid-week, the weekly review surface
@@ -264,6 +271,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       tz,
       settings,
       input.goalAvailabilityWindows?.[p.goal.id],
+      input.niceWeatherWindows,
       weekStartMs,
       weekEndMs,
       weekAnchorDate,
@@ -677,6 +685,29 @@ function dayIndexForMsInWeek(ms: number, weekStartMs: number, tz: string): numbe
 }
 
 /** True when [innerStart, innerEnd) lies contiguously inside the union of free gaps. */
+/** Intersects free gaps with optional invert-calendar windows, then nice-weather outside windows. */
+function placementWindowsForDay(
+  dayGaps: readonly Interval[],
+  dayStartMs: number,
+  dayEndMs: number,
+  availabilityWindows: readonly Interval[] | undefined,
+  niceWeatherWindows: readonly Interval[] | undefined,
+  goal: WeeklyGoal
+): Interval[] {
+  let gaps: Interval[] = dayGaps as Interval[];
+  if (availabilityWindows && availabilityWindows.length > 0) {
+    gaps = intersectWithAvailability(gaps, availabilityWindows, dayStartMs, dayEndMs);
+  }
+  if (
+    goal.scheduleInNiceWeather === true &&
+    niceWeatherWindows &&
+    niceWeatherWindows.length > 0
+  ) {
+    gaps = intersectWithAvailability(gaps, niceWeatherWindows, dayStartMs, dayEndMs);
+  }
+  return gaps;
+}
+
 function intervalFullyInsideGaps(gaps: readonly Interval[], innerStart: number, innerEnd: number): boolean {
   if (innerEnd <= innerStart) return false;
   let t = innerStart;
@@ -699,6 +730,7 @@ function tryPinGoalBlock(
   tz: string,
   gymTravelPadMs: number,
   availabilityWindows: readonly Interval[] | undefined,
+  niceWeatherWindows: readonly Interval[] | undefined,
   weekStartMs: number,
   weekEndMs: number,
   dayHeadroom: number,
@@ -723,9 +755,14 @@ function tryPinGoalBlock(
 
   if (durMin > dayHeadroom || durMin > remainingMinutes) return null;
 
-  const candidateGaps = availabilityWindows
-    ? intersectWithAvailability(day.gaps, availabilityWindows, day.startMs, day.endMs)
-    : day.gaps;
+  const candidateGaps = placementWindowsForDay(
+    day.gaps,
+    day.startMs,
+    day.endMs,
+    availabilityWindows,
+    niceWeatherWindows,
+    goal
+  );
   if (
     !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
     !intervalFullyInsideGaps(day.gaps, startMs - gymTravelPadMs, endMs + gymTravelPadMs)
@@ -761,6 +798,7 @@ function allocateGoal(
   tz: string,
   settings: UserSettings,
   availabilityWindows: readonly Interval[] | undefined,
+  niceWeatherWindows: readonly Interval[] | undefined,
   weekStartMs: number,
   weekEndMs: number,
   weekAnchorDate: string,
@@ -802,7 +840,14 @@ function allocateGoal(
   // cover typical weekly goals; inverted-calendar windows often squeeze all
   // minutes into fewer days than `ceil(total/7)`, so extra passes are needed
   // whenever availability windows intersect the grid.
-  const maxPasses = availabilityWindows ? 32 : 2;
+  const needsExtraPasses =
+    Boolean(availabilityWindows && availabilityWindows.length > 0) ||
+    Boolean(
+      goal.scheduleInNiceWeather === true &&
+        niceWeatherWindows &&
+        niceWeatherWindows.length > 0
+    );
+  const maxPasses = needsExtraPasses ? 32 : 2;
   for (let pass = 0; pass < maxPasses && remainingMinutes > 0; pass++) {
     let daysScheduledThisPass = 0;
     for (const dayIdx of allowedDays) {
@@ -834,6 +879,7 @@ function allocateGoal(
             tz,
             gymTravelPadMs,
             availabilityWindows,
+            niceWeatherWindows,
             weekStartMs,
             weekEndMs,
             dayHeadroom,
@@ -848,9 +894,14 @@ function allocateGoal(
         }
       }
 
-      const candidateGaps = availabilityWindows
-        ? intersectWithAvailability(day.gaps, availabilityWindows, day.startMs, day.endMs)
-        : day.gaps;
+      const candidateGaps = placementWindowsForDay(
+        day.gaps,
+        day.startMs,
+        day.endMs,
+        availabilityWindows,
+        niceWeatherWindows,
+        goal
+      );
       if (candidateGaps.length === 0) continue;
       // Energy-suggestion pass needs to see only blocks already placed on the
       // current day so adjacency scoring doesn't reach across day boundaries.

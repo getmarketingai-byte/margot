@@ -137,6 +137,22 @@ async function updateAllocationMode(formData: FormData): Promise<void> {
   revalidatePlanningSurfaces();
 }
 
+async function updateCatchUpMode(formData: FormData): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const catchUpMode = (String(formData.get("catchUpMode") ?? "automated") === "manual"
+    ? "manual"
+    : "automated") as "automated" | "manual";
+  await saveSettings(userId, {
+    ...settings,
+    allocator: { ...settings.allocator, catchUpMode }
+  });
+  revalidatePlanningSurfaces();
+}
+
 export async function ConstraintsSection() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
@@ -155,6 +171,45 @@ export async function ConstraintsSection() {
           .
         </p>
       </header>
+
+      <details className="card" open>
+        <summary className="cursor-pointer text-sm font-semibold">Catch-up from day sheet</summary>
+        <p className="mt-1 text-xs text-ink-400">
+          Whether behind-pace floors come from your day logs automatically or only after you save
+          numbers on the week review.
+        </p>
+        <form action={updateCatchUpMode} className="mt-3 flex flex-col gap-2 text-sm">
+          <label className="flex items-start gap-2">
+            <input
+              type="radio"
+              name="catchUpMode"
+              value="automated"
+              defaultChecked={settings.allocator.catchUpMode !== "manual"}
+              className="mt-1"
+            />
+            <span>
+              <strong>Automated (default)</strong> — derive extra weekly floors from day-sheet pace
+              vs a baseline allocation; Perfect Week updates without clicking Apply.
+            </span>
+          </label>
+          <label className="flex items-start gap-2">
+            <input
+              type="radio"
+              name="catchUpMode"
+              value="manual"
+              defaultChecked={settings.allocator.catchUpMode === "manual"}
+              className="mt-1"
+            />
+            <span>
+              <strong>Manual</strong> — floors only from values you apply on the week review.
+              Stored adjustments are ignored by the allocator while automated mode is on.
+            </span>
+          </label>
+          <button type="submit" className="btn-primary w-fit text-xs">
+            Save
+          </button>
+        </form>
+      </details>
 
       <details className="card" open>
         <summary className="cursor-pointer text-sm font-semibold">Spare time distribution</summary>

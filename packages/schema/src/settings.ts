@@ -277,6 +277,17 @@ export const weatherSettingsSchema = z.object({
 });
 export type WeatherSettings = z.infer<typeof weatherSettingsSchema>;
 
+/**
+ * When true, the user should keep a non-empty home address: real routing and/or
+ * weather-based outside blocks need coordinates derived from that string.
+ */
+export function settingsNeedHomeAddress(settings: {
+  travel: Pick<TravelSettings, "routingProvider" | "homeAddress">;
+  weather: Pick<WeatherSettings, "enabled">;
+}): boolean {
+  return settings.travel.routingProvider !== "disabled" || settings.weather.enabled;
+}
+
 /* ───────────────────── 8. Wheel of Life (Tony Robbins) ───────────────────── */
 
 export const wheelAreaSchema = z.object({
@@ -456,6 +467,13 @@ export type VisionSettings = z.infer<typeof visionSettingsSchema>;
 /* ─────────────────────────── 13. Allocator settings ──────────────────────── */
 
 export const allocatorSettingsSchema = z.object({
+  /**
+   * Whether catch-up floors come from day-sheet rollups automatically or only
+   * from values you save on the week review (Apply). Automated uses a baseline
+   * allocation to derive targets, then schedules extra floor minutes from
+   * positive rollup recommendations.
+   */
+  catchUpMode: z.enum(["automated", "manual"]).default("automated"),
   /**
    * What to do when the sum of goal minimums exceeds the available free time.
    *
