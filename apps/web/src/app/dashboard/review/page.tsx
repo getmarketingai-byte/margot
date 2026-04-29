@@ -251,7 +251,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           goalId: b.goalId,
           title: b.title,
           startMs: b.startMs,
-          endMs: b.endMs
+          endMs: b.endMs,
+          ...(b.dragKey ? { dragKey: b.dragKey } : {})
         }));
       if (todaysBlocks.length > 0) {
         review.plannedBlocksSnapshot = todaysBlocks;

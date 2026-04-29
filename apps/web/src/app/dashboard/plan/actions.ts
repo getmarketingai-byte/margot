@@ -21,6 +21,7 @@ import {
   loadDashboardWeeklyPlan,
   runThisWeekAllocationForPlan
 } from "@/lib/perfect-week-this-week-allocation";
+import { refreshPlannedSnapshotsForCurrentWeek } from "@/lib/refresh-review-planned-snapshots";
 import { runRegenerateForUser } from "@/lib/regenerate-user-snapshot";
 import { loadSettings } from "@/lib/settings-store";
 
@@ -469,7 +470,10 @@ export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
     planFull.overrides = [...preservedNoPinCollision, ...paired];
     weeklyPlanSchema.parse(planFull);
     await savePlan(userId, planFull);
+    await refreshPlannedSnapshotsForCurrentWeek(userId, planFull, settings);
     revalidatePlanRoutes();
+    revalidatePath("/dashboard/review");
+    revalidatePath("/dashboard/week-review");
     await runRegenerateForUser(userId);
   } catch (err) {
     console.warn("syncActualGoalOverridesFromDayLogs failed", err);
