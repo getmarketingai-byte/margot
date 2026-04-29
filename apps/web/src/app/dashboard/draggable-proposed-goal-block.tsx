@@ -255,6 +255,8 @@ export function DraggableProposedGoalBlock({
     }
   }
 
+  const isFromDaySheet = slices.some((s) => s.overrideSource === "actual");
+
   const bodyStyle: CSSProperties = {
     top: topPx,
     height: heightPx,
@@ -263,10 +265,10 @@ export function DraggableProposedGoalBlock({
     touchAction: "none",
     backgroundColor,
     opacity: pending ? opacity * 0.6 : opacity,
-    ...(slices.some((s) => s.overrideSource === "actual")
+    ...(isFromDaySheet
       ? {
           backgroundImage:
-            "repeating-linear-gradient(135deg, rgba(255,255,255,0.28) 0 3px, rgba(255,255,255,0.02) 3px 6px)"
+            "linear-gradient(105deg, rgba(15,23,42,0.2), rgba(15,23,42,0.08)), repeating-linear-gradient(45deg, rgba(0,0,0,0.14) 0 2px, transparent 2px 6px)"
         }
       : {})
   };
@@ -280,7 +282,11 @@ export function DraggableProposedGoalBlock({
       aria-label={`${title}. ${isLocked ? "Locked time from your plan or day sheet — drag to adjust." : "Drag to move within the week."}`}
       className={`group absolute inset-x-0.5 z-20 select-none overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         isLocked ? "ring-1 ring-white/50" : ""
-      } ${slices.some((s) => s.overrideSource === "actual") ? "border border-white/30" : ""}`}
+      } ${
+        isFromDaySheet
+          ? "ring-1 ring-ink-900/25 ring-inset dark:ring-white/20"
+          : ""
+      }`}
       style={bodyStyle}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

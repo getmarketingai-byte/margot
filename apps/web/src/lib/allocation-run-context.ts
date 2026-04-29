@@ -28,6 +28,7 @@ import {
   catchUpFloorsFromGoalRollups,
   computeGoalRollups
 } from "@/lib/review-rollup";
+import { daySheetGoalBusyEvents } from "@/lib/day-sheet-goal-busy";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -54,6 +55,9 @@ export interface PlanWeekAllocationInputs {
   reviewsByDate: Map<string, DailyReview>;
   dayIndex: number;
   nextWeekAnchor: string;
+  /** Goal log slots → busy intervals for the visible ISO week (merge into real allocateWeek only). */
+  daySheetGoalBusyThisWeek: BusyEvent[];
+  daySheetGoalBusyNextWeek: BusyEvent[];
 }
 
 export async function loadPlanWeekAllocationInputs(options: {
@@ -139,10 +143,11 @@ export async function loadPlanWeekAllocationInputs(options: {
   );
 
   const weekDates = isoDatesForWeek(weekStartMs, tz);
+  const nextWeekDates = isoDatesForWeek(nextWeekStartMs, tz);
   const dailyReviews = await loadDailyReviewsInRange(
     userId,
     weekDates[0]!,
-    weekDates[weekDates.length - 1]!
+    nextWeekDates[nextWeekDates.length - 1]!
   );
   const reviewsByDate = new Map(dailyReviews.map((r) => [r.date, r] as const));
   const todayIso = todayIsoInTz(tz);
@@ -185,6 +190,24 @@ export async function loadPlanWeekAllocationInputs(options: {
     catchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
   }
 
+  const goalTitleById = new Map(schedulingGoals.map((g) => [g.id, g.title] as const));
+  const daySheetGoalBusyThisWeek = daySheetGoalBusyEvents({
+    reviewsByDate,
+    weekDates,
+    timezone: tz,
+    weekStartMs,
+    weekEndMs,
+    goalTitleById
+  });
+  const daySheetGoalBusyNextWeek = daySheetGoalBusyEvents({
+    reviewsByDate,
+    weekDates: nextWeekDates,
+    timezone: tz,
+    weekStartMs: nextWeekStartMs,
+    weekEndMs: nextWeekEndMs,
+    goalTitleById
+  });
+
   return {
     nowMs,
     fetchStartMs,
@@ -206,6 +229,8 @@ export async function loadPlanWeekAllocationInputs(options: {
     weekDates,
     reviewsByDate,
     dayIndex,
-    nextWeekAnchor
+    nextWeekAnchor,
+    daySheetGoalBusyThisWeek,
+    daySheetGoalBusyNextWeek
   };
 }

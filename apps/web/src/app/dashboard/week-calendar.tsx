@@ -19,6 +19,11 @@ interface WeekCalendarProps {
   timezone: string;
   /** Real busy events (Google etc.) to render as the back layer. */
   busy: readonly BusyEvent[];
+  /**
+   * Day-sheet goal log intervals (same shape as busy). Rendered between
+   * calendar busy and system blocks so logged time reads as actual work.
+   */
+  daySheetGoalBusy?: readonly BusyEvent[];
   /** Planner's proposed blocks to render as the front layer. */
   proposed: readonly AllocatedBlock[];
   /**
@@ -54,13 +59,18 @@ function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: nu
   return aStart < bEnd && bStart < aEnd;
 }
 
-/** Sleep, routines, calendar busy, and travel — goal drags must not land on top. */
+/** Sleep, routines, calendar busy, travel, and logged day-sheet goal time. */
 function buildReservedIntervalsForGoalDrag(
   busy: readonly BusyEvent[],
-  system: readonly SystemBlock[]
+  system: readonly SystemBlock[],
+  daySheetGoalBusy: readonly BusyEvent[] = []
 ): { startMs: number; endMs: number }[] {
   const out: { startMs: number; endMs: number }[] = [];
   for (const b of busy) {
+    if (b.busy === false) continue;
+    out.push({ startMs: b.startMs, endMs: b.endMs });
+  }
+  for (const b of daySheetGoalBusy) {
     if (b.busy === false) continue;
     out.push({ startMs: b.startMs, endMs: b.endMs });
   }
@@ -270,6 +280,12 @@ function daysBetween(
   return Math.round((b - a) / (24 * 60 * 60 * 1000));
 }
 
+/** `sourceId` format from `daySheetGoalBusyEvents`. */
+function goalIdFromDaySheetSourceId(sourceId: string): string | undefined {
+  const m = /^daysheet-goal:([^:]+):/.exec(sourceId);
+  return m?.[1];
+}
+
 type GoalCalendarSlice = {
   dragKey: string;
   startMs: number;
@@ -339,6 +355,7 @@ export function WeekCalendar({
   weekStartMs,
   timezone,
   busy,
+  daySheetGoalBusy = [],
   proposed,
   system = [],
   startHour = 5,
@@ -372,6 +389,22 @@ export function WeekCalendar({
     busyPositions.push(
       ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title)
     );
+  }
+
+  const daySheetPositions: Array<PositionedBlock & { sourceId: string; goalId?: string }> = [];
+  for (const b of daySheetGoalBusy) {
+    const gid = goalIdFromDaySheetSourceId(b.sourceId);
+    for (const slice of position(
+      b.startMs,
+      b.endMs,
+      weekStartMs,
+      timezone,
+      startHour,
+      endHour,
+      b.title
+    )) {
+      daySheetPositions.push({ ...slice, sourceId: b.sourceId, goalId: gid });
+    }
   }
 
   const invertedGoalIdsSorted = [
@@ -448,6 +481,7 @@ export function WeekCalendar({
   const hasTravel = systemPositions.some((p) => p.kind === "travel");
   const hasRoutine = systemPositions.some((p) => p.kind === "routine");
   const hasWeather = systemPositions.some((p) => p.kind === "weather");
+  const hasDaySheetLog = daySheetGoalBusy.length > 0;
   const invertedLegend: { goalId: string; title: string }[] = [];
   const invertedLegendSeen = new Set<string>();
   for (const s of system) {
@@ -457,7 +491,7 @@ export function WeekCalendar({
     invertedLegend.push({ goalId: s.invertedGoalId, title: s.title });
   }
   invertedLegend.sort((a, b) => a.goalId.localeCompare(b.goalId));
-  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system);
+  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system, daySheetGoalBusy);
 
   return (
     <div className="card p-3">
@@ -468,6 +502,7 @@ export function WeekCalendar({
           hasTravel={hasTravel}
           hasRoutine={hasRoutine}
           hasWeather={hasWeather}
+          hasDaySheetLog={hasDaySheetLog}
           invertedLegend={invertedLegend}
         />
       </div>
@@ -528,6 +563,11 @@ export function WeekCalendar({
                 .map((p, i) => (
                   <BusyBlock key={`b${i}`} block={p} />
                 ))}
+              {daySheetPositions
+                .filter((p) => p.dayIndex === dayIdx)
+                .map((p, i) => (
+                  <DaySheetLoggedBlock key={`d${p.sourceId}-${i}`} block={p} goalId={p.goalId} />
+                ))}
               {systemPositions
                 .filter((p) => p.dayIndex === dayIdx)
                 .map((p, i) => (
@@ -558,12 +598,14 @@ function Legend({
   hasTravel,
   hasRoutine,
   hasWeather,
+  hasDaySheetLog,
   invertedLegend
 }: {
   hasSleep: boolean;
   hasTravel: boolean;
   hasRoutine: boolean;
   hasWeather: boolean;
+  hasDaySheetLog: boolean;
   invertedLegend: readonly { goalId: string; title: string }[];
 }) {
   return (
@@ -597,6 +639,20 @@ function Legend({
         <span className="inline-flex items-center gap-1">
           <span aria-hidden className="block h-3 w-3 rounded-sm bg-sky-300/60 dark:bg-sky-400/40" />
           Outside
+        </span>
+      )}
+      {hasDaySheetLog && (
+        <span className="inline-flex items-center gap-1">
+          <span
+            aria-hidden
+            className="block h-3 w-3 rounded-sm border border-ink-300 bg-ink-100/80 dark:border-ink-500 dark:bg-ink-700/40"
+            style={{
+              borderLeftWidth: 3,
+              backgroundImage:
+                "repeating-linear-gradient(45deg, rgba(0,0,0,0.06) 0 2px, transparent 2px 5px)"
+            }}
+          />
+          Logged
         </span>
       )}
       {invertedLegend.map((row) => (
@@ -685,6 +741,45 @@ function BusyBlock({ block }: { block: PositionedBlock }) {
         backgroundImage:
           "repeating-linear-gradient(45deg, rgba(0,0,0,0.04) 0 2px, transparent 2px 6px)"
       }}
+    >
+      <span className="line-clamp-2 leading-tight">{block.title}</span>
+      {block.clippedTop && <span className="sr-only">starts earlier</span>}
+      {block.clippedBottom && <span className="sr-only">ends later</span>}
+    </div>
+  );
+}
+
+function DaySheetLoggedBlock({ block, goalId }: { block: PositionedBlock; goalId?: string }) {
+  const accent = goalId ? goalColorFromKey(goalId) : undefined;
+  const selectable = Boolean(goalId);
+  return (
+    <div
+      title={block.title}
+      className={`absolute inset-x-0.5 z-[8] overflow-hidden rounded border border-ink-200 bg-ink-100/85 px-1 py-0.5 pl-1.5 text-[10px] text-ink-700 backdrop-blur-sm dark:border-ink-600/45 dark:bg-ink-600/35 dark:text-ink-100 ${
+        selectable ? "cursor-pointer" : ""
+      }`}
+      style={{
+        top: block.topPx,
+        height: block.heightPx,
+        borderLeftWidth: 4,
+        borderLeftColor: accent ?? "rgba(100,116,139,0.65)",
+        backgroundImage:
+          "repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0 2px, transparent 2px 6px)"
+      }}
+      role={selectable ? "button" : undefined}
+      tabIndex={selectable ? 0 : undefined}
+      aria-label={selectable ? `${block.title}. Open matching goal.` : undefined}
+      onClick={selectable && goalId ? () => dispatchGoalFocus(goalId) : undefined}
+      onKeyDown={
+        selectable && goalId
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                dispatchGoalFocus(goalId);
+              }
+            }
+          : undefined
+      }
     >
       <span className="line-clamp-2 leading-tight">{block.title}</span>
       {block.clippedTop && <span className="sr-only">starts earlier</span>}

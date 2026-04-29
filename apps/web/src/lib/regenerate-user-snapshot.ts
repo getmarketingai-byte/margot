@@ -131,10 +131,10 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
   });
 
   const proposedBlocksRaw = filterInvertedTimemapFromProposedBlocks(
-    mergeOrphanGoalOverrideBlocks(
+      mergeOrphanGoalOverrideBlocks(
       allocateWeek({
         plan,
-        busy: [...ctx.busy, ...ctx.systemBlocks],
+        busy: [...ctx.busy, ...ctx.daySheetGoalBusyThisWeek, ...ctx.systemBlocks],
         goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
         niceWeatherWindows: ctx.niceWeatherThisWeek,
         settings,
@@ -142,7 +142,8 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
         weekEndMs: ctx.weekEndMs,
         catchUpFloors: ctx.catchUpFloors,
         weekAnchorDate: plan.weekStart,
-        goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+        goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+        nowMs
       }).blocks,
       plan,
       [{ weekStartMs: ctx.weekStartMs, weekEndMs: ctx.weekEndMs }]

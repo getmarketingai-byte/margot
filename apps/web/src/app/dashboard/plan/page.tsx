@@ -126,12 +126,14 @@ export default async function PlanPage() {
     weekDates,
     reviewsByDate,
     dayIndex,
-    nextWeekAnchor
+    nextWeekAnchor,
+    daySheetGoalBusyThisWeek,
+    daySheetGoalBusyNextWeek
   } = ctx;
 
   const allocation = allocateWeek({
     plan,
-    busy: [...busy, ...systemBlocks],
+    busy: [...busy, ...daySheetGoalBusyThisWeek, ...systemBlocks],
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     niceWeatherWindows: niceWeatherThisWeek,
     settings,
@@ -139,12 +141,13 @@ export default async function PlanPage() {
     weekEndMs,
     catchUpFloors: resolvedCatchUpFloors,
     weekAnchorDate: plan.weekStart,
-    goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+    nowMs
   });
 
   const allocationNextWeek = allocateWeek({
     plan,
-    busy: [...busyNextWeek, ...nextWeekSystemBlocks],
+    busy: [...busyNextWeek, ...daySheetGoalBusyNextWeek, ...nextWeekSystemBlocks],
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     niceWeatherWindows: niceWeatherNextWeek,
     settings,
@@ -152,11 +155,13 @@ export default async function PlanPage() {
     weekEndMs: nextWeekEndMs,
     catchUpFloors: catchUpMode === "automated" ? {} : undefined,
     weekAnchorDate: nextWeekAnchor,
-    goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+    nowMs
   });
 
   const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
+  const daySheetGoalBusyForCalendar = [...daySheetGoalBusyThisWeek, ...daySheetGoalBusyNextWeek];
   const weatherPreviewBlocks = weatherTimemapEvents
     .filter((e) => e.title === "[Outside]")
     .map((e) => ({
@@ -374,6 +379,7 @@ export default async function PlanPage() {
                   weekStartMs={weekStartMs}
                   timezone={settings.timezone}
                   busy={busyForCalendar}
+                  daySheetGoalBusy={daySheetGoalBusyForCalendar}
                   system={systemBlocksForCalendar}
                   proposed={proposedForCalendar}
                   compact
@@ -386,6 +392,7 @@ export default async function PlanPage() {
                     weekStartMs={weekStartMs}
                     timezone={settings.timezone}
                     busy={busyForCalendar}
+                    daySheetGoalBusy={daySheetGoalBusyForCalendar}
                     system={systemBlocksForCalendar}
                     proposed={proposedForCalendar}
                   />
@@ -403,6 +410,7 @@ function CalendarPreview({
   weekStartMs,
   timezone,
   busy,
+  daySheetGoalBusy,
   system,
   proposed,
   compact
@@ -410,6 +418,7 @@ function CalendarPreview({
   weekStartMs: number;
   timezone: string;
   busy: Parameters<typeof WeekCalendar>[0]["busy"];
+  daySheetGoalBusy: Parameters<typeof WeekCalendar>[0]["daySheetGoalBusy"];
   system: Parameters<typeof WeekCalendar>[0]["system"];
   proposed: Parameters<typeof WeekCalendar>[0]["proposed"];
   compact: boolean;
@@ -419,6 +428,7 @@ function CalendarPreview({
       weekStartMs={weekStartMs}
       timezone={timezone}
       busy={busy}
+      daySheetGoalBusy={daySheetGoalBusy}
       system={system ?? []}
       proposed={proposed}
       compact={compact}

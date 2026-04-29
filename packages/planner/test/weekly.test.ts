@@ -1022,6 +1022,67 @@ describe("allocateWeek", () => {
     expect(pinned?.endMs).toBe(actualEnd);
   });
 
+  it("skips auto placements entirely before nowMs", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = ws + 2 * DAY_MS + 12 * HOUR_MS;
+    const result = allocateWeek({
+      plan: {
+        id: "p",
+        weekStart: weekStartIso,
+        timezone: "UTC",
+        goals: [goal({ id: "solo", title: "Solo", targetMinutes: 180, maxMinutesPerDay: 180 })]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: weekStartIso,
+      nowMs
+    });
+    const auto = result.blocks.filter(
+      (b) => b.goalId === "solo" && !b.segment && !b.pinnedFromOverride
+    );
+    for (const b of auto) {
+      expect(b.endMs).toBeGreaterThan(nowMs);
+    }
+    const scheduledMin =
+      result.blocks
+        .filter((b) => b.goalId === "solo" && !b.segment)
+        .reduce((a, b) => a + Math.floor((b.endMs - b.startMs) / 60_000), 0) ?? 0;
+    expect(scheduledMin).toBeGreaterThan(0);
+  });
+
+  it("still pins past actual overrides when nowMs is later in the week", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = ws + 3 * DAY_MS + 12 * HOUR_MS;
+    const key = buildGoalDragKey("solo", weekStartIso, 0);
+    const actualStart = ws + 10 * HOUR_MS;
+    const actualEnd = actualStart + 60 * 60 * 1000;
+    const result = allocateWeek({
+      plan: {
+        id: "p",
+        weekStart: weekStartIso,
+        timezone: "UTC",
+        goals: [goal({ id: "solo", title: "Solo", targetMinutes: 120, maxMinutesPerDay: 60 })],
+        overrides: [
+          { kind: "goal", key, startMs: actualStart, endMs: actualEnd, source: "actual", setAt: 1 }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: weekStartIso,
+      nowMs
+    });
+    const pinned = result.blocks.find((b) => b.goalId === "solo" && b.dragKey === key);
+    expect(pinned?.pinnedFromOverride).toBe(true);
+    expect(pinned?.startMs).toBe(actualStart);
+    expect(pinned?.endMs).toBe(actualEnd);
+  });
+
   it("buildGoalDragKey scopes overrides by week anchor and slot", () => {
     expect(buildGoalDragKey("goal-id", "2026-05-04", 0)).toBe("goal:2026-05-04:0:goal-id");
     expect(buildGoalDragKey("a:b", "2026-04-27", 3)).toBe("goal:2026-04-27:3:a:b");

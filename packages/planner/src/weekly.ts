@@ -180,6 +180,12 @@ export interface AllocateInput {
    * `actual` pins relax free-gap containment so logged times win over auto-placement.
    */
   goalOverrideSources?: ReadonlyMap<string, "drag" | "actual">;
+  /**
+   * When set, auto-placed goal blocks (not pins) must end strictly after this
+   * instant — purely-past proposals are skipped so minutes can land later in
+   * the week. Omitted preserves legacy behaviour (tests / historical replay).
+   */
+  nowMs?: number;
 }
 
 export interface AllocateResult {
@@ -205,6 +211,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const weekAnchorDate = input.weekAnchorDate ?? plan.weekStart;
   const goalOverrideSources =
     input.goalOverrideSources ?? goalOverrideSourcesFromPlan(plan);
+  const allocationNowMs = input.nowMs;
   const goalOverrides = new Map<string, { startMs: number; endMs: number }>();
   for (const o of plan.overrides ?? []) {
     if (o.kind === "goal") goalOverrides.set(o.key, { startMs: o.startMs, endMs: o.endMs });
@@ -291,7 +298,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       weekEndMs,
       weekAnchorDate,
       goalOverrides,
-      goalOverrideSources
+      goalOverrideSources,
+      allocationNowMs
     );
   }
 
@@ -842,7 +850,8 @@ function allocateGoal(
   weekEndMs: number,
   weekAnchorDate: string,
   goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
-  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">
+  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
+  nowMs: number | undefined
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
@@ -981,6 +990,9 @@ function allocateGoal(
       }
       const ms = usedMinutes * MS_PER_MIN;
       const { startMs, endMs } = placeBlockInGap(slot.gap, ms, goal, tz, gymTravelPadMs);
+      if (nowMs !== undefined && endMs <= nowMs) {
+        continue;
+      }
       const consumeStart = startMs - gymTravelPadMs;
       const consumeEnd = endMs + gymTravelPadMs;
       consumeFromGaps(day.gaps, consumeStart, consumeEnd);

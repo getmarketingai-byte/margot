@@ -81,6 +81,7 @@ export function RangeToggleCalendar({
   weekStartMs,
   timezone,
   busy,
+  daySheetGoalBusy = [],
   system,
   proposed,
   compact
@@ -88,6 +89,7 @@ export function RangeToggleCalendar({
   weekStartMs: number;
   timezone: string;
   busy: readonly BusyEvent[];
+  daySheetGoalBusy?: readonly BusyEvent[];
   system: readonly SystemBlock[];
   proposed: readonly AllocatedBlock[];
   compact?: boolean;
@@ -287,6 +289,7 @@ export function RangeToggleCalendar({
         weekStartMs={weekStartMs}
         timezone={timezone}
         busy={busy}
+        daySheetGoalBusy={daySheetGoalBusy}
         system={visibleSystem}
         proposed={displayProposed}
         compact={compact}

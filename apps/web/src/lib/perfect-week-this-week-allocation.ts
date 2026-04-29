@@ -81,7 +81,7 @@ export async function runThisWeekAllocationForPlan(
 
   const allocation = allocateWeek({
     plan,
-    busy: [...ctx.busy, ...ctx.systemBlocks],
+    busy: [...ctx.busy, ...ctx.daySheetGoalBusyThisWeek, ...ctx.systemBlocks],
     goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
     niceWeatherWindows: ctx.niceWeatherThisWeek,
     settings,
@@ -89,7 +89,8 @@ export async function runThisWeekAllocationForPlan(
     weekEndMs: ctx.weekEndMs,
     catchUpFloors: ctx.catchUpFloors,
     weekAnchorDate: plan.weekStart,
-    goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+    nowMs: ctx.nowMs
   });
 
   return {
