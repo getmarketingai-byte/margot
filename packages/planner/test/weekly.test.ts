@@ -482,6 +482,40 @@ describe("allocateWeek", () => {
     expect(result.metrics.perGoal["admin"]!.targetMinutes).toBeGreaterThanOrEqual(300);
   });
 
+  it("does not add equal-share remainder onto goals with a weekly floor by default", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "floor-no-bonus",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "floored",
+            title: "Floored",
+            minMinutesPerWeek: 240,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "share",
+            title: "Share",
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["floored"]!.targetMinutes).toBe(240);
+    expect(result.metrics.perGoal["share"]!.targetMinutes).toBeGreaterThan(0);
+  });
+
   it("clamps daily allocation to maxMinutesPerDay", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const result = allocateWeek({
@@ -776,7 +810,7 @@ describe("allocateWeek", () => {
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
     expect(result.metrics.perGoal["capped-first"]!.targetMinutes).toBe(120);
-    expect(result.metrics.perGoal["floored-second"]!.targetMinutes).toBeGreaterThan(240);
+    expect(result.metrics.perGoal["floored-second"]!.targetMinutes).toBe(240);
   });
 
   it("gym special goal reserves quantised drive padding on each side of the workout", () => {

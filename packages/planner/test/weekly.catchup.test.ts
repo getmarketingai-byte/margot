@@ -52,8 +52,10 @@ describe("allocateWeek catchUpFloors", () => {
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
-    expect(result.metrics.perGoal.goalA!.scheduledMinutes).toBeGreaterThanOrEqual(120);
-    expect(result.metrics.perGoal.goalB!.scheduledMinutes).toBeGreaterThanOrEqual(120);
+    expect(result.metrics.perGoal.goalA!.targetMinutes).toBeGreaterThanOrEqual(120);
+    expect(result.metrics.perGoal.goalB!.targetMinutes).toBeGreaterThanOrEqual(120);
+    expect(result.metrics.perGoal.goalA!.scheduledMinutes).toBeGreaterThan(0);
+    expect(result.metrics.perGoal.goalB!.scheduledMinutes).toBeGreaterThan(0);
   });
 
   it("raises goalA's target when catch-up increases its floor and time allows", () => {

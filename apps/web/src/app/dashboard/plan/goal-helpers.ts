@@ -241,7 +241,8 @@ export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
  *
  * - `freeMinutes`: total free time across the week (server-computed).
  * - After weekly minimums are reserved, remaining minutes are split fairly across
- *   goals that are not already capped (weighted by `allocationSharePercent` when set).
+ *   goals that are not already capped and are eligible for remainder share:
+ *   no weekly floor, or explicit `allocationSharePercent`.
  * - Calendar packing (buffers between goal blocks vs slack at the end of a free
  *   window) is controlled separately by settings and does not change these numbers.
  */
@@ -264,7 +265,11 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
     const floor = norm.minMinutesPerWeek ?? 0;
     reserved += floor;
     const ceiling = norm.maxMinutesPerWeek;
-    if (ceiling === undefined || floor < ceiling) equalShareCount++;
+    const participatesInRemainder =
+      floor <= 0 || g.allocationSharePercent !== undefined;
+    if (participatesInRemainder && (ceiling === undefined || floor < ceiling)) {
+      equalShareCount++;
+    }
   }
   const remaining = Math.max(0, freeMinutes - reserved);
   const perEqual = equalShareCount > 0 ? Math.round(remaining / equalShareCount) : 0;

@@ -341,7 +341,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  *   - Pass 1 reserves every goal's `minMinutesPerWeek` as a floor.
  *   - Pass 2 distributes the remaining free time: weighted share of the
  *     remainder (`allocationSharePercent` plus equal split for goals without
- *     it), respecting caps. Calendar layout then uses `allocator.allocationMode`
+ *     it), respecting caps. Goals with a positive weekly floor do not
+ *     participate in this pass unless they explicitly set
+ *     `allocationSharePercent` (so "min" behaves as a floor, not floor+bonus).
+ *     Calendar layout then uses `allocator.allocationMode`
  *     only: `"even"` spreads slack inside each free window as gaps between goal
  *     runs; `"finish-early"` leaves blocks packed without that padding so
  *     leftover time stays toward the end of the window.
@@ -483,6 +486,8 @@ function distributeMinutes(
     prepared.filter((p) => {
       const cap = p.norm.maxMinutesPerWeek;
       if (cap !== undefined && p.effectiveMinutes >= cap) return false;
+      const floor = p.norm.minMinutesPerWeek ?? 0;
+      if (floor > 0 && p.goal.allocationSharePercent === undefined) return false;
       return true;
     });
 
@@ -863,7 +868,12 @@ function allocateGoal(
 
   // How many days do we want this goal to occupy? frequencyPerWeek wins,
   // else a day-pinned goal stays on its single day, else spread across all 7.
-  const targetDays = Math.min(allowedDays.length, norm.frequencyPerWeek ?? allowedDays.length);
+  const maxDaysForQuantum = Math.max(1, Math.floor(remainingMinutes / QUANTUM));
+  const targetDays = Math.min(
+    allowedDays.length,
+    norm.frequencyPerWeek ?? allowedDays.length,
+    maxDaysForQuantum
+  );
 
   // Per-day budget = total / targetDays, clamped by maxMinutesPerDay.
   let perDay = Math.ceil(remainingMinutes / targetDays);
