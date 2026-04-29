@@ -21,6 +21,7 @@ import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/
 export type ChipKind =
   | "min-week"
   | "max-week"
+  | "target-week"
   | "min-day"
   | "max-day"
   | "frequency"
@@ -45,6 +46,7 @@ export interface Chip {
 /** Shown on collapsed goal rows; energy / attention / wheel / PPF stay in expand. */
 const SUMMARY_ROW_CHIP_KEYS = new Set<ChipKind>([
   "special",
+  "target-week",
   "min-week",
   "max-week",
   "min-day",
@@ -131,6 +133,13 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
       key: "special",
       label: SPECIAL_GOAL_LABELS[goal.specialGoalType] ?? goal.specialGoalType
     });
+  }
+  if (
+    goal.targetMinutes !== undefined &&
+    goal.minMinutesPerWeek === undefined &&
+    goal.maxMinutesPerWeek === undefined
+  ) {
+    chips.push({ key: "target-week", label: `${formatMinutes(goal.targetMinutes)}/wk` });
   }
   if (goal.minMinutesPerWeek !== undefined) {
     chips.push({ key: "min-week", label: `≥ ${formatMinutes(goal.minMinutesPerWeek)}/wk` });
