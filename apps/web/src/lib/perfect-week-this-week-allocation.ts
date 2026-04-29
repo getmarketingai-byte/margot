@@ -15,6 +15,7 @@ import { allocateWeek, goalOverrideSourcesFromPlan, type AllocateResult } from "
 import { db, schema } from "@/lib/db";
 import { localMondayIso } from "@/lib/week";
 import { loadPlanWeekAllocationInputs } from "@/lib/allocation-run-context";
+import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 
 async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
@@ -90,7 +91,8 @@ export async function runThisWeekAllocationForPlan(
     catchUpFloors: ctx.catchUpFloors,
     weekAnchorDate: plan.weekStart,
     goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-    nowMs: ctx.nowMs
+    nowMs: ctx.nowMs,
+    sleepIntervals: sleepIntervalsFromSystemBlocks(ctx.systemBlocks)
   });
 
   return {

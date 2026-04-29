@@ -18,7 +18,11 @@ import { loadSettings } from "./settings-store";
 import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "./merge-orphan-goal-override-blocks";
 import { saveSnapshot } from "./snapshots";
-import { gymGoalTravelBlocksFromProposed, type SystemBlock } from "./week-blocks";
+import {
+  gymGoalTravelBlocksFromProposed,
+  sleepIntervalsFromSystemBlocks,
+  type SystemBlock
+} from "./week-blocks";
 
 /** Minimum age of the latest snapshot before a feed request triggers Google + replan. */
 export const FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS = 3 * 60 * 1000;
@@ -143,7 +147,8 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
         catchUpFloors: ctx.catchUpFloors,
         weekAnchorDate: plan.weekStart,
         goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-        nowMs
+        nowMs,
+        sleepIntervals: sleepIntervalsFromSystemBlocks(ctx.systemBlocks)
       }).blocks,
       plan,
       [{ weekStartMs: ctx.weekStartMs, weekEndMs: ctx.weekEndMs }]

@@ -13,7 +13,7 @@ import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@cale
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { isoCalendarDay, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
-import { computeSystemBlocks } from "@/lib/week-blocks";
+import { computeSystemBlocks, sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
@@ -174,7 +174,8 @@ export async function loadPlanWeekAllocationInputs(options: {
       weekEndMs,
       catchUpFloors: {},
       weekAnchorDate: plan.weekStart,
-      goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+      goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+      sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
     });
     const effectiveTargetBaseline: Record<string, number> = {};
     for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {

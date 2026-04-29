@@ -187,6 +187,12 @@ export interface AllocateInput {
    * the week. Omitted preserves legacy behaviour (tests / historical replay).
    */
   nowMs?: number;
+  /**
+   * Computed sleep windows (same intervals folded into `busy` as system sleep
+   * blocks). Used so `source: "actual"` goal pins still cannot sit on sleep even
+   * when gap constraints are relaxed for calendar busy.
+   */
+  sleepIntervals?: readonly Interval[];
 }
 
 export interface AllocateResult {
@@ -205,7 +211,7 @@ interface PreparedGoal {
 }
 
 export function allocateWeek(input: AllocateInput): AllocateResult {
-  const { plan, busy, settings } = input;
+  const { plan, busy, settings, sleepIntervals } = input;
   const tz = plan.timezone || settings.timezone;
   const weekStartMs = input.weekStartMs ?? parseLocalDateMs(plan.weekStart, tz);
   const weekEndMs = input.weekEndMs ?? weekStartMs + 7 * DAY_MS;
@@ -300,7 +306,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       weekAnchorDate,
       goalOverrides,
       goalOverrideSources,
-      allocationNowMs
+      allocationNowMs,
+      sleepIntervals
     );
   }
 
@@ -735,6 +742,14 @@ function pinOverlapsSegmentBlocks(blocks: readonly AllocatedBlock[], innerStart:
   return false;
 }
 
+function pinOverlapsSleep(innerStart: number, innerEnd: number, sleep: readonly Interval[] | undefined): boolean {
+  if (!sleep || sleep.length === 0) return false;
+  for (const s of sleep) {
+    if (innerStart < s.endMs && innerEnd > s.startMs) return true;
+  }
+  return false;
+}
+
 function tryPinGoalBlock(
   pinned: { startMs: number; endMs: number },
   dragKey: string,
@@ -749,7 +764,8 @@ function tryPinGoalBlock(
   weekEndMs: number,
   dayHeadroom: number,
   remainingMinutes: number,
-  relaxGapConstraints: boolean
+  relaxGapConstraints: boolean,
+  sleepIntervals: readonly Interval[] | undefined
 ): number | null {
   let startMs = Math.max(pinned.startMs, weekStartMs);
   let endMs = Math.min(pinned.endMs, weekEndMs);
@@ -770,8 +786,14 @@ function tryPinGoalBlock(
 
   if (durMin > dayHeadroom || durMin > remainingMinutes) return null;
 
+  const consumeStart = startMs - gymTravelPadMs;
+  const consumeEnd = endMs + gymTravelPadMs;
+
   if (relaxGapConstraints) {
-    if (pinOverlapsSegmentBlocks(blocks, startMs - gymTravelPadMs, endMs + gymTravelPadMs)) {
+    if (pinOverlapsSegmentBlocks(blocks, consumeStart, consumeEnd)) {
+      return null;
+    }
+    if (pinOverlapsSleep(consumeStart, consumeEnd, sleepIntervals)) {
       return null;
     }
   } else {
@@ -785,14 +807,11 @@ function tryPinGoalBlock(
     );
     if (
       !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
-      !intervalFullyInsideGaps(day.gaps, startMs - gymTravelPadMs, endMs + gymTravelPadMs)
+      !intervalFullyInsideGaps(day.gaps, consumeStart, consumeEnd)
     ) {
       return null;
     }
   }
-
-  const consumeStart = startMs - gymTravelPadMs;
-  const consumeEnd = endMs + gymTravelPadMs;
   consumeFromGaps(day.gaps, consumeStart, consumeEnd);
   blocks.push({
     goalId: goal.id,
@@ -825,7 +844,8 @@ function allocateGoal(
   weekAnchorDate: string,
   goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
   goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
-  nowMs: number | undefined
+  nowMs: number | undefined,
+  sleepIntervals: readonly Interval[] | undefined
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
@@ -912,7 +932,8 @@ function allocateGoal(
             weekEndMs,
             dayHeadroom,
             remainingMinutes,
-            relaxGaps
+            relaxGaps,
+            sleepIntervals
           );
           if (pinMinutes !== null && pinMinutes >= QUANTUM) {
             remainingMinutes -= pinMinutes;

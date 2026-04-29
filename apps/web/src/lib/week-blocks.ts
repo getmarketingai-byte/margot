@@ -679,6 +679,16 @@ export function gymGoalTravelBlocksFromProposed(
   return out;
 }
 
+/**
+ * Sleep intervals for `allocateWeek({ sleepIntervals })` so day-sheet
+ * (`source: "actual"`) pins cannot be honoured on top of computed sleep.
+ */
+export function sleepIntervalsFromSystemBlocks(
+  blocks: readonly Pick<SystemBlock, "system" | "startMs" | "endMs">[]
+): Array<{ startMs: number; endMs: number }> {
+  return blocks.filter((b) => b.system === "sleep").map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+}
+
 /* ─────────────────────────── Combined entry point ───────────────────────── */
 
 export interface SystemBlocksOverrides {

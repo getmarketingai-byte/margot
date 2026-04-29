@@ -40,6 +40,7 @@ import {
 } from "@/lib/review-rollup";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
+import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { DailyReviewClient } from "./daily-review-client";
 import { ReviewDatePicker } from "./date-picker";
@@ -189,7 +190,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           weekEndMs,
           catchUpFloors: weeklyReview.catchUpAdjustments ?? {},
           weekAnchorDate: localMondayIso(tz),
-          goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+          goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+          sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
         });
       } else {
         const baselineAllocation = allocateWeek({
@@ -202,7 +204,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           weekEndMs,
           catchUpFloors: {},
           weekAnchorDate: localMondayIso(tz),
-          goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+          goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+          sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
         });
         const weekDates = isoDatesForWeek(weekStartMs, tz);
         const dailyReviewsRange = await loadDailyReviewsInRange(
@@ -239,7 +242,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           weekEndMs,
           catchUpFloors,
           weekAnchorDate: localMondayIso(tz),
-          goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+          goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+          sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
         });
       }
       const todaysBlocks: AllocatedBlockSnapshot[] = allocation.blocks

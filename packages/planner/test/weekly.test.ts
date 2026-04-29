@@ -1123,6 +1123,49 @@ describe("allocateWeek", () => {
     expect(pinned?.endMs).toBe(actualEnd);
   });
 
+  it("rejects an actual override that overlaps computed sleep (relaxed gap rules)", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const sleepStart = ws + 22 * HOUR_MS;
+    const sleepEnd = ws + DAY_MS + 6 * HOUR_MS;
+    const sleep: BusyEvent = {
+      sourceId: "sleep-0",
+      title: "Sleep",
+      startMs: sleepStart,
+      endMs: sleepEnd,
+      busy: true,
+      source: "internal"
+    };
+    const key = buildGoalDragKey("solo", weekStartIso, 0);
+    const actualStart = ws + 23 * HOUR_MS;
+    const actualEnd = actualStart + 60 * 60 * 1000;
+    const sources = new Map<string, "drag" | "actual">([[key, "actual"]]);
+    const result = allocateWeek({
+      plan: {
+        id: "p",
+        weekStart: weekStartIso,
+        timezone: "UTC",
+        goals: [goal({ id: "solo", title: "Solo", targetMinutes: 60, maxMinutesPerDay: 120 })],
+        overrides: [
+          { kind: "goal", key, startMs: actualStart, endMs: actualEnd, source: "actual", setAt: 1 }
+        ]
+      },
+      busy: [sleep],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: weekStartIso,
+      goalOverrideSources: sources,
+      sleepIntervals: [{ startMs: sleepStart, endMs: sleepEnd }]
+    });
+    const pinned = result.blocks.find((b) => b.goalId === "solo" && b.dragKey === key);
+    expect(pinned?.pinnedFromOverride).toBeFalsy();
+    for (const b of result.blocks.filter((x) => x.goalId === "solo")) {
+      const overlapsSleep = b.startMs < sleepEnd && b.endMs > sleepStart;
+      expect(overlapsSleep).toBe(false);
+    }
+  });
+
   it("skips auto placements entirely before nowMs", () => {
     const weekStartIso = "2026-04-27";
     const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
