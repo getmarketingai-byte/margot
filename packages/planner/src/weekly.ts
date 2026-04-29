@@ -238,6 +238,18 @@ interface PreparedGoal {
   index: number;
 }
 
+function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTime): boolean {
+  return (
+    norm.isEqualShare &&
+    goal.dayOfWeek === undefined &&
+    (goal.daysOfWeek?.length ?? 0) === 0 &&
+    goal.earliestHour === undefined &&
+    goal.latestHour === undefined &&
+    goal.scheduleInNiceWeather !== true &&
+    goal.specialGoalType !== "gym"
+  );
+}
+
 export function allocateWeek(input: AllocateInput): AllocateResult {
   const { plan, busy, settings, sleepIntervals } = input;
   const tz = plan.timezone || settings.timezone;
@@ -312,6 +324,39 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     );
     const unpinnedLoggedMinutes = Math.max(0, weeklyLoggedMinutes - weeklyPinnedActualMinutes);
     p.effectiveMinutes = Math.max(0, p.effectiveMinutes - unpinnedLoggedMinutes);
+  }
+
+  if (allocationNowMs !== undefined) {
+    const schedulable = prepared.filter((p) => p.effectiveMinutes > 0);
+    const allUnconstrainedEqual = schedulable.every((p) =>
+      isUnconstrainedEqualShareGoal(p.goal, p.norm)
+    );
+    const totalDemand = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
+    if (allUnconstrainedEqual && schedulable.length > 0 && totalDemand > weekCapacityFromNowMinutes) {
+      const budget = Math.max(0, weekCapacityFromNowMinutes);
+      // Equalise whole-week achieved totals (not just this-run blocks):
+      // prepared.effectiveMinutes is the remaining deficit after log credit.
+      // Spend from-now budget to pull deficits toward a common residual level.
+      const deficits = schedulable.map((p) => p.effectiveMinutes).sort((a, b) => a - b);
+      let residual = deficits[deficits.length - 1] ?? 0;
+      for (let i = 0; i < deficits.length; i++) {
+        const nextResidual = i === deficits.length - 1 ? 0 : deficits[i]!;
+        const step = residual - nextResidual;
+        const active = deficits.length - i;
+        const cost = step * active;
+        if (budget >= cost) {
+          residual = nextResidual;
+          continue;
+        }
+        residual = residual - budget / active;
+        break;
+      }
+      const quantisedResidual = Math.max(0, Math.floor(residual / QUANTUM) * QUANTUM);
+      for (const p of schedulable) {
+        const capped = Math.max(0, p.effectiveMinutes - quantisedResidual);
+        p.effectiveMinutes = Math.min(p.effectiveMinutes, capped);
+      }
+    }
   }
 
   /** Free gaps after segments, before goals — used to even out inter-goal slack in "even" mode. */

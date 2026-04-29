@@ -1,6 +1,10 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema } from "@calendar-automations/schema";
+import {
+  filterSchedulingGoals,
+  type WeeklyPlan,
+  weeklyIntentSchema
+} from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";

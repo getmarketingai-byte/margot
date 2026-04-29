@@ -7,7 +7,7 @@
 import "server-only";
 
 import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
-import { filterSchedulingGoals } from "@calendar-automations/schema";
+import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent } from "@calendar-automations/planner";
 import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
@@ -189,6 +189,20 @@ export async function loadPlanWeekAllocationInputs(options: {
       dayIndex
     });
     catchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
+    // Keep unconstrained plans truly "even": automated catch-up should not
+    // turn all-but-one equal-share goals into floor-only rows.
+    const allGoalsUnconstrained = schedulingGoals.every((g) => {
+      const norm = normaliseGoalTime(g);
+      return (
+        norm.isEqualShare &&
+        g.dayOfWeek === undefined &&
+        (g.daysOfWeek?.length ?? 0) === 0 &&
+        g.earliestHour === undefined &&
+        g.latestHour === undefined &&
+        g.scheduleInNiceWeather !== true
+      );
+    });
+    if (allGoalsUnconstrained) catchUpFloors = {};
   }
 
   const goalTitleById = new Map(schedulingGoals.map((g) => [g.id, g.title] as const));
