@@ -235,18 +235,25 @@ export default async function PlanPage() {
     goals: schedulingGoals,
     reviewsByDate,
     effectiveTargetByGoal,
+    allocatorAchievedByGoal: scheduledByGoal,
     weekDates,
     dayIndex
   });
   const paceByGoal: Record<
     string,
-    { status: import("@/lib/review-rollup").PaceStatus; deltaMinutes: number; actualMinutes: number }
+    {
+      status: import("@/lib/review-rollup").PaceStatus;
+      deltaMinutes: number;
+      actualMinutes: number;
+      targetToDateMinutes: number;
+    }
   > = {};
   for (const r of goalRollups) {
     paceByGoal[r.goalId] = {
       status: r.status,
       deltaMinutes: r.deltaMinutes,
-      actualMinutes: r.effectiveActualMinutes
+      actualMinutes: r.effectiveActualMinutes,
+      targetToDateMinutes: r.targetToDate
     };
   }
 

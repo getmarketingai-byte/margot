@@ -52,6 +52,13 @@ export interface GoalRollupInput {
   reviewsByDate: ReadonlyMap<string, DailyReview>;
   /** Allocator metrics: goalId -> targetMinutes for the week. */
   effectiveTargetByGoal: Readonly<Record<string, number>>;
+  /**
+   * When set (e.g. Perfect Week plan page), pace uses these achieved minutes
+   * per goal — same tally as `metrics.perGoal[].scheduledMinutes` (logs + plan,
+   * merged) so Behind/Ahead matches the `achieved / target` line. Weekly Review
+   * pages omit this and use only day-sheet slots / goal marks.
+   */
+  allocatorAchievedByGoal?: Readonly<Record<string, number>>;
   /** ISO dates for the week, Monday-first. */
   weekDates: readonly string[];
   /**
@@ -71,7 +78,14 @@ const BEHIND_THRESHOLD_MIN = 30;
 const AHEAD_THRESHOLD_MIN = 30;
 
 export function computeGoalRollups(input: GoalRollupInput): GoalRollup[] {
-  const { goals, reviewsByDate, effectiveTargetByGoal, weekDates, dayIndex } = input;
+  const {
+    goals,
+    reviewsByDate,
+    effectiveTargetByGoal,
+    allocatorAchievedByGoal,
+    weekDates,
+    dayIndex
+  } = input;
   const dayCount = weekDates.length;
   const proRateBasis = Math.max(1, Math.min(dayIndex + 1, dayCount));
 
@@ -102,13 +116,16 @@ export function computeGoalRollups(input: GoalRollupInput): GoalRollup[] {
 
     const target = effectiveTargetByGoal[goal.id] ?? 0;
     const targetToDate = Math.round((target * proRateBasis) / dayCount);
-    const effective = byDay.reduce((acc, m) => acc + m, 0);
+    const fromReviews = byDay.reduce((acc, m) => acc + m, 0);
+    const useAllocatorPace =
+      allocatorAchievedByGoal != null && Object.hasOwn(allocatorAchievedByGoal, goal.id);
+    const effective = useAllocatorPace ? allocatorAchievedByGoal[goal.id]! : fromReviews;
     const delta = effective - targetToDate;
     const remainingDays = Math.max(0, dayCount - proRateBasis);
     const remainingTarget = Math.max(0, target - effective);
 
     let status: PaceStatus = "on-track";
-    const hasAnyData = byDay.some((m) => m > 0);
+    const hasAnyData = useAllocatorPace ? true : byDay.some((m) => m > 0);
     if (!hasAnyData && proRateBasis > 1) {
       status = "no-data";
     } else if (delta <= -BEHIND_THRESHOLD_MIN) {

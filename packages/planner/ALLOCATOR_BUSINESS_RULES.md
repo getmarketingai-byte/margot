@@ -56,4 +56,4 @@ Baseline allocation used to compute automated catch-up floors typically runs **w
 ## Related UI
 
 - Perfect Week budget chips should use `weekCapacityMinutes` (or equivalent) for the same denominator as Pass 1+2.
-- Pace badges (`computeGoalRollups`) compare day-sheet **actuals** to `targetMinutes` (weekly plan), with **pro-rated** “to date” logic for mid-week (see `apps/web/src/lib/review-rollup.ts`).
+- Pace badges (`computeGoalRollups`) compare **actual** minutes to `targetMinutes` with **pro-rated** “to date” logic mid-week (see `apps/web/src/lib/review-rollup.ts`). On the **Plan** page, actuals are **`metrics.perGoal[].scheduledMinutes`** (same as the `X / Y` line). **Review** pages use only day-sheet slots and goal marks when `allocatorAchievedByGoal` is omitted.

@@ -43,6 +43,8 @@ interface GoalPaceInfo {
   status: PaceStatus;
   deltaMinutes: number;
   actualMinutes: number;
+  /** Pro-rated weekly target through the current weekday (pace baseline). */
+  targetToDateMinutes?: number;
 }
 
 interface PlanClientProps {
@@ -394,7 +396,11 @@ function PacePill({ pace }: { pace: GoalPaceInfo }) {
   }
   return (
     <span
-      title={`Logged ${formatMinutes(pace.actualMinutes)} this week`}
+      title={
+        pace.targetToDateMinutes != null
+          ? `${formatMinutes(pace.actualMinutes)} vs ${formatMinutes(pace.targetToDateMinutes)} min (achieved vs pro-rated target to date)`
+          : `${formatMinutes(pace.actualMinutes)} min counted for pace`
+      }
       className={`rounded-full px-2 py-0.5 text-[11px] ${PACE_BG[pace.status]}`}
     >
       {label}
