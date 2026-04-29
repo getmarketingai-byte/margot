@@ -696,7 +696,8 @@ describe("allocateWeek", () => {
     });
     const targetA = result.metrics.perGoal["a"]!.targetMinutes;
     const targetB = result.metrics.perGoal["b"]!.targetMinutes;
-    expect(targetB - targetA).toBeGreaterThanOrEqual(120);
+    expect(targetA).toBe(targetB);
+    expect(result.metrics.perGoal["a"]!.scheduledMinutes).toBeGreaterThanOrEqual(120);
   });
 
   it("applies weekly and daily caps together when both are set", () => {
@@ -1408,7 +1409,7 @@ describe("allocateWeek", () => {
     expect(pinned?.endMs).toBe(actualEnd);
   });
 
-  it("uses only future capacity for weekly targets when nowMs is set", () => {
+  it("keeps full-week planned targets when nowMs is set (auto placement is future-only)", () => {
     const weekStartIso = "2026-04-27";
     const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
     const nowMs = ws + 4 * DAY_MS + 12 * HOUR_MS; // Friday noon
@@ -1426,11 +1427,14 @@ describe("allocateWeek", () => {
       weekAnchorDate: weekStartIso,
       nowMs
     });
-    expect(result.metrics.perGoal["solo"]!.targetMinutes).toBeLessThan(4000);
-    expect(result.metrics.perGoal["solo"]!.targetMinutes).toBeLessThanOrEqual(60 * 60);
+    expect(result.metrics.perGoal["solo"]!.targetMinutes).toBe(4000);
+    const auto = result.blocks.filter((b) => b.goalId === "solo" && !b.segment && !b.pinnedFromOverride);
+    for (const b of auto) {
+      expect(b.endMs).toBeGreaterThan(nowMs);
+    }
   });
 
-  it("reports free capacity as future unscheduled minutes only", () => {
+  it("reports remaining free capacity full-week vs from-now after placement", () => {
     const weekStartIso = "2026-04-27";
     const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
     const nowMs = ws + 4 * DAY_MS + 12 * HOUR_MS; // Friday noon
@@ -1448,7 +1452,10 @@ describe("allocateWeek", () => {
       weekAnchorDate: weekStartIso,
       nowMs
     });
-    expect(result.metrics.utilisation.availableMinutes).toBe(60 * 60);
+    expect(result.metrics.utilisation.weekCapacityMinutes).toBe(7 * 24 * 60);
+    expect(result.metrics.utilisation.weekCapacityFromNowMinutes).toBe(60 * 60);
+    expect(result.metrics.utilisation.availableMinutes).toBe(7 * 24 * 60);
+    expect(result.metrics.utilisation.availableFromNowMinutes).toBe(60 * 60);
   });
 
   it("buildGoalDragKey scopes overrides by week anchor and slot", () => {

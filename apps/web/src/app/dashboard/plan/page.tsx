@@ -281,7 +281,8 @@ export default async function PlanPage() {
           <div className="flex flex-col gap-5">
             <PlanClient
               initialGoals={schedulingGoals}
-              freeMinutesThisWeek={allocation.metrics.utilisation.availableMinutes}
+              freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
+              weekCapacityFromNowMinutes={allocation.metrics.utilisation.weekCapacityFromNowMinutes}
               wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
               scheduledByGoal={scheduledByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}

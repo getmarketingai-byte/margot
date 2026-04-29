@@ -1,6 +1,8 @@
 /**
  * Perfect-week allocator.
  *
+ * Product/business rules: see [ALLOCATOR_BUSINESS_RULES.md](../ALLOCATOR_BUSINESS_RULES.md) in this package.
+ *
  * Inputs: a WeeklyPlan (goals + targets), busy events for the week, plus
  * UserSettings (energy ordering, Wheel of Life floors, PPF mix targets,
  * consistency segments).
@@ -106,8 +108,16 @@ export interface AllocatedBlock {
 }
 
 export interface WeekMetrics {
-  /** goalId -> minutes scheduled vs target. */
-  perGoal: Record<string, { scheduledMinutes: number; targetMinutes: number }>;
+  /**
+   * goalId -> progress vs weekly plan.
+   * - `targetMinutes`: Pass 1+2 planned weekly minutes (full-week free budget), before day-sheet credit.
+   * - `scheduledMinutes`: achieved = max(logged,pinsActual)+auto+drag blocks (see ALLOCATOR_BUSINESS_RULES.md).
+   * - `unplacedMinutes`: placement demand after log credit still unmet by calendar blocks (>= 0).
+   */
+  perGoal: Record<
+    string,
+    { scheduledMinutes: number; targetMinutes: number; unplacedMinutes: number }
+  >;
   /** wheelAreaId -> scheduled minutes (for areas listed in settings). */
   wheelAreaMinutes: Record<string, number>;
   /** Wheel areas whose minMinutesPerWeek floor is unmet. */
@@ -124,8 +134,21 @@ export interface WeekMetrics {
    * Empty when HP6 is excluded from the scheduler or all minimums are zero.
    */
   hp6Gaps: Array<{ habit: Hp6HabitKey; scheduledTouches: number; minTouches: number }>;
-  /** Total available minutes vs scheduled minutes. */
-  utilisation: { availableMinutes: number; scheduledMinutes: number };
+  /**
+   * Capacity vs placement outcome.
+   * - `weekCapacityMinutes`: free gap total after segments, before Pass 3 (Pass 1+2 denominator, full week).
+   * - `weekCapacityFromNowMinutes`: same window clipped to `nowMs` before Pass 3.
+   * - `availableMinutes`: free gaps left after placement, full week (no now-clip).
+   * - `availableFromNowMinutes`: free gaps left after placement, clipped to `nowMs` when set.
+   * - `scheduledMinutes`: sum of non-segment goal block minutes (PPF mix basis).
+   */
+  utilisation: {
+    weekCapacityMinutes: number;
+    weekCapacityFromNowMinutes: number;
+    availableMinutes: number;
+    availableFromNowMinutes: number;
+    scheduledMinutes: number;
+  };
   /**
    * Set when goal floors exceed the available free time. UI surfaces this so
    * the user can choose to relax a floor or add free time.
@@ -204,7 +227,12 @@ export interface AllocateResult {
 interface PreparedGoal {
   goal: WeeklyGoal;
   norm: NormalisedGoalTime;
-  /** Minutes the allocator will try to schedule across the week. */
+  /** Pass 1+2 planned weekly minutes (full-week budget). */
+  plannedWeeklyMinutes: number;
+  /**
+   * Minutes still to place after day-sheet credit (what Pass 3 tries to schedule).
+   * Alias: placement demand.
+   */
   effectiveMinutes: number;
   /** Order in the user's list, used as the priority tie-breaker. */
   index: number;
@@ -249,14 +277,19 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel, fw.wheel);
   const goalsForAllocation = [...schedulingGoals, ...wheelTopUps];
 
-  // Three-pass distribution.
-  const totalFreeMin = days.reduce(
+  // Pass 1+2: full ISO-week free gap total after segments (Mon–Sun window).
+  // Pass 3 still respects `nowMs`; weekly *targets* must not shrink mid-week.
+  const weekCapacityMinutes = days.reduce(
+    (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFull(g), 0),
+    0
+  );
+  const weekCapacityFromNowMinutes = days.reduce(
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFromNow(g, allocationNowMs), 0),
     0
   );
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
     goalsForAllocation,
-    totalFreeMin,
+    weekCapacityMinutes,
     settings.allocator,
     input.catchUpFloors
   );
@@ -349,7 +382,21 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     blocks.sort((a, b) => a.startMs - b.startMs);
   }
 
-  const metrics = computeMetrics(plan, prepared, blocks, days, settings, allocationNowMs);
+  const metrics = computeMetrics(
+    plan,
+    prepared,
+    blocks,
+    days,
+    settings,
+    allocationNowMs,
+    busy,
+    weekStartMs,
+    weekEndMs,
+    goalOverrides,
+    goalOverrideSources,
+    weekCapacityMinutes,
+    weekCapacityFromNowMinutes
+  );
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
   return { blocks, metrics };
@@ -446,6 +493,7 @@ function distributeMinutes(
     return {
       goal,
       norm,
+      plannedWeeklyMinutes: 0,
       effectiveMinutes: 0,
       index
     };
@@ -492,6 +540,9 @@ function distributeMinutes(
         }
       }
     }
+    for (const p of prepared) {
+      p.plannedWeeklyMinutes = p.effectiveMinutes;
+    }
     return { prepared, overcommitted, notScheduled };
   }
 
@@ -536,11 +587,20 @@ function distributeMinutes(
     remainder -= consumed;
   }
 
+  for (const p of prepared) {
+    p.plannedWeeklyMinutes = p.effectiveMinutes;
+  }
+
   return { prepared, overcommitted, notScheduled };
 }
 
 function quantise(min: number): number {
   return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
+}
+
+function intervalMinutesFull(interval: Interval): number {
+  if (interval.endMs <= interval.startMs) return 0;
+  return Math.floor((interval.endMs - interval.startMs) / MS_PER_MIN);
 }
 
 function intervalMinutesFromNow(interval: Interval, nowMs: number | undefined): number {
@@ -1578,27 +1638,79 @@ function sortBlocksByEnergyCurve(
   void energy;
 }
 
+function achievedMinutesForGoal(
+  goalId: string,
+  busy: readonly BusyEvent[],
+  blocks: readonly AllocatedBlock[],
+  weekStartMs: number,
+  weekEndMs: number,
+  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
+  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">
+): number {
+  const logged = loggedGoalBusyMinutesForWindow(busy, goalId, weekStartMs, weekEndMs);
+  const pinActual = pinnedActualGoalOverrideMinutesForWindow(
+    goalId,
+    weekStartMs,
+    weekEndMs,
+    goalOverrides,
+    goalOverrideSources
+  );
+  let autoAndDrag = 0;
+  for (const b of blocks) {
+    if (b.segment || b.goalId !== goalId) continue;
+    if (b.pinnedFromOverride && b.overrideSource === "actual") continue;
+    autoAndDrag += Math.floor((b.endMs - b.startMs) / MS_PER_MIN);
+  }
+  return Math.max(logged, pinActual) + autoAndDrag;
+}
+
+function goalBlockMinutesPlaced(goalId: string, blocks: readonly AllocatedBlock[]): number {
+  let n = 0;
+  for (const b of blocks) {
+    if (b.segment || b.goalId !== goalId) continue;
+    n += Math.floor((b.endMs - b.startMs) / MS_PER_MIN);
+  }
+  return n;
+}
+
 function computeMetrics(
   plan: WeeklyPlan,
   prepared: readonly PreparedGoal[],
   blocks: readonly AllocatedBlock[],
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   settings: UserSettings,
-  nowMs: number | undefined
+  nowMs: number | undefined,
+  busy: readonly BusyEvent[],
+  weekStartMs: number,
+  weekEndMs: number,
+  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
+  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
+  weekCapacityMinutes: number,
+  weekCapacityFromNowMinutes: number
 ): WeekMetrics {
   const wheel = settings.wheel;
   const ppf = settings.ppf;
   const fw = settings.schedulerFrameworkInclusion;
-  const perGoal: Record<string, { scheduledMinutes: number; targetMinutes: number }> = {};
-  // Target = the bounds the allocator decided to pursue this week, which for
-  // legacy goals matches `targetMinutes` and for new goals reflects the
-  // floor + equal-share of remaining weekly minutes (before calendar packing).
+  const perGoal: WeekMetrics["perGoal"] = {};
   const preparedById = new Map(prepared.map((p) => [p.goal.id, p] as const));
   for (const g of plan.goals) {
     const p = preparedById.get(g.id);
+    const target = p?.plannedWeeklyMinutes ?? g.targetMinutes ?? 0;
+    const placementDemand = p?.effectiveMinutes ?? 0;
+    const placedBlocks = goalBlockMinutesPlaced(g.id, blocks);
+    const achieved = achievedMinutesForGoal(
+      g.id,
+      busy,
+      blocks,
+      weekStartMs,
+      weekEndMs,
+      goalOverrides,
+      goalOverrideSources
+    );
     perGoal[g.id] = {
-      scheduledMinutes: 0,
-      targetMinutes: p?.effectiveMinutes ?? g.targetMinutes ?? 0
+      targetMinutes: target,
+      scheduledMinutes: achieved,
+      unplacedMinutes: Math.max(0, placementDemand - placedBlocks)
     };
   }
 
@@ -1611,7 +1723,6 @@ function computeMetrics(
     if (b.segment) continue;
     const mins = Math.floor((b.endMs - b.startMs) / MS_PER_MIN);
     totalScheduled += mins;
-    if (perGoal[b.goalId]) perGoal[b.goalId]!.scheduledMinutes += mins;
     if (b.wheelAreaId) {
       wheelMinutes[b.wheelAreaId] = (wheelMinutes[b.wheelAreaId] ?? 0) + mins;
     }
@@ -1650,6 +1761,10 @@ function computeMetrics(
   const hp6Gaps = computeHp6Gaps(blocks, settings, fw);
 
   const availableMinutes = days.reduce(
+    (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFull(g), 0),
+    0
+  );
+  const availableFromNowMinutes = days.reduce(
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFromNow(g, nowMs), 0),
     0
   );
@@ -1663,7 +1778,13 @@ function computeMetrics(
     ppfPercent,
     ppfGaps,
     hp6Gaps,
-    utilisation: { availableMinutes, scheduledMinutes: totalScheduled },
+    utilisation: {
+      weekCapacityMinutes,
+      weekCapacityFromNowMinutes,
+      availableMinutes,
+      availableFromNowMinutes,
+      scheduledMinutes: totalScheduled
+    },
     notScheduled: []
   };
 }

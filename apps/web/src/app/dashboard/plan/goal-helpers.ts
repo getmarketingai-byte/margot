@@ -248,7 +248,7 @@ export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
  * UI. The real allocator runs server-side; this client-side approximation
  * tells the user how many hours each unconstrained goal will get.
  *
- * - `freeMinutes`: total free time across the week (server-computed).
+ * - `freeMinutes`: full-week free gap capacity after segments (`weekCapacityMinutes`), same denominator as Pass 1+2.
  * - After weekly minimums are reserved, remaining minutes are split fairly across
  *   goals that are not already capped and are eligible for remainder share:
  *   no weekly floor, or explicit `allocationSharePercent`.

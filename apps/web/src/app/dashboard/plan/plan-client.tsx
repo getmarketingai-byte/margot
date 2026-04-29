@@ -47,7 +47,13 @@ interface GoalPaceInfo {
 
 interface PlanClientProps {
   initialGoals: WeeklyGoal[];
+  /**
+   * Full-week free gap total after routines/segments (Pass 1+2 denominator).
+   * See `WeekMetrics.utilisation.weekCapacityMinutes`.
+   */
   freeMinutesThisWeek: number;
+  /** Optional: free capacity from `now` before placement (planning horizon). */
+  weekCapacityFromNowMinutes?: number;
   wheelAreas: WheelOption[];
   scheduledByGoal: Record<string, number>;
   effectiveTargetByGoal: Record<string, number>;
@@ -111,6 +117,7 @@ function applySpecialGoalPreset(current: GoalDraft, type?: SpecialGoalType): Goa
 export function PlanClient({
   initialGoals,
   freeMinutesThisWeek,
+  weekCapacityFromNowMinutes,
   wheelAreas,
   scheduledByGoal,
   effectiveTargetByGoal,
@@ -226,7 +233,7 @@ export function PlanClient({
 
   return (
     <div className="flex flex-col gap-5">
-      <BudgetChip summary={summary} />
+      <BudgetChip summary={summary} weekCapacityFromNowMinutes={weekCapacityFromNowMinutes} />
 
       {goals.length === 0 ? (
         <EmptyState onAdd={handleAdd} />
@@ -264,9 +271,11 @@ export function PlanClient({
 /* ─────────────────────────── Budget chip ─────────────────────────────────── */
 
 function BudgetChip({
-  summary
+  summary,
+  weekCapacityFromNowMinutes
 }: {
   summary: ReturnType<typeof summariseAllocation>;
+  weekCapacityFromNowMinutes?: number;
 }) {
   if (summary.goalCount === 0) {
     return (
@@ -281,8 +290,9 @@ function BudgetChip({
   }
 
   return (
-    <div className="card grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Stat label="Total free" value={formatMinutes(summary.freeMinutes)} />
+    <div className="card flex flex-col gap-3">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Stat label="Total free (week)" value={formatMinutes(summary.freeMinutes)} />
       <Stat label="Unallocated remainder" value={formatMinutes(summary.remainingMinutes)} />
       <Stat label="Goals" value={String(summary.goalCount)} />
       <Stat
@@ -301,6 +311,12 @@ function BudgetChip({
               : `${formatMinutes(summary.reservedMinutes)} reserved`
         }
       />
+    </div>
+      {weekCapacityFromNowMinutes !== undefined ? (
+        <p className="text-xs text-ink-500 dark:text-ink-300">
+          Placeable from now (this run): {formatMinutes(weekCapacityFromNowMinutes)}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -547,7 +563,10 @@ function GoalRow({
               </>
             )}
             {scheduledMinutes !== undefined && effectiveTarget !== undefined && effectiveTarget > 0 && (
-              <span className="ml-auto text-xs text-ink-400">
+              <span
+                className="ml-auto text-xs text-ink-400"
+                title="Achieved (logs + calendar blocks) / weekly plan target"
+              >
                 {formatMinutes(scheduledMinutes)} / {formatMinutes(effectiveTarget)}
               </span>
             )}
