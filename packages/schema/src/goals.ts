@@ -161,9 +161,9 @@ export const weeklyGoalSchema = z.object({
    */
   commitmentLevel: commitmentLevel.default("committed"),
   /**
-   * When `allocator.allocationMode` is `"even"`, Pass 2 splits post-floor
-   * remainder using this percentage alongside goals that omit it (they split
-   * what is left equally). Ignored in `"finish-early"` mode.
+   * Pass 2 splits the post-floor remainder using this percentage alongside goals
+   * that omit it (they split what is left equally). Calendar packing
+   * (`allocator.allocationMode`) is separate and does not change this weighting.
    */
   allocationSharePercent: z.number().int().min(1).max(100).optional(),
   /**
@@ -218,7 +218,11 @@ export interface NormalisedGoalTime {
  * Rules:
  *   1. If only `targetMinutes` is set, treat it as `min == max == targetMinutes`.
  *   2. If `minMinutesPerDay` is set without `minMinutesPerWeek`, derive
- *      `min/wk = min/day × (frequencyPerWeek ?? 7)`. Same for max.
+ *      `min/wk = min/day × (frequencyPerWeek ?? 7)`.
+ *      `maxMinutesPerDay` does **not** imply `maxMinutesPerWeek`: without an
+ *      explicit weekly cap, even-mode allocation treats the weekly ceiling as
+ *      unbounded for distribution and splits free time fairly across goals; the
+ *      per-day max still clamps placement day by day.
  *   3. A goal with no time fields and no `allocationSharePercent` is "equal share".
  */
 export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
@@ -240,9 +244,6 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
 
   if (minMinutesPerWeek === undefined && goal.minMinutesPerDay !== undefined) {
     minMinutesPerWeek = goal.minMinutesPerDay * days;
-  }
-  if (maxMinutesPerWeek === undefined && goal.maxMinutesPerDay !== undefined) {
-    maxMinutesPerWeek = goal.maxMinutesPerDay * days;
   }
 
   const isEqualShare =
@@ -269,7 +270,8 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
  *
  * Stored on the WeeklyPlan rather than on UserSettings so a fresh week
  * starts clean. Keys identify the original computed block:
- *   - kind="sleep"    → key is the night index "0".."6"
+ *   - kind="sleep"    → key is the night index "0".."6", or "7" for the sleep
+ *                       that wakes on the week's first Monday (Sun night → Mon)
  *   - kind="routine"  → key is "morning-${idx}" or "shutdown-${idx}"
  *   - kind="goal"     → key is `goal:<weekAnchorIso>:<slotIndex>:<goalId>`
  *                       (constructed by the planner).

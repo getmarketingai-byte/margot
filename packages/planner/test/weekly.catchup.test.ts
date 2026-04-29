@@ -56,31 +56,64 @@ describe("allocateWeek catchUpFloors", () => {
     expect(result.metrics.perGoal.goalB!.scheduledMinutes).toBeGreaterThanOrEqual(120);
   });
 
-  it("adds the catch-up minutes to goalA's scheduled time", () => {
+  it("raises goalA's target when catch-up increases its floor and time allows", () => {
+    const looseCapPlan: WeeklyPlan = {
+      ...plan,
+      goals: [
+        {
+          ...plan.goals[0]!,
+          minMinutesPerWeek: 120,
+          maxMinutesPerWeek: 1000
+        },
+        {
+          ...plan.goals[1]!,
+          minMinutesPerWeek: 120,
+          maxMinutesPerWeek: 1000
+        }
+      ]
+    };
+    const busy = Array.from({ length: 7 }, (_, d) => ({
+      sourceId: `busy-${d}`,
+      title: "blocked",
+      startMs: weekStartMs + d * DAY_MS + 1 * HOUR_MS,
+      endMs: weekStartMs + d * DAY_MS + 24 * HOUR_MS,
+      busy: true,
+      source: "internal" as const
+    }));
     const baseline = allocateWeek({
-      plan,
-      busy: [],
+      plan: looseCapPlan,
+      busy,
       settings: buildSettings(),
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
+    const boosted = allocateWeek({
+      plan: looseCapPlan,
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      catchUpFloors: { goalA: 60 }
+    });
+    expect(boosted.metrics.perGoal.goalA!.targetMinutes).toBeGreaterThan(
+      baseline.metrics.perGoal.goalA!.targetMinutes
+    );
+    expect(boosted.metrics.perGoal.goalA!.scheduledMinutes).toBeGreaterThanOrEqual(
+      baseline.metrics.perGoal.goalA!.scheduledMinutes
+    );
+  });
+
+  it("never schedules above maxMinutesPerWeek even with a large catch-up bump", () => {
     const boosted = allocateWeek({
       plan,
       busy: [],
       settings: buildSettings(),
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS,
-      catchUpFloors: { goalA: 60 }
+      catchUpFloors: { goalA: 500 }
     });
-    expect(boosted.metrics.perGoal.goalA!.targetMinutes).toBe(
-      baseline.metrics.perGoal.goalA!.targetMinutes + 60
-    );
-    expect(boosted.metrics.perGoal.goalA!.scheduledMinutes).toBeGreaterThanOrEqual(
-      baseline.metrics.perGoal.goalA!.scheduledMinutes
-    );
-    expect(boosted.metrics.perGoal.goalA!.scheduledMinutes).toBeGreaterThanOrEqual(
-      baseline.metrics.perGoal.goalA!.scheduledMinutes + 60
-    );
+    expect(boosted.metrics.perGoal.goalA!.targetMinutes).toBeLessThanOrEqual(240);
+    expect(boosted.metrics.perGoal.goalA!.scheduledMinutes).toBeLessThanOrEqual(240);
   });
 
   it("does not affect goals that are not listed in catchUpFloors", () => {

@@ -9,6 +9,7 @@ import {
   useTransition,
   type FormEvent
 } from "react";
+import { useRouter } from "next/navigation";
 import type {
   DayOfWeek,
   EnergyMode,
@@ -50,7 +51,6 @@ interface PlanClientProps {
   wheelAreas: WheelOption[];
   scheduledByGoal: Record<string, number>;
   effectiveTargetByGoal: Record<string, number>;
-  allocationMode: "even" | "finish-early";
   /**
    * Per-goal pace info derived from this week's daily reviews. When omitted
    * (or a goal isn't present), no pace pill is shown next to the goal.
@@ -114,9 +114,9 @@ export function PlanClient({
   wheelAreas,
   scheduledByGoal,
   effectiveTargetByGoal,
-  allocationMode,
   paceByGoal
 }: PlanClientProps) {
+  const router = useRouter();
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
   const [, startTransition] = useTransition();
@@ -144,8 +144,8 @@ export function PlanClient({
   }, []);
 
   const summary = useMemo(
-    () => summariseAllocation(goals, freeMinutesThisWeek, allocationMode),
-    [goals, freeMinutesThisWeek, allocationMode]
+    () => summariseAllocation(goals, freeMinutesThisWeek),
+    [goals, freeMinutesThisWeek]
   );
 
   const wheelLabel = useCallback(
@@ -172,6 +172,7 @@ export function PlanClient({
       try {
         const { id } = await addGoal(payload);
         setGoals((prev) => prev.map((g) => (g.id === tempId ? { ...g, id } : g)));
+        router.refresh();
       } catch (err) {
         console.error("addGoal failed", err);
         setGoals((prev) => prev.filter((g) => g.id !== tempId));
@@ -184,6 +185,7 @@ export function PlanClient({
     startTransition(async () => {
       try {
         await updateGoal(id, ensureGoalShape(next));
+        router.refresh();
       } catch (err) {
         console.error("updateGoal failed", err);
       }
@@ -196,6 +198,7 @@ export function PlanClient({
     startTransition(async () => {
       try {
         await removeGoal(id);
+        router.refresh();
       } catch (err) {
         console.error("removeGoal failed", err);
         setGoals(snapshot);
@@ -214,6 +217,7 @@ export function PlanClient({
     startTransition(async () => {
       try {
         await reorderGoals(ids);
+        router.refresh();
       } catch (err) {
         console.error("reorderGoals failed", err);
       }
@@ -236,7 +240,6 @@ export function PlanClient({
               total={goals.length}
               wheelAreas={wheelAreas}
               wheelLabel={wheelLabel}
-              allocationMode={allocationMode}
               scheduledMinutes={scheduledByGoal[goal.id]}
               effectiveTarget={effectiveTargetByGoal[goal.id]}
               pace={paceByGoal?.[goal.id]}
@@ -277,33 +280,20 @@ function BudgetChip({
     );
   }
 
-  if (summary.allocationMode === "finish-early") {
-    return (
-      <div className="card grid gap-3 sm:grid-cols-3">
-        <Stat label="Free time" value={formatMinutes(summary.freeMinutes)} />
-        <Stat label="Goals" value={String(summary.goalCount)} />
-        <Stat
-          label="Free at end (finish early)"
-          value={`~${formatMinutes(summary.finishEarlyLeftoverMinutes)}`}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="card grid gap-3 sm:grid-cols-3">
       <Stat label="Free time" value={formatMinutes(summary.freeMinutes)} />
       <Stat label="Goals" value={String(summary.goalCount)} />
       <Stat
         label={
-          summary.allocationMode === "even" && summary.hasWeightedShare
-            ? "Even-mode split"
+          summary.hasWeightedShare
+            ? "Weekly split"
             : summary.equalShareGoals > 0
               ? "Each unconstrained goal"
               : "All goals fixed"
         }
         value={
-          summary.allocationMode === "even" && summary.hasWeightedShare
+          summary.hasWeightedShare
             ? "Weighted (% share)"
             : summary.equalShareGoals > 0
               ? `~${formatMinutes(summary.perEqualShareMinutes)}/wk`
@@ -403,7 +393,6 @@ function GoalRow({
   total,
   wheelAreas,
   wheelLabel,
-  allocationMode,
   scheduledMinutes,
   effectiveTarget,
   pace,
@@ -420,7 +409,6 @@ function GoalRow({
   total: number;
   wheelAreas: WheelOption[];
   wheelLabel: (id: string) => string;
-  allocationMode: "even" | "finish-early";
   scheduledMinutes?: number;
   effectiveTarget?: number;
   pace?: GoalPaceInfo;
@@ -597,7 +585,6 @@ function GoalRow({
               draft={draft}
               onChange={commitDraft}
               wheelAreas={wheelAreas}
-              allocationMode={allocationMode}
             />
           </div>
         </div>
@@ -696,13 +683,11 @@ function isDaySet(d: GoalDraft): boolean {
 function OptionsEditor({
   draft,
   onChange,
-  wheelAreas,
-  allocationMode
+  wheelAreas
 }: {
   draft: GoalDraft;
   onChange: (draft: GoalDraft) => void;
   wheelAreas: WheelOption[];
-  allocationMode: "even" | "finish-early";
 }) {
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
 
@@ -823,7 +808,6 @@ function OptionsEditor({
                 draft={draft}
                 update={update}
                 wheelAreas={wheelAreas}
-                allocationMode={allocationMode}
               />
             </ConstraintRow>
           ))}
@@ -883,14 +867,12 @@ function ConstraintBody({
   id,
   draft,
   update,
-  wheelAreas,
-  allocationMode
+  wheelAreas
 }: {
   id: ConstraintId;
   draft: GoalDraft;
   update: (changes: Partial<GoalDraft>) => void;
   wheelAreas: WheelOption[];
-  allocationMode: "even" | "finish-early";
 }) {
   switch (id) {
     case "min-week":
@@ -923,8 +905,8 @@ function ConstraintBody({
             className="field"
           />
           <span className="text-ink-400">
-            Share of time left after weekly mins are reserved (Even allocation only).
-            {allocationMode === "finish-early" ? " Finish-early mode ignores this field." : ""}
+            Share of time left after weekly mins are reserved (weights the post-floor split between
+            goals).
           </span>
         </label>
       );

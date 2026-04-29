@@ -485,19 +485,15 @@ export const allocatorSettingsSchema = z.object({
    */
   starvationMode: z.enum(["proportional", "strict"]).default("proportional"),
   /**
-   * How spare (unallocated) free time is used after each goal's
-   * `minMinutesPerWeek` floor has been reserved.
+   * How unallocated time inside each calendar free window is laid out after goal
+   * blocks are scheduled. Does not change weekly target minutes (Pass 2 always
+   * splits post-floor remainder using `allocationSharePercent` / equal share).
    *
-   *   "even": split remaining minutes fairly across eligible goals for weekly
-   *   targets (same as legacy), then when packing the calendar spread slack
-   *   inside each free window as equal gaps between goal blocks instead of
-   *   one lump of empty time at the end of the window (default).
+   *   "even" (default): spread slack in the window as equal gaps between
+   *   consecutive goal runs, rather than one lump of empty time at the end.
    *
-   *   "finish-early": fill goals one after another in user/priority order,
-   *   topping each up to its cap before moving to the next. Later goals may
-   *   receive nothing, leaving the leftover free time as a single block of
-   *   "finish early" time at the end of the day/week. Placement does not insert
-   *   even inter-goal buffers.
+   *   "finish-early": do not insert those inter-goal buffers; blocks stay packed
+   *   and leftover time in the window remains toward the end.
    */
   allocationMode: z.enum(["even", "finish-early"]).default("even")
 });

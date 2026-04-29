@@ -1,33 +1,17 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import {
-  filterSchedulingGoals,
-  type WeeklyPlan,
-  weeklyIntentSchema
-} from "@calendar-automations/schema";
-import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
+import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema } from "@calendar-automations/schema";
+import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
+import { loadPlanWeekAllocationInputs } from "@/lib/allocation-run-context";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
-import { fetchGoogleBusy } from "@/lib/google-calendar";
-import { isoCalendarDay, localMondayIso, localMondayMidnightMs } from "@/lib/week";
-import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
-import { gymGoalTravelBlocksFromProposed } from "@/lib/week-blocks";
-import {
-  isoDatesForWeek,
-  loadDailyReviewsInRange,
-  loadWeeklyReview,
-  todayIsoInTz
-} from "@/lib/review-store";
-import {
-  catchUpFloorsFromGoalRollups,
-  computeGoalRollups
-} from "@/lib/review-rollup";
-import { computeSystemBlocks } from "@/lib/week-blocks";
-import { createLegResolver } from "@/lib/routing";
+import { localMondayIso } from "@/lib/week";
+import { gymGoalTravelBlocksFromProposed, sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
+import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
-import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
-import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
+import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
+import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
@@ -121,152 +105,65 @@ export default async function PlanPage() {
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
-  const schedulingGoals = filterSchedulingGoals(plan.goals);
-  const weekStartIso = localMondayIso(settings.timezone);
-  const weeklyReview = await loadWeeklyReview(userId, weekStartIso, settings.timezone);
   const catchUpMode = settings.allocator.catchUpMode;
-
-  const weekStartMs = localMondayMidnightMs(settings.timezone);
-  const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
-  const nextWeekStartMs = weekEndMs;
-  const nextWeekEndMs = nextWeekStartMs + 7 * 24 * 60 * 60 * 1000;
-  const busyFetch = await fetchGoogleBusy(
-    userId,
-    settings.calendars.sources,
+  const nowMs = Date.now();
+  const ctx = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const schedulingGoals = filterSchedulingGoals(plan.goals);
+  const resolvedCatchUpFloors = ctx.catchUpFloors;
+  const {
+    busyFetch,
     weekStartMs,
-    nextWeekEndMs
-  ).catch(() => ({ busyEvents: [], goalAvailabilityWindows: {} }));
-  const busyAll = busyFetch.busyEvents;
-  const busy = busyAll.filter((e) => e.endMs > weekStartMs && e.startMs < weekEndMs);
-  const busyNextWeek = busyAll.filter((e) => e.endMs > nextWeekStartMs && e.startMs < nextWeekEndMs);
-  // System blocks (sleep + travel) reserve time around real events. They're
-  // merged into the busy stream so goals don't land on top of them, and
-  // surfaced separately to the calendar for distinct visual styling.
-  const systemBlocks = await buildSystemBlocks({
-    userId,
+    weekEndMs,
+    nextWeekStartMs,
+    nextWeekEndMs,
+    busy,
+    busyNextWeek,
+    systemBlocks,
+    nextWeekSystemBlocks,
+    weatherTimemapEvents,
+    niceWeatherThisWeek,
+    niceWeatherNextWeek,
+    weekDates,
+    reviewsByDate,
+    dayIndex,
+    nextWeekAnchor,
+    daySheetGoalBusyThisWeek,
+    daySheetGoalBusyNextWeek
+  } = ctx;
+
+  const allocation = allocateWeek({
+    plan,
+    busy: [...busy, ...daySheetGoalBusyThisWeek, ...systemBlocks],
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+    niceWeatherWindows: niceWeatherThisWeek,
     settings,
     weekStartMs,
-    busy,
-    overrides: overridesFromPlan(plan)
+    weekEndMs,
+    catchUpFloors: resolvedCatchUpFloors,
+    weekAnchorDate: plan.weekStart,
+    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+    nowMs,
+    sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
   });
-  const nextWeekResolver = createLegResolver({
-    travel: settings.travel,
-    cache: settings.travelCache
-  });
-  const nextWeekSystemBlocks = await computeSystemBlocks(
-    nextWeekStartMs,
-    busyNextWeek,
-    settings.sleep,
-    settings.travel,
-    settings.gym,
-    settings.timezone,
-    nextWeekResolver,
-    settings.timemap
-  );
-
-  const sleepBlockMs = [...systemBlocks, ...nextWeekSystemBlocks]
-    .filter((b) => b.system === "sleep")
-    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
-  const weatherTimemapEvents = await buildWeatherTimemapEvents({
-    userId,
-    windowStartMs: weekStartMs,
-    windowEndMs: nextWeekEndMs,
-    weather: settings.weather,
-    homeAddress: settings.travel.homeAddress,
-    geocodes: settings.travelCache?.geocodes,
-    stableUid: buildStableUid,
-    sleepBlockMs
-  });
-  const niceWeatherThisWeek = outsideNiceWeatherIntervalsInRange(
-    weatherTimemapEvents,
-    weekStartMs,
-    weekEndMs
-  );
-  const niceWeatherNextWeek = outsideNiceWeatherIntervalsInRange(
-    weatherTimemapEvents,
-    nextWeekStartMs,
-    nextWeekEndMs
-  );
-
-  const weekDates = isoDatesForWeek(weekStartMs, settings.timezone);
-  const dailyReviews = await loadDailyReviewsInRange(
-    userId,
-    weekDates[0]!,
-    weekDates[weekDates.length - 1]!
-  );
-  const reviewsByDate = new Map(dailyReviews.map((r) => [r.date, r] as const));
-  const todayIso = todayIsoInTz(settings.timezone);
-  const todayIdx = weekDates.indexOf(todayIso);
-  const dayIndex = todayIdx >= 0 ? todayIdx : 6;
-  const nextWeekAnchor = isoCalendarDay(nextWeekStartMs, settings.timezone);
-
-  let allocation;
-  let resolvedCatchUpFloors: Record<string, number>;
-
-  if (catchUpMode === "manual") {
-    resolvedCatchUpFloors = weeklyReview.catchUpAdjustments ?? {};
-    allocation = allocateWeek({
-      plan,
-      busy: [...busy, ...systemBlocks],
-      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-      niceWeatherWindows: niceWeatherThisWeek,
-      settings,
-      weekStartMs,
-      weekEndMs,
-      catchUpFloors: resolvedCatchUpFloors,
-      weekAnchorDate: plan.weekStart
-    });
-  } else {
-    const baselineAllocation = allocateWeek({
-      plan,
-      busy: [...busy, ...systemBlocks],
-      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-      niceWeatherWindows: niceWeatherThisWeek,
-      settings,
-      weekStartMs,
-      weekEndMs,
-      catchUpFloors: {},
-      weekAnchorDate: plan.weekStart
-    });
-    const effectiveTargetBaseline: Record<string, number> = {};
-    for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
-      effectiveTargetBaseline[id] = m.targetMinutes;
-    }
-    const baselineRollups = computeGoalRollups({
-      goals: schedulingGoals,
-      reviewsByDate,
-      effectiveTargetByGoal: effectiveTargetBaseline,
-      weekDates,
-      dayIndex
-    });
-    resolvedCatchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
-    allocation = allocateWeek({
-      plan,
-      busy: [...busy, ...systemBlocks],
-      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-      niceWeatherWindows: niceWeatherThisWeek,
-      settings,
-      weekStartMs,
-      weekEndMs,
-      catchUpFloors: resolvedCatchUpFloors,
-      weekAnchorDate: plan.weekStart
-    });
-  }
 
   const allocationNextWeek = allocateWeek({
     plan,
-    busy: [...busyNextWeek, ...nextWeekSystemBlocks],
+    busy: [...busyNextWeek, ...daySheetGoalBusyNextWeek, ...nextWeekSystemBlocks],
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     niceWeatherWindows: niceWeatherNextWeek,
     settings,
     weekStartMs: nextWeekStartMs,
     weekEndMs: nextWeekEndMs,
     catchUpFloors: catchUpMode === "automated" ? {} : undefined,
-    weekAnchorDate: nextWeekAnchor
+    weekAnchorDate: nextWeekAnchor,
+    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+    nowMs,
+    sleepIntervals: sleepIntervalsFromSystemBlocks(nextWeekSystemBlocks)
   });
 
   const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
+  const daySheetGoalBusyForCalendar = [...daySheetGoalBusyThisWeek, ...daySheetGoalBusyNextWeek];
   const weatherPreviewBlocks = weatherTimemapEvents
     .filter((e) => e.title === "[Outside]")
     .map((e) => ({
@@ -278,8 +175,37 @@ export default async function PlanPage() {
       source: "internal" as const,
       system: "weather" as const
     }));
+  const invertedTimemapPreviewBlocks = invertedCalendarTimemapEvents({
+    userId,
+    plan,
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+    calendarSources: settings.calendars.sources,
+    windowStartMs: weekStartMs,
+    windowEndMs: nextWeekEndMs,
+    stableUid: buildStableUid
+  }).map((e) => {
+    const goalTag = e.tags.find((t) => t.startsWith("goal:"));
+    const invertedGoalId = goalTag ? goalTag.slice("goal:".length) : "";
+    return {
+      sourceId: `inverted-preview-${e.uid}`,
+      title: e.title,
+      startMs: e.startMs,
+      endMs: e.endMs,
+      busy: true,
+      source: "internal" as const,
+      system: "inverted-timemap" as const,
+      ...(invertedGoalId ? { invertedGoalId } : {})
+    };
+  });
   const proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
-    [...allocation.blocks, ...allocationNextWeek.blocks],
+    mergeOrphanGoalOverrideBlocks(
+      [...allocation.blocks, ...allocationNextWeek.blocks],
+      plan,
+      [
+        { weekStartMs, weekEndMs },
+        { weekStartMs: nextWeekStartMs, weekEndMs: nextWeekEndMs }
+      ]
+    ),
     plan,
     settings.calendars.sources
   );
@@ -293,6 +219,7 @@ export default async function PlanPage() {
     ...systemBlocks,
     ...nextWeekSystemBlocks,
     ...weatherPreviewBlocks,
+    ...invertedTimemapPreviewBlocks,
     ...gymGoalTravelOverlay
   ];
 
@@ -358,7 +285,6 @@ export default async function PlanPage() {
               wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
               scheduledByGoal={scheduledByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}
-              allocationMode={settings.allocator.allocationMode}
               paceByGoal={paceByGoal}
             />
 
@@ -454,6 +380,7 @@ export default async function PlanPage() {
                   weekStartMs={weekStartMs}
                   timezone={settings.timezone}
                   busy={busyForCalendar}
+                  daySheetGoalBusy={daySheetGoalBusyForCalendar}
                   system={systemBlocksForCalendar}
                   proposed={proposedForCalendar}
                   compact
@@ -466,6 +393,7 @@ export default async function PlanPage() {
                     weekStartMs={weekStartMs}
                     timezone={settings.timezone}
                     busy={busyForCalendar}
+                    daySheetGoalBusy={daySheetGoalBusyForCalendar}
                     system={systemBlocksForCalendar}
                     proposed={proposedForCalendar}
                   />
@@ -483,6 +411,7 @@ function CalendarPreview({
   weekStartMs,
   timezone,
   busy,
+  daySheetGoalBusy,
   system,
   proposed,
   compact
@@ -490,6 +419,7 @@ function CalendarPreview({
   weekStartMs: number;
   timezone: string;
   busy: Parameters<typeof WeekCalendar>[0]["busy"];
+  daySheetGoalBusy: Parameters<typeof WeekCalendar>[0]["daySheetGoalBusy"];
   system: Parameters<typeof WeekCalendar>[0]["system"];
   proposed: Parameters<typeof WeekCalendar>[0]["proposed"];
   compact: boolean;
@@ -499,6 +429,7 @@ function CalendarPreview({
       weekStartMs={weekStartMs}
       timezone={timezone}
       busy={busy}
+      daySheetGoalBusy={daySheetGoalBusy}
       system={system ?? []}
       proposed={proposed}
       compact={compact}

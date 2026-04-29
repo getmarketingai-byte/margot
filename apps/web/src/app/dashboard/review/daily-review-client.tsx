@@ -85,7 +85,7 @@ const GOAL_STATUS_OPTIONS: ReadonlyArray<{ key: GoalMark["status"]; label: strin
 ];
 
 function blockKeyFor(b: AllocatedBlockSnapshot): string {
-  return `${b.goalId}:${b.startMs}`;
+  return b.dragKey ?? `${b.goalId}:${b.startMs}`;
 }
 
 function fmtTime(minute: number): string {
@@ -512,7 +512,7 @@ function TimelineCard({
         const slot = slotIndex.get(m);
         if (slot) {
           filledRows++;
-          if (slot.category === "goal" && slot.goalId === b.goalId) {
+          if (slot.goalId === b.goalId) {
             matchedRows++;
           }
         }

@@ -240,29 +240,18 @@ export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
  * tells the user how many hours each unconstrained goal will get.
  *
  * - `freeMinutes`: total free time across the week (server-computed).
- * - `allocationMode` (default `"even"`):
- *   - `"even"`: goals with a `min` reserve their floor first; remaining minutes
- *     split fairly across goals that aren't already capped (weekly targets).
- *     The server allocator also spaces blocks within tight free windows.
- *   - `"finish-early"`: goals are filled in user/priority order up to their
- *     cap. Unbounded goals stay at their floor; leftover free time is shown as
- *     "free time at end".
- *   - `allocationSharePercent` on a goal weights that goal's slice of the
- *     post-floor remainder in `"even"` mode only (see allocator).
+ * - After weekly minimums are reserved, remaining minutes are split fairly across
+ *   goals that are not already capped (weighted by `allocationSharePercent` when set).
+ * - Calendar packing (buffers between goal blocks vs slack at the end of a free
+ *   window) is controlled separately by settings and does not change these numbers.
  */
-export function summariseAllocation(
-  goals: readonly WeeklyGoal[],
-  freeMinutes: number,
-  allocationMode: "even" | "finish-early" = "even"
-): {
+export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: number): {
   freeMinutes: number;
   goalCount: number;
   reservedMinutes: number;
   remainingMinutes: number;
   equalShareGoals: number;
   perEqualShareMinutes: number;
-  allocationMode: "even" | "finish-early";
-  finishEarlyLeftoverMinutes: number;
   /** True when some scheduling goal sets `allocationSharePercent`. */
   hasWeightedShare: boolean;
 } {
@@ -270,23 +259,15 @@ export function summariseAllocation(
   const hasWeightedShare = schedulingGoals.some((g) => g.allocationSharePercent !== undefined);
   let reserved = 0;
   let equalShareCount = 0;
-  let plannedFromCaps = 0;
   for (const g of schedulingGoals) {
     const norm = normaliseGoalTime(g);
     const floor = norm.minMinutesPerWeek ?? 0;
     reserved += floor;
     const ceiling = norm.maxMinutesPerWeek;
     if (ceiling === undefined || floor < ceiling) equalShareCount++;
-    // For finish-early projection we only top up goals that have an explicit
-    // cap; unbounded goals stay at their floor.
-    if (ceiling !== undefined) {
-      plannedFromCaps += Math.max(0, ceiling - floor);
-    }
   }
   const remaining = Math.max(0, freeMinutes - reserved);
   const perEqual = equalShareCount > 0 ? Math.round(remaining / equalShareCount) : 0;
-  const finishEarlyLeftover =
-    allocationMode === "finish-early" ? Math.max(0, remaining - plannedFromCaps) : 0;
   return {
     freeMinutes,
     goalCount: schedulingGoals.length,
@@ -294,8 +275,6 @@ export function summariseAllocation(
     remainingMinutes: remaining,
     equalShareGoals: equalShareCount,
     perEqualShareMinutes: perEqual,
-    allocationMode,
-    finishEarlyLeftoverMinutes: finishEarlyLeftover,
     hasWeightedShare
   };
 }

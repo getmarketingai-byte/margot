@@ -44,7 +44,12 @@ const MINUTE_MS = 60 * 1000;
 
 export interface SystemBlock extends BusyEvent {
   /** Distinguishes which subsystem produced the block (for UI styling). */
-  system: "sleep" | "travel" | "routine" | "weather";
+  system: "sleep" | "travel" | "routine" | "weather" | "inverted-timemap";
+  /**
+   * When `system` is `inverted-timemap`, the planner goal id backing this
+   * invert-free-busy calendar (used for colour + per-source toggles).
+   */
+  invertedGoalId?: string;
   /**
    * Optional UI hint:
    *   - "split" / "underMinimum"  — sleep
@@ -370,7 +375,7 @@ function roundLocalMs(ms: number, roundMinutes: number, timezone: string): numbe
   return dayStart + rounded * MINUTE_MS;
 }
 
-/** Per-night override; `key` is the night index 0..6 of the rendered week. */
+/** Per-night override; `key` is night index 0..6 (Mon..Sun starts) or `7` (Sun→Mon into the week). */
 export interface SleepOverride {
   key: number;
   startMs: number;
@@ -381,8 +386,13 @@ export interface SleepOverride {
  * Compute sleep blocks for each night spanned by the week being rendered.
  *
  * Convention: night `d` (0..6) is the night that *starts* on day d of the
- * week. Sleep then ends on day d+1. The wake target is
+ * week (Mon..Sun). Sleep then ends on day d+1. The wake target is
  * `idealWakeHour:idealWakeMinute` on day d+1 in the user's timezone.
+ *
+ * Additionally, night index **7** is the sleep that *wakes on the week's
+ * first Monday* (local Sunday night → Monday morning). Without this, Monday
+ * pre-wake hours would be missing from `busy` (they belong to the prior
+ * calendar day, not to night d=0 which is Mon night → Tue wake).
  *
  * Rules implemented (see Sleep.gs):
  *   1. Outbound `[Drive] To:` events on the wake day pull `targetEnd`
@@ -434,31 +444,18 @@ export function computeSleepBlocks(
   const homeBufferMs = sleep.bufferAfterDriveHomeMinutes * MINUTE_MS;
   const roundMin = sleep.travelBufferRoundMinutes;
 
-  for (let d = 0; d < 7; d++) {
-    const override = overrides.get(d);
-
-    const nightStartParts = partsInTimezone(weekStartMs + d * DAY_MS, timezone);
-    const nightStartDayMs = localMidnightMs(
-      nightStartParts.year,
-      nightStartParts.month,
-      nightStartParts.day,
-      timezone
-    );
-    const wakeDayMs = nightStartDayMs + DAY_MS;
-    const wakeDayParts = partsInTimezone(wakeDayMs, timezone);
-    const wakeDayStart = localMidnightMs(
-      wakeDayParts.year,
-      wakeDayParts.month,
-      wakeDayParts.day,
-      timezone
-    );
-
+  function appendSleepForNight(
+    nightIndexLabel: string,
+    nightStartDayMs: number,
+    wakeDayStart: number,
+    override: SleepOverride | undefined
+  ): void {
     const nightStartMs = nightStartDayMs + sleep.windowStartHour * HOUR_MS;
     const idealWakeMs =
       wakeDayStart + sleep.idealWakeHour * HOUR_MS + sleep.idealWakeMinute * MINUTE_MS;
     const windowEndCandidate = wakeDayStart + sleep.windowEndHour * HOUR_MS;
     const nightEndMs = Math.max(idealWakeMs, windowEndCandidate);
-    if (nightEndMs <= nightStartMs) continue;
+    if (nightEndMs <= nightStartMs) return;
 
     let targetEndMs = idealWakeMs;
     const wakeDayEnd = wakeDayStart + DAY_MS;
@@ -469,10 +466,7 @@ export function computeSleepBlocks(
       if (wakeFromDrive < targetEndMs) targetEndMs = wakeFromDrive;
     }
 
-    // Past-night skip applies only when there's no override; an explicit
-    // override (e.g. recording last night's actual sleep) is honoured even
-    // when the window has elapsed.
-    if (!override && targetEndMs <= nowMs) continue;
+    if (!override && targetEndMs <= nowMs) return;
 
     const sleepBusy: BusyEvent[] = [];
     for (const ev of busy) {
@@ -492,8 +486,6 @@ export function computeSleepBlocks(
       targetEndMs,
       override: override ? { startMs: override.startMs, endMs: override.endMs } : undefined
     });
-    // Only the primary (non-split) night block is overridable — split fallbacks
-    // are an emergency placement and dragging one half doesn't make sense.
     const primaryIdx = placed.findIndex((p) => !p.split);
     for (let pi = 0; pi < placed.length; pi++) {
       const p = placed[pi]!;
@@ -503,7 +495,7 @@ export function computeSleepBlocks(
           ? "underMinimum"
           : undefined;
       const block: SystemBlock = {
-        sourceId: `sleep-${d}-${p.startMs}`,
+        sourceId: `sleep-${nightIndexLabel}-${p.startMs}`,
         title: formatSleepBlockTitle(p, sleep.durationHours),
         startMs: p.startMs,
         endMs: p.endMs,
@@ -515,12 +507,52 @@ export function computeSleepBlocks(
       if (pi === primaryIdx) {
         block.override = {
           kind: "sleep",
-          key: String(d),
+          key: nightIndexLabel,
           isOverridden: Boolean(override)
         };
       }
       out.push(block);
     }
+  }
+
+  // Sunday night → Monday morning (wake on the week's first local day).
+  const weekAnchorParts = partsInTimezone(weekStartMs, timezone);
+  const mondayMidnight = localMidnightMs(
+    weekAnchorParts.year,
+    weekAnchorParts.month,
+    weekAnchorParts.day,
+    timezone
+  );
+  const sundayProbeParts = partsInTimezone(mondayMidnight - 12 * HOUR_MS, timezone);
+  const leadingNightStartDayMs = localMidnightMs(
+    sundayProbeParts.year,
+    sundayProbeParts.month,
+    sundayProbeParts.day,
+    timezone
+  );
+  const leadingOverride = overrides.get(7);
+  appendSleepForNight("7", leadingNightStartDayMs, mondayMidnight, leadingOverride);
+
+  for (let d = 0; d < 7; d++) {
+    const override = overrides.get(d);
+
+    const nightStartParts = partsInTimezone(weekStartMs + d * DAY_MS, timezone);
+    const nightStartDayMs = localMidnightMs(
+      nightStartParts.year,
+      nightStartParts.month,
+      nightStartParts.day,
+      timezone
+    );
+    const wakeDayMs = nightStartDayMs + DAY_MS;
+    const wakeDayParts = partsInTimezone(wakeDayMs, timezone);
+    const wakeDayStart = localMidnightMs(
+      wakeDayParts.year,
+      wakeDayParts.month,
+      wakeDayParts.day,
+      timezone
+    );
+
+    appendSleepForNight(String(d), nightStartDayMs, wakeDayStart, override);
   }
   return out;
 }
@@ -674,10 +706,20 @@ export function gymGoalTravelBlocksFromProposed(
   return out;
 }
 
+/**
+ * Sleep intervals for `allocateWeek({ sleepIntervals })` so day-sheet
+ * (`source: "actual"`) pins cannot be honoured on top of computed sleep.
+ */
+export function sleepIntervalsFromSystemBlocks(
+  blocks: readonly Pick<SystemBlock, "system" | "startMs" | "endMs">[]
+): Array<{ startMs: number; endMs: number }> {
+  return blocks.filter((b) => b.system === "sleep").map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+}
+
 /* ─────────────────────────── Combined entry point ───────────────────────── */
 
 export interface SystemBlocksOverrides {
-  /** Sleep override per night (0..6). */
+  /** Sleep override per night (0..6, plus 7 for the leading Sun→Mon night). */
   sleep?: ReadonlyMap<number, SleepOverride>;
   /** Routine overrides keyed by `morning-${i}` or `shutdown-${i}`. */
   routine?: ReadonlyMap<string, RoutineOverride>;

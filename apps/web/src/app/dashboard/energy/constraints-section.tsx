@@ -214,8 +214,9 @@ export async function ConstraintsSection() {
       <details className="card" open>
         <summary className="cursor-pointer text-sm font-semibold">Spare time distribution</summary>
         <p className="mt-1 text-xs text-ink-400">
-          After your weekly minimums are covered, how should spare time affect targets and how the
-          week is packed on the calendar?
+          How should leftover time <em>inside each free calendar window</em> be laid out after goal
+          blocks are placed? This does not change how long each goal block is — only spacing vs a
+          single tail of empty time in that window.
         </p>
         <form action={updateAllocationMode} className="mt-3 flex flex-col gap-2 text-sm">
           <label className="flex items-start gap-2">
@@ -227,9 +228,9 @@ export async function ConstraintsSection() {
               className="mt-1"
             />
             <span>
-              <strong>Evenly distributed</strong> — fair weekly targets above your floors, and
-              leftover slack inside each free window is opened up as equal spacing between goal
-              blocks (not one tail of empty time).
+              <strong>Evenly distributed</strong> — split unallocated time in the window into equal
+              gaps between consecutive goal blocks (breathing room), instead of one block of empty
+              time at the end.
             </span>
           </label>
           <label className="flex items-start gap-2">
@@ -241,8 +242,8 @@ export async function ConstraintsSection() {
               className="mt-1"
             />
             <span>
-              <strong>Finish early</strong> — fill goals one after another in order; leftover time
-              accumulates as free time at the end.
+              <strong>Finish early</strong> — goal blocks stay back-to-back; unallocated time in that
+              window is grouped as free time at the end of the window.
             </span>
           </label>
           <button type="submit" className="btn-primary w-fit text-xs">

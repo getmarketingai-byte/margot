@@ -1,12 +1,8 @@
+"use client";
+
 /**
- * Server-rendered week grid that overlays two layers:
- *   1. The user's connected Google busy events (greyed background).
- *   2. The planner's proposed blocks for this week (accent foreground).
- *
- * The grid uses absolute positioning within per-day containers, so the layout
- * scales cleanly to the time range chosen (defaults 6am–10pm in the user's
- * timezone). Events outside the visible window are rendered as small "earlier"
- * / "later" badges at the day's edges so nothing silently disappears.
+ * Week grid: busy layer, system layer, proposed goal blocks. Client component so
+ * planning surfaces can pass drag callbacks for optimistic UI.
  */
 
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
@@ -23,6 +19,11 @@ interface WeekCalendarProps {
   timezone: string;
   /** Real busy events (Google etc.) to render as the back layer. */
   busy: readonly BusyEvent[];
+  /**
+   * Day-sheet goal log intervals (same shape as busy). Rendered between
+   * calendar busy and system blocks so logged time reads as actual work.
+   */
+  daySheetGoalBusy?: readonly BusyEvent[];
   /** Planner's proposed blocks to render as the front layer. */
   proposed: readonly AllocatedBlock[];
   /**
@@ -45,6 +46,11 @@ interface WeekCalendarProps {
   dayIndices?: readonly number[];
   /** Heading label for the calendar card. */
   title?: string;
+  /**
+   * Called after a proposed block drag is saved so the parent can apply
+   * optimistic times before `router.refresh()` completes.
+   */
+  onProposedDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
 }
 
 const PX_PER_HOUR = 30;
@@ -53,13 +59,18 @@ function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: nu
   return aStart < bEnd && bStart < aEnd;
 }
 
-/** Sleep, routines, calendar busy, and travel — goal drags must not land on top. */
+/** Sleep, routines, calendar busy, travel, and logged day-sheet goal time. */
 function buildReservedIntervalsForGoalDrag(
   busy: readonly BusyEvent[],
-  system: readonly SystemBlock[]
+  system: readonly SystemBlock[],
+  daySheetGoalBusy: readonly BusyEvent[] = []
 ): { startMs: number; endMs: number }[] {
   const out: { startMs: number; endMs: number }[] = [];
   for (const b of busy) {
+    if (b.busy === false) continue;
+    out.push({ startMs: b.startMs, endMs: b.endMs });
+  }
+  for (const b of daySheetGoalBusy) {
     if (b.busy === false) continue;
     out.push({ startMs: b.startMs, endMs: b.endMs });
   }
@@ -269,11 +280,19 @@ function daysBetween(
   return Math.round((b - a) / (24 * 60 * 60 * 1000));
 }
 
+/** `sourceId` format from `daySheetGoalBusyEvents`. */
+function goalIdFromDaySheetSourceId(sourceId: string): string | undefined {
+  const m = /^daysheet-goal:([^:]+):/.exec(sourceId);
+  return m?.[1];
+}
+
 type GoalCalendarSlice = {
   dragKey: string;
   startMs: number;
   endMs: number;
   dragOverrideSaved?: boolean;
+  overrideSource?: "drag" | "actual";
+  pinnedFromOverride?: boolean;
 };
 
 type ProposedPositioned = PositionedBlock & {
@@ -336,13 +355,15 @@ export function WeekCalendar({
   weekStartMs,
   timezone,
   busy,
+  daySheetGoalBusy = [],
   proposed,
   system = [],
   startHour = 5,
   endHour = 24,
   compact = false,
   dayIndices,
-  title = "This week"
+  title = "This week",
+  onProposedDragCommit
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
@@ -370,23 +391,55 @@ export function WeekCalendar({
     );
   }
 
+  const daySheetPositions: Array<PositionedBlock & { sourceId: string; goalId?: string }> = [];
+  for (const b of daySheetGoalBusy) {
+    const gid = goalIdFromDaySheetSourceId(b.sourceId);
+    for (const slice of position(
+      b.startMs,
+      b.endMs,
+      weekStartMs,
+      timezone,
+      startHour,
+      endHour,
+      b.title
+    )) {
+      daySheetPositions.push({ ...slice, sourceId: b.sourceId, goalId: gid });
+    }
+  }
+
+  const invertedGoalIdsSorted = [
+    ...new Set(
+      system
+        .filter((b) => b.system === "inverted-timemap" && b.invertedGoalId)
+        .map((b) => b.invertedGoalId!)
+    )
+  ].sort();
+  const invertedBarOffsetByGoalId = new Map(invertedGoalIdsSorted.map((id, i) => [id, i]));
+
   const systemPositions: Array<
     PositionedBlock & {
       kind: SystemBlock["system"];
       override?: SystemBlock["override"];
       sourceStartMs: number;
       sourceEndMs: number;
+      invertedGoalId?: string;
+      invertedBarOffsetIndex?: number;
     }
   > = [];
   for (const b of system) {
     const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+    const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
+    const invertedBarOffsetIndex =
+      invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
     for (const s of slices) {
       systemPositions.push({
         ...s,
         kind: b.system,
         override: b.override,
         sourceStartMs: b.startMs,
-        sourceEndMs: b.endMs
+        sourceEndMs: b.endMs,
+        invertedGoalId,
+        invertedBarOffsetIndex
       });
     }
   }
@@ -413,7 +466,9 @@ export function WeekCalendar({
                   dragKey: b.dragKey,
                   startMs: b.startMs,
                   endMs: b.endMs,
-                  dragOverrideSaved: b.dragOverrideSaved
+                  dragOverrideSaved: b.dragOverrideSaved,
+                  overrideSource: b.overrideSource,
+                  pinnedFromOverride: b.pinnedFromOverride
                 }
               ]
             : undefined
@@ -426,13 +481,30 @@ export function WeekCalendar({
   const hasTravel = systemPositions.some((p) => p.kind === "travel");
   const hasRoutine = systemPositions.some((p) => p.kind === "routine");
   const hasWeather = systemPositions.some((p) => p.kind === "weather");
-  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system);
+  const hasDaySheetLog = daySheetGoalBusy.length > 0;
+  const invertedLegend: { goalId: string; title: string }[] = [];
+  const invertedLegendSeen = new Set<string>();
+  for (const s of system) {
+    if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
+    if (invertedLegendSeen.has(s.invertedGoalId)) continue;
+    invertedLegendSeen.add(s.invertedGoalId);
+    invertedLegend.push({ goalId: s.invertedGoalId, title: s.title });
+  }
+  invertedLegend.sort((a, b) => a.goalId.localeCompare(b.goalId));
+  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system, daySheetGoalBusy);
 
   return (
     <div className="card p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
         <div className="font-semibold">{title}</div>
-        <Legend hasSleep={hasSleep} hasTravel={hasTravel} hasRoutine={hasRoutine} hasWeather={hasWeather} />
+        <Legend
+          hasSleep={hasSleep}
+          hasTravel={hasTravel}
+          hasRoutine={hasRoutine}
+          hasWeather={hasWeather}
+          hasDaySheetLog={hasDaySheetLog}
+          invertedLegend={invertedLegend}
+        />
       </div>
       <div className="overflow-x-auto">
         <div className={`grid ${minWidthClass} gap-1`} style={{ gridTemplateColumns }}>
@@ -491,6 +563,11 @@ export function WeekCalendar({
                 .map((p, i) => (
                   <BusyBlock key={`b${i}`} block={p} />
                 ))}
+              {daySheetPositions
+                .filter((p) => p.dayIndex === dayIdx)
+                .map((p, i) => (
+                  <DaySheetLoggedBlock key={`d${p.sourceId}-${i}`} block={p} goalId={p.goalId} />
+                ))}
               {systemPositions
                 .filter((p) => p.dayIndex === dayIdx)
                 .map((p, i) => (
@@ -504,6 +581,7 @@ export function WeekCalendar({
                     block={p}
                     pxPerHour={PX_PER_HOUR}
                     reservedForGoalDrag={reservedForGoalDrag}
+                    onDragCommit={onProposedDragCommit}
                   />
                 ))}
             </div>
@@ -519,12 +597,16 @@ function Legend({
   hasSleep,
   hasTravel,
   hasRoutine,
-  hasWeather
+  hasWeather,
+  hasDaySheetLog,
+  invertedLegend
 }: {
   hasSleep: boolean;
   hasTravel: boolean;
   hasRoutine: boolean;
   hasWeather: boolean;
+  hasDaySheetLog: boolean;
+  invertedLegend: readonly { goalId: string; title: string }[];
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-400">
@@ -559,6 +641,30 @@ function Legend({
           Outside
         </span>
       )}
+      {hasDaySheetLog && (
+        <span className="inline-flex items-center gap-1">
+          <span
+            aria-hidden
+            className="block h-3 w-3 rounded-sm border border-ink-300 bg-ink-100/80 dark:border-ink-500 dark:bg-ink-700/40"
+            style={{
+              borderLeftWidth: 3,
+              backgroundImage:
+                "repeating-linear-gradient(45deg, rgba(0,0,0,0.06) 0 2px, transparent 2px 5px)"
+            }}
+          />
+          Logged
+        </span>
+      )}
+      {invertedLegend.map((row) => (
+        <span key={row.goalId} className="inline-flex max-w-[10rem] items-center gap-1" title={row.title}>
+          <span
+            aria-hidden
+            className="block h-3 w-1.5 shrink-0 rounded-sm border border-ink-300/50 dark:border-ink-500/50"
+            style={{ backgroundColor: goalColorFromKey(row.goalId) }}
+          />
+          <span className="truncate">{row.title}</span>
+        </span>
+      ))}
       <span className="inline-flex items-center gap-1">
         <span aria-hidden className="block h-3 w-3 rounded-sm bg-accent" />
         Proposed
@@ -643,6 +749,45 @@ function BusyBlock({ block }: { block: PositionedBlock }) {
   );
 }
 
+function DaySheetLoggedBlock({ block, goalId }: { block: PositionedBlock; goalId?: string }) {
+  const accent = goalId ? goalColorFromKey(goalId) : undefined;
+  const selectable = Boolean(goalId);
+  return (
+    <div
+      title={block.title}
+      className={`absolute inset-x-0.5 z-[8] overflow-hidden rounded border border-ink-200 bg-ink-100/85 px-1 py-0.5 pl-1.5 text-[10px] text-ink-700 backdrop-blur-sm dark:border-ink-600/45 dark:bg-ink-600/35 dark:text-ink-100 ${
+        selectable ? "cursor-pointer" : ""
+      }`}
+      style={{
+        top: block.topPx,
+        height: block.heightPx,
+        borderLeftWidth: 4,
+        borderLeftColor: accent ?? "rgba(100,116,139,0.65)",
+        backgroundImage:
+          "repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0 2px, transparent 2px 6px)"
+      }}
+      role={selectable ? "button" : undefined}
+      tabIndex={selectable ? 0 : undefined}
+      aria-label={selectable ? `${block.title}. Open matching goal.` : undefined}
+      onClick={selectable && goalId ? () => dispatchGoalFocus(goalId) : undefined}
+      onKeyDown={
+        selectable && goalId
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                dispatchGoalFocus(goalId);
+              }
+            }
+          : undefined
+      }
+    >
+      <span className="line-clamp-2 leading-tight">{block.title}</span>
+      {block.clippedTop && <span className="sr-only">starts earlier</span>}
+      {block.clippedBottom && <span className="sr-only">ends later</span>}
+    </div>
+  );
+}
+
 /**
  * Dispatch slice rendering. Sleep + routine blocks with override metadata
  * become interactive draggable elements; travel blocks (and any sleep slice
@@ -657,6 +802,8 @@ function SystemBlockSlice({
     override?: SystemBlock["override"];
     sourceStartMs: number;
     sourceEndMs: number;
+    invertedGoalId?: string;
+    invertedBarOffsetIndex?: number;
   };
   pxPerHour: number;
 }) {
@@ -672,6 +819,31 @@ function SystemBlockSlice({
           width: 5,
           backgroundImage:
             "repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 2px, rgba(255,255,255,0.05) 2px 4px)"
+        }}
+      />
+    );
+  }
+  if (block.kind === "inverted-timemap") {
+    const colorKey = block.invertedGoalId ?? block.title;
+    const barColor = goalColorFromKey(colorKey);
+    const offset = (block.invertedBarOffsetIndex ?? 0) * 7;
+    /** Past the weather “outside” pill (`left-1.5` + 5px width + 2px gap). */
+    const leftPx = 6 + 5 + 2 + offset * 7;
+    return (
+      <div
+        title={block.title}
+        aria-label={`Calendar availability: ${block.title}`}
+        className="pointer-events-none absolute z-[29] rounded-full border shadow-[0_0_0_1px_rgba(255,255,255,0.35)] dark:shadow-[0_0_0_1px_rgba(15,23,42,0.55)]"
+        style={{
+          top: block.topPx,
+          height: block.heightPx,
+          width: 5,
+          left: leftPx,
+          borderColor: barColor,
+          backgroundColor: barColor,
+          opacity: 0.88,
+          backgroundImage:
+            "repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 2px, rgba(255,255,255,0.06) 2px 4px)"
         }}
       />
     );
@@ -717,7 +889,8 @@ function SystemBlockSlice({
 function ProposedBlock({
   block,
   pxPerHour,
-  reservedForGoalDrag
+  reservedForGoalDrag,
+  onDragCommit
 }: {
   block: PositionedBlock & {
     isSegment: boolean;
@@ -727,6 +900,7 @@ function ProposedBlock({
   };
   pxPerHour: number;
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
+  onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
@@ -747,6 +921,7 @@ function ProposedBlock({
         slices={slices}
         dayIndex={block.dayIndex}
         reservedForGoalDrag={reservedForGoalDrag}
+        onDragCommit={onDragCommit}
       />
     );
   }

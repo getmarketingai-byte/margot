@@ -15,9 +15,10 @@
  *        - the user's `energyOrdering.mode`
  *        - Wheel-of-Life weekly minute floors per area
  *        - PPF minimum-touches and minimum-percent targets
- *   4. In "even" allocation mode, spread slack inside each tight free window as
- *      equal gaps between goal runs (skipped when a window is mostly unused,
- *      e.g. inverted-calendar pockets inside a full-day gap snapshot).
+ *   4. Optionally spread slack inside each tight free window as equal gaps
+ *      between goal runs when `allocator.allocationMode` is `"even"` (skipped
+ *      for `"finish-early"` and when a window is mostly unused, e.g. inverted-
+ *      calendar pockets). Weekly target minutes do not depend on this mode.
  *   5. Goals with `specialGoalType: "gym"` reserve an extra quantised band of
  *      `settings.gym.driveMinutes` on each side of the workout block (same
  *      default one-way drive as calendar gym legs) so nothing else stacks in
@@ -58,7 +59,7 @@ import type {
 import { isInvertedTimemapGoal, normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps } from "./intervals";
-import { hourInTz, dateKeyInTz } from "./time";
+import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -100,6 +101,8 @@ export interface AllocatedBlock {
   pinnedFromOverride?: boolean;
   /** True when `WeeklyPlan.overrides` still contains this `dragKey` (reset clears). */
   dragOverrideSaved?: boolean;
+  /** How the slot was fixed in the plan (`drag` vs day-sheet `actual`) when `dragOverrideSaved`. */
+  overrideSource?: "drag" | "actual";
 }
 
 export interface WeekMetrics {
@@ -159,9 +162,9 @@ export interface AllocateInput {
    *
    * When the user is behind on a goal mid-week, the weekly review surface
    * computes a deficit and stores it here as `goalId -> additionalMinutes`.
-   * The allocator adds these minutes to the goal's effective weekly floor
-   * (and weekly ceiling, so the cap doesn't silently swallow the boost) so
-   * the remaining days of the week pick up the extra time.
+   * The allocator adds these minutes to the goal's effective weekly floor so
+   * the remaining days prioritise extra time — the user's `maxMinutesPerWeek`
+   * (if any) stays a hard ceiling and is not raised by catch-up.
    *
    * Negative values are honoured (you can shrink a goal that ran ahead).
    * Missing or zero entries are no-ops, preserving baseline behaviour.
@@ -173,6 +176,23 @@ export interface AllocateInput {
    * across adjacent weeks. Defaults to `plan.weekStart`.
    */
   weekAnchorDate?: string;
+  /**
+   * Optional map of goal override `dragKey` → source (`drag` vs day-sheet `actual`).
+   * `actual` pins relax free-gap containment so logged times win over auto-placement.
+   */
+  goalOverrideSources?: ReadonlyMap<string, "drag" | "actual">;
+  /**
+   * When set, auto-placed goal blocks (not pins) must end strictly after this
+   * instant — purely-past proposals are skipped so minutes can land later in
+   * the week. Omitted preserves legacy behaviour (tests / historical replay).
+   */
+  nowMs?: number;
+  /**
+   * Computed sleep windows (same intervals folded into `busy` as system sleep
+   * blocks). Used so `source: "actual"` goal pins still cannot sit on sleep even
+   * when gap constraints are relaxed for calendar busy.
+   */
+  sleepIntervals?: readonly Interval[];
 }
 
 export interface AllocateResult {
@@ -191,11 +211,14 @@ interface PreparedGoal {
 }
 
 export function allocateWeek(input: AllocateInput): AllocateResult {
-  const { plan, busy, settings } = input;
+  const { plan, busy, settings, sleepIntervals } = input;
   const tz = plan.timezone || settings.timezone;
   const weekStartMs = input.weekStartMs ?? parseLocalDateMs(plan.weekStart, tz);
   const weekEndMs = input.weekEndMs ?? weekStartMs + 7 * DAY_MS;
   const weekAnchorDate = input.weekAnchorDate ?? plan.weekStart;
+  const goalOverrideSources =
+    input.goalOverrideSources ?? goalOverrideSourcesFromPlan(plan);
+  const allocationNowMs = input.nowMs;
   const goalOverrides = new Map<string, { startMs: number; endMs: number }>();
   for (const o of plan.overrides ?? []) {
     if (o.kind === "goal") goalOverrides.set(o.key, { startMs: o.startMs, endMs: o.endMs });
@@ -281,13 +304,19 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       weekStartMs,
       weekEndMs,
       weekAnchorDate,
-      goalOverrides
+      goalOverrides,
+      goalOverrideSources,
+      allocationNowMs,
+      sleepIntervals
     );
   }
 
   for (const b of blocks) {
     if (!b.dragKey || b.segment) continue;
-    if (goalOverrides.has(b.dragKey)) b.dragOverrideSaved = true;
+    if (goalOverrides.has(b.dragKey)) {
+      b.dragOverrideSaved = true;
+      b.overrideSource = goalOverrideSources.get(b.dragKey) ?? "drag";
+    }
   }
 
   if (settings.allocator.allocationMode === "even") {
@@ -310,19 +339,12 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  * Pass 1 + Pass 2: derive each goal's `effectiveMinutes` for the week.
  *
  *   - Pass 1 reserves every goal's `minMinutesPerWeek` as a floor.
- *   - Pass 2 distributes the remaining free time. Behavior depends on
- *     `allocator.allocationMode`:
- *
- *       "even" (default): split the remainder evenly across goals that have
- *       not yet hit their `maxMinutesPerWeek` (weekly targets). Goals with no
- *       time fields ("equal share" goals) start at 0 and receive their slice
- *       in this pass. After placement, slack inside each original free window
- *       is spread as equal gaps between consecutive goal runs so leftover time
- *       reads as breathing room between blocks, not one lump at the tail.
- *
- *       "finish-early": top up each goal in user/priority order to its
- *       `maxMinutesPerWeek` cap, then stop. Goals without a cap stay at their
- *       floor, leaving the remainder as free time at the end of the day/week.
+ *   - Pass 2 distributes the remaining free time: weighted share of the
+ *     remainder (`allocationSharePercent` plus equal split for goals without
+ *     it), respecting caps. Calendar layout then uses `allocator.allocationMode`
+ *     only: `"even"` spreads slack inside each free window as gaps between goal
+ *     runs; `"finish-early"` leaves blocks packed without that padding so
+ *     leftover time stays toward the end of the window.
  *
  *   - When floors exceed `totalFreeMin`, we either scale floors proportionally
  *     (default) or pay them in user order until time runs out (strict).
@@ -393,18 +415,10 @@ function distributeMinutes(
     const norm = normaliseGoalTime(goal);
     const bump = catchUpFloors?.[goal.id] ?? 0;
     if (bump !== 0) {
-      // Bump both the floor (so the catch-up is reserved in Pass 1) and the
-      // ceiling (so a tight `maxMinutesPerWeek` doesn't swallow the boost).
-      // Floors clamp at zero — a negative catch-up cannot drive the floor
-      // below zero or below an existing larger ceiling.
+      // Floor only. Raising the weekly ceiling here made allocations exceed a
+      // stated `maxMinutesPerWeek` (catch-up looked like "ignore my cap").
       const baseFloor = norm.minMinutesPerWeek ?? 0;
       norm.minMinutesPerWeek = Math.max(0, baseFloor + bump);
-      if (norm.maxMinutesPerWeek !== undefined) {
-        norm.maxMinutesPerWeek = Math.max(
-          norm.minMinutesPerWeek,
-          norm.maxMinutesPerWeek + bump
-        );
-      }
     }
     return {
       goal,
@@ -460,29 +474,9 @@ function distributeMinutes(
 
   let remainder = totalFreeMin - floorTotal;
 
-  if (allocator.allocationMode === "finish-early") {
-    // Pass 2 (finish-early): fill goals one after another in user/priority
-    // order, topping each up to its weekly cap. Goals without a cap don't
-    // grow past their floor, so leftover time stays as free time the placer
-    // will simply not consume — surfaced to the UI as "free time at the end
-    // of the day/week".
-    const ordered = [...prepared].sort((a, b) => a.index - b.index);
-    for (const p of ordered) {
-      if (remainder < QUANTUM) break;
-      const cap = p.norm.maxMinutesPerWeek;
-      if (cap === undefined) continue;
-      const headroom = Math.max(0, cap - p.effectiveMinutes);
-      if (headroom < QUANTUM) continue;
-      const give = quantise(Math.min(headroom, remainder));
-      if (give <= 0) continue;
-      p.effectiveMinutes += give;
-      remainder -= give;
-    }
-    return { prepared, overcommitted, notScheduled };
-  }
-
-  // Pass 2 (even): weighted share of the remainder (allocationSharePercent +
-  // equal split for goals without it), then rounds respect caps / spillover.
+  // Pass 2: weighted share of the remainder (allocationSharePercent + equal split
+  // for goals without it), then rounds respect caps / spillover. Packing/buffers
+  // on the calendar are controlled separately via `allocator.allocationMode`.
   const remainderFractions = computeAllocationRemainderFractions(goals);
 
   const eligible = () =>
@@ -540,6 +534,9 @@ export function gymTravelPadMinutesForGoal(
  * Within each original free gap (post-segment snapshot), split slack evenly as
  * padding before the first goal run, between runs of different goals, and
  * after the last run. Blocks inside a run keep their relative packing.
+ *
+ * This intentionally introduces visible "breathing room" between goal runs in
+ * `"even"` packing mode — not fragmentation from placement bugs.
  */
 function spreadEvenGoalBuffersInSnapshotGaps(
   blocks: AllocatedBlock[],
@@ -555,6 +552,9 @@ function spreadEvenGoalBuffersInSnapshotGaps(
           b.startMs < b.endMs
       );
       if (inside.length === 0) continue;
+      // User-dragged / day-sheet pins must stay put; spreading slack would
+      // reflow "floating" goals *and* shift locked blocks within the same gap.
+      if (inside.some((b) => b.pinnedFromOverride || b.dragOverrideSaved || b.overrideSource)) continue;
       inside.sort((a, b) => a.startMs - b.startMs);
       const runs: { goalId: string; items: AllocatedBlock[] }[] = [];
       for (const b of inside) {
@@ -589,11 +589,18 @@ function spreadEvenGoalBuffersInSnapshotGaps(
 
 /* ──────────────────────────── helpers ───────────────────────────────────── */
 
-function parseLocalDateMs(dateStr: string, _timeZone: string): number {
-  // dateStr is YYYY-MM-DD; treat it as midnight UTC for stable testing — the
-  // ICS layer re-formats with VTIMEZONE for display.
+function parseLocalDateMs(dateStr: string, timeZone: string): number {
   const parts = dateStr.split("-").map(Number) as [number, number, number];
-  return Date.UTC(parts[0], parts[1] - 1, parts[2], 0, 0, 0);
+  return localMidnightMs(parts[0], parts[1], parts[2], timeZone);
+}
+
+/** Map goal drag keys to override source for relaxed day-sheet pins. */
+export function goalOverrideSourcesFromPlan(plan: WeeklyPlan): Map<string, "drag" | "actual"> {
+  const m = new Map<string, "drag" | "actual">();
+  for (const o of plan.overrides ?? []) {
+    if (o.kind === "goal") m.set(o.key, o.source ?? "drag");
+  }
+  return m;
 }
 
 function reserveSegment(
@@ -727,6 +734,22 @@ function intervalFullyInsideGaps(gaps: readonly Interval[], innerStart: number, 
   return t >= innerEnd;
 }
 
+function pinOverlapsSegmentBlocks(blocks: readonly AllocatedBlock[], innerStart: number, innerEnd: number): boolean {
+  for (const b of blocks) {
+    if (!b.segment) continue;
+    if (innerStart < b.endMs && innerEnd > b.startMs) return true;
+  }
+  return false;
+}
+
+function pinOverlapsSleep(innerStart: number, innerEnd: number, sleep: readonly Interval[] | undefined): boolean {
+  if (!sleep || sleep.length === 0) return false;
+  for (const s of sleep) {
+    if (innerStart < s.endMs && innerEnd > s.startMs) return true;
+  }
+  return false;
+}
+
 function tryPinGoalBlock(
   pinned: { startMs: number; endMs: number },
   dragKey: string,
@@ -740,7 +763,9 @@ function tryPinGoalBlock(
   weekStartMs: number,
   weekEndMs: number,
   dayHeadroom: number,
-  remainingMinutes: number
+  remainingMinutes: number,
+  relaxGapConstraints: boolean,
+  sleepIntervals: readonly Interval[] | undefined
 ): number | null {
   let startMs = Math.max(pinned.startMs, weekStartMs);
   let endMs = Math.min(pinned.endMs, weekEndMs);
@@ -761,23 +786,32 @@ function tryPinGoalBlock(
 
   if (durMin > dayHeadroom || durMin > remainingMinutes) return null;
 
-  const candidateGaps = placementWindowsForDay(
-    day.gaps,
-    day.startMs,
-    day.endMs,
-    availabilityWindows,
-    niceWeatherWindows,
-    goal
-  );
-  if (
-    !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
-    !intervalFullyInsideGaps(day.gaps, startMs - gymTravelPadMs, endMs + gymTravelPadMs)
-  ) {
-    return null;
-  }
-
   const consumeStart = startMs - gymTravelPadMs;
   const consumeEnd = endMs + gymTravelPadMs;
+
+  if (relaxGapConstraints) {
+    if (pinOverlapsSegmentBlocks(blocks, consumeStart, consumeEnd)) {
+      return null;
+    }
+    if (pinOverlapsSleep(consumeStart, consumeEnd, sleepIntervals)) {
+      return null;
+    }
+  } else {
+    const candidateGaps = placementWindowsForDay(
+      day.gaps,
+      day.startMs,
+      day.endMs,
+      availabilityWindows,
+      niceWeatherWindows,
+      goal
+    );
+    if (
+      !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
+      !intervalFullyInsideGaps(day.gaps, consumeStart, consumeEnd)
+    ) {
+      return null;
+    }
+  }
   consumeFromGaps(day.gaps, consumeStart, consumeEnd);
   blocks.push({
     goalId: goal.id,
@@ -808,7 +842,10 @@ function allocateGoal(
   weekStartMs: number,
   weekEndMs: number,
   weekAnchorDate: string,
-  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>
+  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
+  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
+  nowMs: number | undefined,
+  sleepIntervals: readonly Interval[] | undefined
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
@@ -880,6 +917,7 @@ function allocateGoal(
         const ovDay = dayIndexForMsInWeek(pinned.startMs, weekStartMs, tz);
         if (ovDay >= 0 && ovDay !== dayIdx) continue;
         if (ovDay === dayIdx && ovDay >= 0) {
+          const relaxGaps = goalOverrideSources.get(dragKey) === "actual";
           const pinMinutes = tryPinGoalBlock(
             pinned,
             dragKey,
@@ -893,7 +931,9 @@ function allocateGoal(
             weekStartMs,
             weekEndMs,
             dayHeadroom,
-            remainingMinutes
+            remainingMinutes,
+            relaxGaps,
+            sleepIntervals
           );
           if (pinMinutes !== null && pinMinutes >= QUANTUM) {
             remainingMinutes -= pinMinutes;
@@ -945,6 +985,9 @@ function allocateGoal(
       }
       const ms = usedMinutes * MS_PER_MIN;
       const { startMs, endMs } = placeBlockInGap(slot.gap, ms, goal, tz, gymTravelPadMs);
+      if (nowMs !== undefined && endMs <= nowMs) {
+        continue;
+      }
       const consumeStart = startMs - gymTravelPadMs;
       const consumeEnd = endMs + gymTravelPadMs;
       consumeFromGaps(day.gaps, consumeStart, consumeEnd);
@@ -965,6 +1008,11 @@ function allocateGoal(
       daysScheduledThisPass++;
     }
     if (daysScheduledThisPass === 0) break;
+  }
+  if (remainingMinutes >= QUANTUM && needsExtraPasses && remainingMinutes <= 8 * 60) {
+    console.warn(
+      `[allocateWeek] Goal "${goal.title}" (${goal.id}) has ${remainingMinutes} min unscheduled after ${maxPasses} passes (availability/nice-weather squeeze).`
+    );
   }
 }
 

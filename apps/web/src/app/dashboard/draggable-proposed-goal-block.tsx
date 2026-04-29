@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
 import { clearGoalDragOverrides, setGoalBlockOverridesBatch } from "./plan/actions";
 
@@ -58,6 +59,8 @@ export interface GoalCalendarSlice {
   startMs: number;
   endMs: number;
   dragOverrideSaved?: boolean;
+  overrideSource?: "drag" | "actual";
+  pinnedFromOverride?: boolean;
 }
 
 interface DraggableProposedGoalBlockProps {
@@ -76,6 +79,11 @@ interface DraggableProposedGoalBlockProps {
    * of these are rejected (matches planner hard constraints).
    */
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
+  /**
+   * When set, called with new epoch times per `dragKey` after a successful save.
+   * Parent should apply optimistic UI and call `router.refresh()` (e.g. inside `startTransition`).
+   */
+  onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
 }
 
 export function DraggableProposedGoalBlock({
@@ -88,8 +96,10 @@ export function DraggableProposedGoalBlock({
   goalId,
   slices,
   dayIndex,
-  reservedForGoalDrag
+  reservedForGoalDrag,
+  onDragCommit
 }: DraggableProposedGoalBlockProps) {
+  const router = useRouter();
   const elRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<{
     pointerId: number;
@@ -108,7 +118,13 @@ export function DraggableProposedGoalBlock({
     return Math.round(deltaPx / snapPx) * snapPx;
   }
 
-  const hasSavedOverride = slices.some((s) => s.dragOverrideSaved);
+  const isLocked =
+    slices.some(
+      (s) =>
+        s.dragOverrideSaved ||
+        s.pinnedFromOverride ||
+        s.overrideSource === "actual"
+    );
 
   function snapDeltaMs(deltaPx: number): number {
     const deltaMin = snapToGrid(deltaPx) / pxPerMin;
@@ -186,6 +202,15 @@ export function DraggableProposedGoalBlock({
           source: "drag" as const
         }))
       );
+      const updates: Record<string, { startMs: number; endMs: number }> = {};
+      for (const s of slices) {
+        updates[s.dragKey] = { startMs: s.startMs + deltaMs, endMs: s.endMs + deltaMs };
+      }
+      if (onDragCommit) {
+        onDragCommit(updates);
+      } else {
+        router.refresh();
+      }
     } catch (err) {
       console.warn("setGoalBlockOverridesBatch failed", err);
     } finally {
@@ -222,12 +247,15 @@ export function DraggableProposedGoalBlock({
     setPending(true);
     try {
       await clearGoalDragOverrides(slices.map((s) => s.dragKey));
+      router.refresh();
     } catch (err) {
       console.warn("clearGoalDragOverrides failed", err);
     } finally {
       setPending(false);
     }
   }
+
+  const isFromDaySheet = slices.some((s) => s.overrideSource === "actual");
 
   const bodyStyle: CSSProperties = {
     top: topPx,
@@ -236,18 +264,28 @@ export function DraggableProposedGoalBlock({
     cursor: dragState.current ? "grabbing" : "grab",
     touchAction: "none",
     backgroundColor,
-    opacity: pending ? opacity * 0.6 : opacity
+    opacity: pending ? opacity * 0.6 : opacity,
+    ...(isFromDaySheet
+      ? {
+          backgroundImage:
+            "linear-gradient(105deg, rgba(15,23,42,0.2), rgba(15,23,42,0.08)), repeating-linear-gradient(45deg, rgba(0,0,0,0.14) 0 2px, transparent 2px 6px)"
+        }
+      : {})
   };
 
   return (
     <div
       ref={elRef}
-      title={`${title} (proposed)`}
+      title={`${title}${isLocked ? " (locked)" : " (proposed)"}`}
       role="button"
       tabIndex={0}
-      aria-label={`${title}. Drag to move this goal slot within the week.`}
+      aria-label={`${title}. ${isLocked ? "Locked time from your plan or day sheet — drag to adjust." : "Drag to move within the week."}`}
       className={`group absolute inset-x-0.5 z-20 select-none overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
-        hasSavedOverride ? "ring-1 ring-white/50" : ""
+        isLocked ? "ring-1 ring-white/50" : ""
+      } ${
+        isFromDaySheet
+          ? "ring-1 ring-ink-900/25 ring-inset dark:ring-white/20"
+          : ""
       }`}
       style={bodyStyle}
       onPointerDown={handlePointerDown}
@@ -263,15 +301,23 @@ export function DraggableProposedGoalBlock({
     >
       <div className="flex items-start justify-between gap-1">
         <span className="line-clamp-2 leading-tight">{title}</span>
-        {hasSavedOverride && (
+        {isLocked && (
           <span
-            aria-label="Modified by drag"
-            title="Modified — click reset to restore"
+            aria-label={
+              slices.some((s) => s.overrideSource === "actual")
+                ? "From day sheet"
+                : "Locked on calendar"
+            }
+            title={
+              slices.some((s) => s.overrideSource === "actual")
+                ? "Day-sheet actual — reset in day sheet or drag to change"
+                : "Locked — click reset to restore auto time"
+            }
             className="mt-0.5 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-white"
           />
         )}
       </div>
-      {hasSavedOverride && (
+      {isLocked && (
         <button
           type="button"
           onClick={(e) => {

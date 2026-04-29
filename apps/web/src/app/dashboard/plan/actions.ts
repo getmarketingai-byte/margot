@@ -21,7 +21,13 @@ import {
   loadDashboardWeeklyPlan,
   runThisWeekAllocationForPlan
 } from "@/lib/perfect-week-this-week-allocation";
+import { refreshPlannedSnapshotsForCurrentWeek } from "@/lib/refresh-review-planned-snapshots";
+import { runRegenerateForUser } from "@/lib/regenerate-user-snapshot";
 import { loadSettings } from "@/lib/settings-store";
+
+function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+  return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+}
 
 /**
  * Routes that read either the goal list or the weekly intent need to be
@@ -317,10 +323,10 @@ function isActualGoalOverride(o: BlockOverride): boolean {
 
 /**
  * Maps day-sheet goal log slots to planner goal drag overrides (`source:
- * "actual"`) so Perfect Week shows them like manual drags. Pairs each tagged
- * slot with the allocator block on the same calendar day (same goal, nth
- * slot ↔ nth block). Manual drag overrides (`source: "drag"` or omitted) are
- * preserved.
+ * "actual"`). Pairs each slot to the baseline allocator block with the
+ * greatest time overlap on that day (each `dragKey` at most once). Falls back
+ * to `plannedBlocksSnapshot` overlap when needed. Manual drag overrides are
+ * preserved. Triggers snapshot regeneration so iCal stays in sync.
  */
 export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
   const session = await authOrPreview();
@@ -376,20 +382,78 @@ export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
           )
           .sort((a, b) => a.startMs - b.startMs);
 
-        const n = Math.min(slotList.length, blocksForDay.length);
-        for (let i = 0; i < n; i++) {
-          const slot = slotList[i]!;
-          const block = blocksForDay[i]!;
-          const [y, mo, d] = date.split("-").map(Number) as [number, number, number];
-          const dayStart = localMidnightMs(y, mo, d, tz);
-          const startMs = dayStart + slot.startMinute * 60 * 1000;
-          const endMs = dayStart + slot.endMinute * 60 * 1000;
+        const usedDragKeys = new Set<string>();
+        const [y, mo, d] = date.split("-").map(Number) as [number, number, number];
+        const dayStartMs = localMidnightMs(y, mo, d, tz);
+
+        for (const slot of slotList) {
+          const slotStart = dayStartMs + slot.startMinute * 60 * 1000;
+          const slotEnd = dayStartMs + slot.endMinute * 60 * 1000;
+
+          let bestBlock: (typeof blocksForDay)[number] | undefined;
+          let bestOv = 0;
+          for (const b of blocksForDay) {
+            if (!b.dragKey || usedDragKeys.has(b.dragKey)) continue;
+            const ov = overlapMs(slotStart, slotEnd, b.startMs, b.endMs);
+            if (ov > bestOv) {
+              bestOv = ov;
+              bestBlock = b;
+            }
+          }
+
+          let dragKey: string | undefined = bestBlock?.dragKey;
+          if (!dragKey || bestOv <= 0) {
+            const snaps =
+              review.plannedBlocksSnapshot?.filter(
+                (p) =>
+                  p.goalId === goalId &&
+                  isoCalendarDay(p.startMs, tz) === date &&
+                  overlapMs(slotStart, slotEnd, p.startMs, p.endMs) > 0
+              ) ?? [];
+            snaps.sort(
+              (p, q) =>
+                overlapMs(slotStart, slotEnd, q.startMs, q.endMs) -
+                overlapMs(slotStart, slotEnd, p.startMs, p.endMs)
+            );
+            const bestSnap = snaps[0];
+            if (bestSnap) {
+              let bestOv2 = -1;
+              let bestB2: (typeof allocation.blocks)[number] | undefined;
+              for (const b of allocation.blocks) {
+                if (
+                  b.goalId !== goalId ||
+                  b.segment ||
+                  !b.dragKey ||
+                  usedDragKeys.has(b.dragKey) ||
+                  isoCalendarDay(b.startMs, tz) !== date
+                ) {
+                  continue;
+                }
+                const ov = overlapMs(bestSnap.startMs, bestSnap.endMs, b.startMs, b.endMs);
+                if (ov > bestOv2) {
+                  bestOv2 = ov;
+                  bestB2 = b;
+                }
+              }
+              if (bestB2?.dragKey) dragKey = bestB2.dragKey;
+            }
+          }
+
+          if (!dragKey) {
+            console.warn("syncActualGoalOverridesFromDayLogs: unpaired goal slot", {
+              date,
+              goalId,
+              slot
+            });
+            continue;
+          }
+          usedDragKeys.add(dragKey);
           paired.push(
             blockOverrideSchema.parse({
               kind: "goal",
-              key: block.dragKey!,
-              startMs,
-              endMs,
+              key: dragKey,
+              startMs: slotStart,
+              endMs: slotEnd,
               source: "actual",
               setAt
             })
@@ -406,7 +470,11 @@ export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
     planFull.overrides = [...preservedNoPinCollision, ...paired];
     weeklyPlanSchema.parse(planFull);
     await savePlan(userId, planFull);
+    await refreshPlannedSnapshotsForCurrentWeek(userId, planFull, settings);
     revalidatePlanRoutes();
+    revalidatePath("/dashboard/review");
+    revalidatePath("/dashboard/week-review");
+    await runRegenerateForUser(userId);
   } catch (err) {
     console.warn("syncActualGoalOverridesFromDayLogs failed", err);
   }

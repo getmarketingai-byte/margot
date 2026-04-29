@@ -33,7 +33,12 @@ export const allocatedBlockSnapshotSchema = z.object({
   goalId: z.string().min(1),
   title: z.string().min(1),
   startMs: z.number().int(),
-  endMs: z.number().int()
+  endMs: z.number().int(),
+  /**
+   * When present, stable `allocateWeek` drag key — keeps block marks aligned
+   * when day-sheet actuals move start/end times.
+   */
+  dragKey: z.string().min(1).optional()
 });
 export type AllocatedBlockSnapshot = z.infer<typeof allocatedBlockSnapshotSchema>;
 
@@ -65,8 +70,8 @@ export const logSlotSchema = z
 export type LogSlot = z.infer<typeof logSlotSchema>;
 
 /**
- * Per-block completion mark. Keyed by `${goalId}:${startMs}` from
- * `plannedBlocksSnapshot` so it survives re-allocations.
+ * Per-block completion mark. Keyed by `dragKey` when captured in
+ * `plannedBlocksSnapshot`, else `${goalId}:${startMs}`.
  */
 export const blockMarkSchema = z.object({
   blockKey: z.string().min(1),
