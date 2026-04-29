@@ -193,8 +193,15 @@ export async function loadPlanWeekAllocationInputs(options: {
     // turn all-but-one equal-share goals into floor-only rows.
     const allGoalsUnconstrained = schedulingGoals.every((g) => {
       const norm = normaliseGoalTime(g);
+      const onlyDailyMinimum =
+        norm.minMinutesPerDay !== undefined &&
+        norm.maxMinutesPerDay === undefined &&
+        norm.minMinutesPerWeek === undefined &&
+        norm.maxMinutesPerWeek === undefined &&
+        g.frequencyPerWeek === undefined &&
+        g.allocationSharePercent === undefined;
       return (
-        norm.isEqualShare &&
+        (norm.isEqualShare || onlyDailyMinimum) &&
         g.dayOfWeek === undefined &&
         (g.daysOfWeek?.length ?? 0) === 0 &&
         g.earliestHour === undefined &&
@@ -204,7 +211,6 @@ export async function loadPlanWeekAllocationInputs(options: {
     });
     if (allGoalsUnconstrained) catchUpFloors = {};
   }
-
   const goalTitleById = new Map(schedulingGoals.map((g) => [g.id, g.title] as const));
   const daySheetGoalBusyThisWeek = daySheetGoalBusyEvents({
     reviewsByDate,

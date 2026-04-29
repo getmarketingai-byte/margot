@@ -239,8 +239,15 @@ interface PreparedGoal {
 }
 
 function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTime): boolean {
+  const onlyDailyMinimum =
+    norm.minMinutesPerDay !== undefined &&
+    norm.maxMinutesPerDay === undefined &&
+    norm.minMinutesPerWeek === undefined &&
+    norm.maxMinutesPerWeek === undefined &&
+    goal.frequencyPerWeek === undefined &&
+    goal.allocationSharePercent === undefined;
   return (
-    norm.isEqualShare &&
+    (norm.isEqualShare || onlyDailyMinimum) &&
     goal.dayOfWeek === undefined &&
     (goal.daysOfWeek?.length ?? 0) === 0 &&
     goal.earliestHour === undefined &&

@@ -160,7 +160,11 @@ export function computeGoalRollups(input: GoalRollupInput): GoalRollup[] {
 export function catchUpFloorsFromGoalRollups(
   rollups: readonly GoalRollup[]
 ): Record<string, number> {
-  return catchUpFloorsFromRecommendations(rollups);
+  // No-data means we have no review evidence yet; turning that into a floor
+  // massively biases equal-share plans and can starve other goals.
+  return catchUpFloorsFromRecommendations(
+    rollups.filter((r) => r.status !== "no-data")
+  );
 }
 
 /**
