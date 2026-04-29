@@ -59,6 +59,8 @@ export interface GoalCalendarSlice {
   startMs: number;
   endMs: number;
   dragOverrideSaved?: boolean;
+  overrideSource?: "drag" | "actual";
+  pinnedFromOverride?: boolean;
 }
 
 interface DraggableProposedGoalBlockProps {
@@ -110,7 +112,13 @@ export function DraggableProposedGoalBlock({
     return Math.round(deltaPx / snapPx) * snapPx;
   }
 
-  const hasSavedOverride = slices.some((s) => s.dragOverrideSaved);
+  const isLocked =
+    slices.some(
+      (s) =>
+        s.dragOverrideSaved ||
+        s.pinnedFromOverride ||
+        s.overrideSource === "actual"
+    );
 
   function snapDeltaMs(deltaPx: number): number {
     const deltaMin = snapToGrid(deltaPx) / pxPerMin;
@@ -240,19 +248,25 @@ export function DraggableProposedGoalBlock({
     cursor: dragState.current ? "grabbing" : "grab",
     touchAction: "none",
     backgroundColor,
-    opacity: pending ? opacity * 0.6 : opacity
+    opacity: pending ? opacity * 0.6 : opacity,
+    ...(slices.some((s) => s.overrideSource === "actual")
+      ? {
+          backgroundImage:
+            "repeating-linear-gradient(135deg, rgba(255,255,255,0.28) 0 3px, rgba(255,255,255,0.02) 3px 6px)"
+        }
+      : {})
   };
 
   return (
     <div
       ref={elRef}
-      title={`${title} (proposed)`}
+      title={`${title}${isLocked ? " (locked)" : " (proposed)"}`}
       role="button"
       tabIndex={0}
-      aria-label={`${title}. Drag to move this goal slot within the week.`}
+      aria-label={`${title}. ${isLocked ? "Locked time from your plan or day sheet — drag to adjust." : "Drag to move within the week."}`}
       className={`group absolute inset-x-0.5 z-20 select-none overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
-        hasSavedOverride ? "ring-1 ring-white/50" : ""
-      }`}
+        isLocked ? "ring-1 ring-white/50" : ""
+      } ${slices.some((s) => s.overrideSource === "actual") ? "border border-white/30" : ""}`}
       style={bodyStyle}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -267,15 +281,23 @@ export function DraggableProposedGoalBlock({
     >
       <div className="flex items-start justify-between gap-1">
         <span className="line-clamp-2 leading-tight">{title}</span>
-        {hasSavedOverride && (
+        {isLocked && (
           <span
-            aria-label="Modified by drag"
-            title="Modified — click reset to restore"
+            aria-label={
+              slices.some((s) => s.overrideSource === "actual")
+                ? "From day sheet"
+                : "Locked on calendar"
+            }
+            title={
+              slices.some((s) => s.overrideSource === "actual")
+                ? "Day-sheet actual — reset in day sheet or drag to change"
+                : "Locked — click reset to restore auto time"
+            }
             className="mt-0.5 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-white"
           />
         )}
       </div>
-      {hasSavedOverride && (
+      {isLocked && (
         <button
           type="button"
           onClick={(e) => {

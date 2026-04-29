@@ -16,6 +16,7 @@ import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
 import { invertedCalendarTimemapEvents } from "./inverted-timemap-ics-events";
 import { loadSettings } from "./settings-store";
 import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
+import { mergeOrphanGoalOverrideBlocks } from "./merge-orphan-goal-override-blocks";
 import { saveSnapshot } from "./snapshots";
 import { gymGoalTravelBlocksFromProposed, type SystemBlock } from "./week-blocks";
 
@@ -128,18 +129,22 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
   });
 
   const proposedBlocksRaw = filterInvertedTimemapFromProposedBlocks(
-    allocateWeek({
+    mergeOrphanGoalOverrideBlocks(
+      allocateWeek({
+        plan,
+        busy: [...ctx.busy, ...ctx.systemBlocks],
+        goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
+        niceWeatherWindows: ctx.niceWeatherThisWeek,
+        settings,
+        weekStartMs: ctx.weekStartMs,
+        weekEndMs: ctx.weekEndMs,
+        catchUpFloors: ctx.catchUpFloors,
+        weekAnchorDate: plan.weekStart,
+        goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+      }).blocks,
       plan,
-      busy: [...ctx.busy, ...ctx.systemBlocks],
-      goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
-      niceWeatherWindows: ctx.niceWeatherThisWeek,
-      settings,
-      weekStartMs: ctx.weekStartMs,
-      weekEndMs: ctx.weekEndMs,
-      catchUpFloors: ctx.catchUpFloors,
-      weekAnchorDate: plan.weekStart,
-      goalOverrideSources: goalOverrideSourcesFromPlan(plan)
-    }).blocks,
+      [{ weekStartMs: ctx.weekStartMs, weekEndMs: ctx.weekEndMs }]
+    ),
     plan,
     settings.calendars.sources
   );

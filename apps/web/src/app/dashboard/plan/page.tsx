@@ -10,6 +10,7 @@ import { localMondayIso } from "@/lib/week";
 import { gymGoalTravelBlocksFromProposed } from "@/lib/week-blocks";
 import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
+import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
@@ -167,7 +168,14 @@ export default async function PlanPage() {
       system: "weather" as const
     }));
   const proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
-    [...allocation.blocks, ...allocationNextWeek.blocks],
+    mergeOrphanGoalOverrideBlocks(
+      [...allocation.blocks, ...allocationNextWeek.blocks],
+      plan,
+      [
+        { weekStartMs, weekEndMs },
+        { weekStartMs: nextWeekStartMs, weekEndMs: nextWeekEndMs }
+      ]
+    ),
     plan,
     settings.calendars.sources
   );

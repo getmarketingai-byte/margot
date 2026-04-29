@@ -274,6 +274,8 @@ type GoalCalendarSlice = {
   startMs: number;
   endMs: number;
   dragOverrideSaved?: boolean;
+  overrideSource?: "drag" | "actual";
+  pinnedFromOverride?: boolean;
 };
 
 type ProposedPositioned = PositionedBlock & {
@@ -413,7 +415,9 @@ export function WeekCalendar({
                   dragKey: b.dragKey,
                   startMs: b.startMs,
                   endMs: b.endMs,
-                  dragOverrideSaved: b.dragOverrideSaved
+                  dragOverrideSaved: b.dragOverrideSaved,
+                  overrideSource: b.overrideSource,
+                  pinnedFromOverride: b.pinnedFromOverride
                 }
               ]
             : undefined

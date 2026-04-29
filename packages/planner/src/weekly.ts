@@ -100,6 +100,8 @@ export interface AllocatedBlock {
   pinnedFromOverride?: boolean;
   /** True when `WeeklyPlan.overrides` still contains this `dragKey` (reset clears). */
   dragOverrideSaved?: boolean;
+  /** How the slot was fixed in the plan (`drag` vs day-sheet `actual`) when `dragOverrideSaved`. */
+  overrideSource?: "drag" | "actual";
 }
 
 export interface WeekMetrics {
@@ -295,7 +297,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   for (const b of blocks) {
     if (!b.dragKey || b.segment) continue;
-    if (goalOverrides.has(b.dragKey)) b.dragOverrideSaved = true;
+    if (goalOverrides.has(b.dragKey)) {
+      b.dragOverrideSaved = true;
+      b.overrideSource = goalOverrideSources.get(b.dragKey) ?? "drag";
+    }
   }
 
   if (settings.allocator.allocationMode === "even") {
@@ -558,6 +563,9 @@ function spreadEvenGoalBuffersInSnapshotGaps(
           b.startMs < b.endMs
       );
       if (inside.length === 0) continue;
+      // User-dragged / day-sheet pins must stay put; spreading slack would
+      // reflow "floating" goals *and* shift locked blocks within the same gap.
+      if (inside.some((b) => b.pinnedFromOverride || b.dragOverrideSaved || b.overrideSource)) continue;
       inside.sort((a, b) => a.startMs - b.startMs);
       const runs: { goalId: string; items: AllocatedBlock[] }[] = [];
       for (const b of inside) {
