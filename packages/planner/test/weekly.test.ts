@@ -1261,6 +1261,49 @@ describe("allocateWeek", () => {
     expect(pinned?.endMs).toBe(actualEnd);
   });
 
+  it("uses only future capacity for weekly targets when nowMs is set", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = ws + 4 * DAY_MS + 12 * HOUR_MS; // Friday noon
+    const result = allocateWeek({
+      plan: {
+        id: "p",
+        weekStart: weekStartIso,
+        timezone: "UTC",
+        goals: [goal({ id: "solo", title: "Solo", targetMinutes: 4000 })]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: weekStartIso,
+      nowMs
+    });
+    expect(result.metrics.perGoal["solo"]!.targetMinutes).toBeLessThan(4000);
+    expect(result.metrics.perGoal["solo"]!.targetMinutes).toBeLessThanOrEqual(60 * 60);
+  });
+
+  it("reports free capacity as future unscheduled minutes only", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = ws + 4 * DAY_MS + 12 * HOUR_MS; // Friday noon
+    const result = allocateWeek({
+      plan: {
+        id: "p",
+        weekStart: weekStartIso,
+        timezone: "UTC",
+        goals: []
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: weekStartIso,
+      nowMs
+    });
+    expect(result.metrics.utilisation.availableMinutes).toBe(60 * 60);
+  });
+
   it("buildGoalDragKey scopes overrides by week anchor and slot", () => {
     expect(buildGoalDragKey("goal-id", "2026-05-04", 0)).toBe("goal:2026-05-04:0:goal-id");
     expect(buildGoalDragKey("a:b", "2026-04-27", 3)).toBe("goal:2026-04-27:3:a:b");

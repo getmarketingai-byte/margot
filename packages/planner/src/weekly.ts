@@ -251,8 +251,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   // Three-pass distribution.
   const totalFreeMin = days.reduce(
-    (acc, d) =>
-      acc + d.gaps.reduce((a, g) => a + Math.floor((g.endMs - g.startMs) / MS_PER_MIN), 0),
+    (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFromNow(g, allocationNowMs), 0),
     0
   );
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
@@ -329,7 +328,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     blocks.sort((a, b) => a.startMs - b.startMs);
   }
 
-  const metrics = computeMetrics(plan, prepared, blocks, days, settings);
+  const metrics = computeMetrics(plan, prepared, blocks, days, settings, allocationNowMs);
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
   return { blocks, metrics };
@@ -521,6 +520,12 @@ function distributeMinutes(
 
 function quantise(min: number): number {
   return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
+}
+
+function intervalMinutesFromNow(interval: Interval, nowMs: number | undefined): number {
+  const startMs = nowMs === undefined ? interval.startMs : Math.max(interval.startMs, nowMs);
+  if (interval.endMs <= startMs) return 0;
+  return Math.floor((interval.endMs - startMs) / MS_PER_MIN);
 }
 
 /**
@@ -965,14 +970,20 @@ function allocateGoal(
         niceWeatherWindows,
         goal
       );
-      if (candidateGaps.length === 0) continue;
+      const futureCandidateGaps =
+        nowMs === undefined
+          ? candidateGaps
+          : candidateGaps
+              .map((g) => ({ startMs: Math.max(g.startMs, nowMs), endMs: g.endMs }))
+              .filter((g) => g.endMs > g.startMs);
+      if (futureCandidateGaps.length === 0) continue;
       // Energy-suggestion pass needs to see only blocks already placed on the
       // current day so adjacency scoring doesn't reach across day boundaries.
       const placedToday = blocks.filter(
         (b) => b.startMs >= day.startMs && b.endMs <= day.endMs
       );
       const slot = pickGapForGoal(
-        candidateGaps,
+        futureCandidateGaps,
         goal,
         dayHeadroom,
         energy,
@@ -1393,7 +1404,8 @@ function computeMetrics(
   prepared: readonly PreparedGoal[],
   blocks: readonly AllocatedBlock[],
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
-  settings: UserSettings
+  settings: UserSettings,
+  nowMs: number | undefined
 ): WeekMetrics {
   const wheel = settings.wheel;
   const ppf = settings.ppf;
@@ -1459,8 +1471,7 @@ function computeMetrics(
   const hp6Gaps = computeHp6Gaps(blocks, settings, fw);
 
   const availableMinutes = days.reduce(
-    (acc, d) =>
-      acc + d.gaps.reduce((a, g) => a + Math.floor((g.endMs - g.startMs) / MS_PER_MIN), 0),
+    (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFromNow(g, nowMs), 0),
     0
   );
 
