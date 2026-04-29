@@ -56,6 +56,10 @@ interface PlanClientProps {
   freeMinutesThisWeek: number;
   /** Optional: free capacity from `now` before placement (planning horizon). */
   weekCapacityFromNowMinutes?: number;
+  /** Optional: remaining free minutes in full week after placement. */
+  remainingWeekMinutes?: number;
+  /** Optional: remaining free minutes from now after placement. */
+  remainingFromNowMinutes?: number;
   wheelAreas: WheelOption[];
   scheduledByGoal: Record<string, number>;
   effectiveTargetByGoal: Record<string, number>;
@@ -120,6 +124,8 @@ export function PlanClient({
   initialGoals,
   freeMinutesThisWeek,
   weekCapacityFromNowMinutes,
+  remainingWeekMinutes,
+  remainingFromNowMinutes,
   wheelAreas,
   scheduledByGoal,
   effectiveTargetByGoal,
@@ -235,7 +241,12 @@ export function PlanClient({
 
   return (
     <div className="flex flex-col gap-5">
-      <BudgetChip summary={summary} weekCapacityFromNowMinutes={weekCapacityFromNowMinutes} />
+      <BudgetChip
+        summary={summary}
+        weekCapacityFromNowMinutes={weekCapacityFromNowMinutes}
+        remainingWeekMinutes={remainingWeekMinutes}
+        remainingFromNowMinutes={remainingFromNowMinutes}
+      />
 
       {goals.length === 0 ? (
         <EmptyState onAdd={handleAdd} />
@@ -274,10 +285,14 @@ export function PlanClient({
 
 function BudgetChip({
   summary,
-  weekCapacityFromNowMinutes
+  weekCapacityFromNowMinutes,
+  remainingWeekMinutes,
+  remainingFromNowMinutes
 }: {
   summary: ReturnType<typeof summariseAllocation>;
   weekCapacityFromNowMinutes?: number;
+  remainingWeekMinutes?: number;
+  remainingFromNowMinutes?: number;
 }) {
   if (summary.goalCount === 0) {
     return (
@@ -295,14 +310,25 @@ function BudgetChip({
     <div className="card flex flex-col gap-3">
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Stat label="Total free (week)" value={formatMinutes(summary.freeMinutes)} />
-      <Stat label="Unallocated remainder" value={formatMinutes(summary.remainingMinutes)} />
+      <Stat
+        label={
+          remainingFromNowMinutes !== undefined
+            ? "Remaining free (from now)"
+            : remainingWeekMinutes !== undefined
+              ? "Remaining free (week)"
+              : "Unallocated remainder"
+        }
+        value={formatMinutes(
+          remainingFromNowMinutes ?? remainingWeekMinutes ?? summary.remainingMinutes
+        )}
+      />
       <Stat label="Goals" value={String(summary.goalCount)} />
       <Stat
         label={
           summary.hasWeightedShare
             ? "Weekly split"
             : summary.equalShareGoals > 0
-              ? "Each unconstrained goal (from remainder)"
+              ? "Each unconstrained goal (weekly target)"
               : "All goals fixed"
         }
         value={
@@ -316,7 +342,13 @@ function BudgetChip({
     </div>
       {weekCapacityFromNowMinutes !== undefined ? (
         <p className="text-xs text-ink-500 dark:text-ink-300">
-          Placeable from now (this run): {formatMinutes(weekCapacityFromNowMinutes)}
+          Capacity from now (before placement): {formatMinutes(weekCapacityFromNowMinutes)}
+          {remainingFromNowMinutes !== undefined
+            ? ` · Remaining from now: ${formatMinutes(remainingFromNowMinutes)}`
+            : ""}
+          {remainingWeekMinutes !== undefined
+            ? ` · Remaining in full week (includes past windows): ${formatMinutes(remainingWeekMinutes)}`
+            : ""}
         </p>
       ) : null}
     </div>

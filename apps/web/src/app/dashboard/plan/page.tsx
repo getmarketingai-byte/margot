@@ -294,6 +294,8 @@ export default async function PlanPage() {
               initialGoals={schedulingGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
               weekCapacityFromNowMinutes={allocation.metrics.utilisation.weekCapacityFromNowMinutes}
+              remainingWeekMinutes={allocation.metrics.utilisation.availableMinutes}
+              remainingFromNowMinutes={allocation.metrics.utilisation.availableFromNowMinutes}
               wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
               scheduledByGoal={scheduledByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}

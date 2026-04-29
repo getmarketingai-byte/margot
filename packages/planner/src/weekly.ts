@@ -334,6 +334,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     const totalDemand = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
     if (allUnconstrainedEqual && schedulable.length > 0 && totalDemand > weekCapacityFromNowMinutes) {
       const budget = Math.max(0, weekCapacityFromNowMinutes);
+      const originalDemand = new Map<PreparedGoal, number>(
+        schedulable.map((p) => [p, p.effectiveMinutes] as const)
+      );
       // Equalise whole-week achieved totals (not just this-run blocks):
       // prepared.effectiveMinutes is the remaining deficit after log credit.
       // Spend from-now budget to pull deficits toward a common residual level.
@@ -355,6 +358,28 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       for (const p of schedulable) {
         const capped = Math.max(0, p.effectiveMinutes - quantisedResidual);
         p.effectiveMinutes = Math.min(p.effectiveMinutes, capped);
+      }
+      let assigned = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
+      let remaining = budget - assigned;
+      while (remaining >= QUANTUM) {
+        const eligible = schedulable
+          .map((p) => ({
+            p,
+            residual: (originalDemand.get(p) ?? 0) - p.effectiveMinutes
+          }))
+          .filter((x) => x.residual >= QUANTUM)
+          .sort((a, b) => b.residual - a.residual);
+        if (eligible.length === 0) break;
+        let gaveAny = false;
+        for (const x of eligible) {
+          if (remaining < QUANTUM) break;
+          x.p.effectiveMinutes += QUANTUM;
+          remaining -= QUANTUM;
+          gaveAny = true;
+        }
+        if (!gaveAny) break;
+        assigned = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
+        remaining = budget - assigned;
       }
     }
   }
