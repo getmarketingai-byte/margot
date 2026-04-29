@@ -270,7 +270,8 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
  *
  * Stored on the WeeklyPlan rather than on UserSettings so a fresh week
  * starts clean. Keys identify the original computed block:
- *   - kind="sleep"    → key is the night index "0".."6"
+ *   - kind="sleep"    → key is the night index "0".."6", or "7" for the sleep
+ *                       that wakes on the week's first Monday (Sun night → Mon)
  *   - kind="routine"  → key is "morning-${idx}" or "shutdown-${idx}"
  *   - kind="goal"     → key is `goal:<weekAnchorIso>:<slotIndex>:<goalId>`
  *                       (constructed by the planner).
