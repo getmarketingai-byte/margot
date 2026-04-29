@@ -982,6 +982,46 @@ describe("allocateWeek", () => {
     expect(solo.some((b) => b.pinnedFromOverride)).toBe(false);
   });
 
+  it("honours source actual override when it overlaps calendar busy (day sheet)", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const reservedStart = ws + 6 * HOUR_MS;
+    const reservedEnd = ws + 10 * HOUR_MS;
+    const reserved: BusyEvent = {
+      sourceId: "reserved",
+      title: "Meeting",
+      startMs: reservedStart,
+      endMs: reservedEnd,
+      busy: true,
+      source: "google"
+    };
+    const key = buildGoalDragKey("solo", weekStartIso, 0);
+    const actualStart = reservedStart + 30 * 60 * 1000;
+    const actualEnd = actualStart + 60 * 60 * 1000;
+    const sources = new Map<string, "drag" | "actual">([[key, "actual"]]);
+    const result = allocateWeek({
+      plan: {
+        id: "p",
+        weekStart: weekStartIso,
+        timezone: "UTC",
+        goals: [goal({ id: "solo", title: "Solo", targetMinutes: 60, maxMinutesPerDay: 120 })],
+        overrides: [
+          { kind: "goal", key, startMs: actualStart, endMs: actualEnd, source: "actual", setAt: 1 }
+        ]
+      },
+      busy: [reserved],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: weekStartIso,
+      goalOverrideSources: sources
+    });
+    const pinned = result.blocks.find((b) => b.goalId === "solo" && b.dragKey === key);
+    expect(pinned?.pinnedFromOverride).toBe(true);
+    expect(pinned?.startMs).toBe(actualStart);
+    expect(pinned?.endMs).toBe(actualEnd);
+  });
+
   it("buildGoalDragKey scopes overrides by week anchor and slot", () => {
     expect(buildGoalDragKey("goal-id", "2026-05-04", 0)).toBe("goal:2026-05-04:0:goal-id");
     expect(buildGoalDragKey("a:b", "2026-04-27", 3)).toBe("goal:2026-04-27:3:a:b");

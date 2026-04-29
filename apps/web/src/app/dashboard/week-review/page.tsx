@@ -10,7 +10,7 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { filterSchedulingGoals, type WeeklyPlan } from "@calendar-automations/schema";
-import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
+import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
@@ -145,7 +145,8 @@ export default async function WeekReviewPage() {
       weekStartMs,
       weekEndMs,
       catchUpFloors: resolvedAllocatorCatchUpFloors,
-      weekAnchorDate: weekStart
+      weekAnchorDate: weekStart,
+      goalOverrideSources: goalOverrideSourcesFromPlan(plan)
     });
   } else {
     const baselineAllocation = allocateWeek({
@@ -157,7 +158,8 @@ export default async function WeekReviewPage() {
       weekStartMs,
       weekEndMs,
       catchUpFloors: {},
-      weekAnchorDate: weekStart
+      weekAnchorDate: weekStart,
+      goalOverrideSources: goalOverrideSourcesFromPlan(plan)
     });
     const effectiveTargetBaseline: Record<string, number> = {};
     for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
@@ -180,7 +182,8 @@ export default async function WeekReviewPage() {
       weekStartMs,
       weekEndMs,
       catchUpFloors: resolvedAllocatorCatchUpFloors,
-      weekAnchorDate: weekStart
+      weekAnchorDate: weekStart,
+      goalOverrideSources: goalOverrideSourcesFromPlan(plan)
     });
   }
 

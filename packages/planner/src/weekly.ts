@@ -58,7 +58,7 @@ import type {
 import { isInvertedTimemapGoal, normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps } from "./intervals";
-import { hourInTz, dateKeyInTz } from "./time";
+import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -173,6 +173,11 @@ export interface AllocateInput {
    * across adjacent weeks. Defaults to `plan.weekStart`.
    */
   weekAnchorDate?: string;
+  /**
+   * Optional map of goal override `dragKey` → source (`drag` vs day-sheet `actual`).
+   * `actual` pins relax free-gap containment so logged times win over auto-placement.
+   */
+  goalOverrideSources?: ReadonlyMap<string, "drag" | "actual">;
 }
 
 export interface AllocateResult {
@@ -196,6 +201,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const weekStartMs = input.weekStartMs ?? parseLocalDateMs(plan.weekStart, tz);
   const weekEndMs = input.weekEndMs ?? weekStartMs + 7 * DAY_MS;
   const weekAnchorDate = input.weekAnchorDate ?? plan.weekStart;
+  const goalOverrideSources =
+    input.goalOverrideSources ?? goalOverrideSourcesFromPlan(plan);
   const goalOverrides = new Map<string, { startMs: number; endMs: number }>();
   for (const o of plan.overrides ?? []) {
     if (o.kind === "goal") goalOverrides.set(o.key, { startMs: o.startMs, endMs: o.endMs });
@@ -281,7 +288,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       weekStartMs,
       weekEndMs,
       weekAnchorDate,
-      goalOverrides
+      goalOverrides,
+      goalOverrideSources
     );
   }
 
@@ -540,6 +548,9 @@ export function gymTravelPadMinutesForGoal(
  * Within each original free gap (post-segment snapshot), split slack evenly as
  * padding before the first goal run, between runs of different goals, and
  * after the last run. Blocks inside a run keep their relative packing.
+ *
+ * This intentionally introduces visible "breathing room" between goal runs when
+ * `allocator.allocationMode` is `"even"` — not fragmentation from placement bugs.
  */
 function spreadEvenGoalBuffersInSnapshotGaps(
   blocks: AllocatedBlock[],
@@ -589,11 +600,18 @@ function spreadEvenGoalBuffersInSnapshotGaps(
 
 /* ──────────────────────────── helpers ───────────────────────────────────── */
 
-function parseLocalDateMs(dateStr: string, _timeZone: string): number {
-  // dateStr is YYYY-MM-DD; treat it as midnight UTC for stable testing — the
-  // ICS layer re-formats with VTIMEZONE for display.
+function parseLocalDateMs(dateStr: string, timeZone: string): number {
   const parts = dateStr.split("-").map(Number) as [number, number, number];
-  return Date.UTC(parts[0], parts[1] - 1, parts[2], 0, 0, 0);
+  return localMidnightMs(parts[0], parts[1], parts[2], timeZone);
+}
+
+/** Map goal drag keys to override source for relaxed day-sheet pins. */
+export function goalOverrideSourcesFromPlan(plan: WeeklyPlan): Map<string, "drag" | "actual"> {
+  const m = new Map<string, "drag" | "actual">();
+  for (const o of plan.overrides ?? []) {
+    if (o.kind === "goal") m.set(o.key, o.source ?? "drag");
+  }
+  return m;
 }
 
 function reserveSegment(
@@ -727,6 +745,14 @@ function intervalFullyInsideGaps(gaps: readonly Interval[], innerStart: number, 
   return t >= innerEnd;
 }
 
+function pinOverlapsSegmentBlocks(blocks: readonly AllocatedBlock[], innerStart: number, innerEnd: number): boolean {
+  for (const b of blocks) {
+    if (!b.segment) continue;
+    if (innerStart < b.endMs && innerEnd > b.startMs) return true;
+  }
+  return false;
+}
+
 function tryPinGoalBlock(
   pinned: { startMs: number; endMs: number },
   dragKey: string,
@@ -740,7 +766,8 @@ function tryPinGoalBlock(
   weekStartMs: number,
   weekEndMs: number,
   dayHeadroom: number,
-  remainingMinutes: number
+  remainingMinutes: number,
+  relaxGapConstraints: boolean
 ): number | null {
   let startMs = Math.max(pinned.startMs, weekStartMs);
   let endMs = Math.min(pinned.endMs, weekEndMs);
@@ -761,19 +788,25 @@ function tryPinGoalBlock(
 
   if (durMin > dayHeadroom || durMin > remainingMinutes) return null;
 
-  const candidateGaps = placementWindowsForDay(
-    day.gaps,
-    day.startMs,
-    day.endMs,
-    availabilityWindows,
-    niceWeatherWindows,
-    goal
-  );
-  if (
-    !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
-    !intervalFullyInsideGaps(day.gaps, startMs - gymTravelPadMs, endMs + gymTravelPadMs)
-  ) {
-    return null;
+  if (relaxGapConstraints) {
+    if (pinOverlapsSegmentBlocks(blocks, startMs - gymTravelPadMs, endMs + gymTravelPadMs)) {
+      return null;
+    }
+  } else {
+    const candidateGaps = placementWindowsForDay(
+      day.gaps,
+      day.startMs,
+      day.endMs,
+      availabilityWindows,
+      niceWeatherWindows,
+      goal
+    );
+    if (
+      !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
+      !intervalFullyInsideGaps(day.gaps, startMs - gymTravelPadMs, endMs + gymTravelPadMs)
+    ) {
+      return null;
+    }
   }
 
   const consumeStart = startMs - gymTravelPadMs;
@@ -808,7 +841,8 @@ function allocateGoal(
   weekStartMs: number,
   weekEndMs: number,
   weekAnchorDate: string,
-  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>
+  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
+  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
@@ -880,6 +914,7 @@ function allocateGoal(
         const ovDay = dayIndexForMsInWeek(pinned.startMs, weekStartMs, tz);
         if (ovDay >= 0 && ovDay !== dayIdx) continue;
         if (ovDay === dayIdx && ovDay >= 0) {
+          const relaxGaps = goalOverrideSources.get(dragKey) === "actual";
           const pinMinutes = tryPinGoalBlock(
             pinned,
             dragKey,
@@ -893,7 +928,8 @@ function allocateGoal(
             weekStartMs,
             weekEndMs,
             dayHeadroom,
-            remainingMinutes
+            remainingMinutes,
+            relaxGaps
           );
           if (pinMinutes !== null && pinMinutes >= QUANTUM) {
             remainingMinutes -= pinMinutes;
@@ -965,6 +1001,11 @@ function allocateGoal(
       daysScheduledThisPass++;
     }
     if (daysScheduledThisPass === 0) break;
+  }
+  if (remainingMinutes >= QUANTUM && needsExtraPasses && remainingMinutes <= 8 * 60) {
+    console.warn(
+      `[allocateWeek] Goal "${goal.title}" (${goal.id}) has ${remainingMinutes} min unscheduled after ${maxPasses} passes (availability/nice-weather squeeze).`
+    );
   }
 }
 

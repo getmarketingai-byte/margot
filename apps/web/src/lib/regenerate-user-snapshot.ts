@@ -3,22 +3,47 @@
  * the public ICS feed (calendar clients polling the feed URL).
  */
 
-import { allocateWeek, buildStableUid, type AllocatedBlock } from "@calendar-automations/planner";
+import {
+  allocateWeek,
+  buildStableUid,
+  goalOverrideSourcesFromPlan,
+  type AllocatedBlock
+} from "@calendar-automations/planner";
 import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
-import { fetchGoogleBusy } from "./google-calendar";
-import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
+import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
+import { invertedCalendarTimemapEvents } from "./inverted-timemap-ics-events";
 import { loadSettings } from "./settings-store";
+import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
 import { saveSnapshot } from "./snapshots";
-import { outsideNiceWeatherIntervalsInRange } from "./nice-weather-intervals";
-import { buildWeatherTimemapEvents } from "./weather-timemap";
-import { buildSystemBlocks, overridesFromPlan } from "./system-blocks-server";
-import { isoCalendarDay, localMondayMidnightMs } from "./week";
 import { gymGoalTravelBlocksFromProposed, type SystemBlock } from "./week-blocks";
 
 /** Minimum age of the latest snapshot before a feed request triggers Google + replan. */
 export const FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS = 3 * 60 * 1000;
+
+function coalesceAdjacentWeeklyGoalBlocksForIcs(blocks: readonly AllocatedBlock[]): AllocatedBlock[] {
+  const sorted = [...blocks].sort((a, b) => a.startMs - b.startMs);
+  const out: AllocatedBlock[] = [];
+  for (const b of sorted) {
+    if (b.segment) {
+      out.push({ ...b });
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (
+      last &&
+      !last.segment &&
+      last.goalId === b.goalId &&
+      last.endMs === b.startMs
+    ) {
+      last.endMs = b.endMs;
+    } else {
+      out.push({ ...b });
+    }
+  }
+  return out;
+}
 
 function toGeneratedEvent(
   userId: string,
@@ -31,7 +56,7 @@ function toGeneratedEvent(
   if (block.wheelAreaId) tags.push(`wheel:${block.wheelAreaId}`);
   if (block.hp6Habit) tags.push(`hp6:${block.hp6Habit}`);
   return {
-    uid: buildStableUid([userId, plan.id, block.goalId, block.startMs]),
+    uid: buildStableUid([userId, plan.id, block.goalId, block.startMs, block.endMs]),
     kind: block.segment ? "consistency-segment" : "weekly-goal",
     title: block.title,
     startMs: block.startMs,
@@ -74,19 +99,8 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
   if (!db) return { eventCount: 0 };
 
   const settings = await loadSettings(userId);
-  const now = Date.now();
-  const days = settings.calendars.schedulingWindowDays;
-  const window = { startMs: now, endMs: now + days * 24 * 60 * 60 * 1000 };
-  const weekStartMs = localMondayMidnightMs(settings.timezone);
-  const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
-
-  const busyFetch = await fetchGoogleBusy(
-    userId,
-    settings.calendars.sources,
-    weekStartMs,
-    weekEndMs
-  );
-  const busy = busyFetch.busyEvents.filter((e) => e.endMs > weekStartMs && e.startMs < weekEndMs);
+  const nowMs = Date.now();
+  const snapshotEndMs = nowMs + settings.calendars.schedulingWindowDays * 24 * 60 * 60 * 1000;
 
   const planRows = await db
     .select()
@@ -95,66 +109,76 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     .limit(1);
   const planRow = planRows[0];
   const plan = planRow ? (planRow.data as WeeklyPlan) : null;
-  const systemBlocks = await buildSystemBlocks({
+
+  if (!plan) {
+    await saveSnapshot(userId, {
+      generatedAt: Date.now(),
+      windowStartMs: nowMs,
+      windowEndMs: snapshotEndMs,
+      events: []
+    });
+    return { eventCount: 0 };
+  }
+
+  const ctx = await loadPlanWeekAllocationInputs({
     userId,
+    plan,
     settings,
-    weekStartMs,
-    busy,
-    overrides: overridesFromPlan(plan ?? undefined),
-    nowMs: now
+    nowMs
   });
-  const sleepBlockMs = systemBlocks
-    .filter((b) => b.system === "sleep")
-    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
-  const weatherTimemapEvents = await buildWeatherTimemapEvents({
-    userId,
-    windowStartMs: window.startMs,
-    windowEndMs: window.endMs,
-    weather: settings.weather,
-    homeAddress: settings.travel.homeAddress,
-    geocodes: settings.travelCache?.geocodes,
-    stableUid: buildStableUid,
-    sleepBlockMs
-  });
-  const niceWeatherWindows = outsideNiceWeatherIntervalsInRange(
-    weatherTimemapEvents,
-    weekStartMs,
-    weekEndMs
+
+  const proposedBlocksRaw = filterInvertedTimemapFromProposedBlocks(
+    allocateWeek({
+      plan,
+      busy: [...ctx.busy, ...ctx.systemBlocks],
+      goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: ctx.niceWeatherThisWeek,
+      settings,
+      weekStartMs: ctx.weekStartMs,
+      weekEndMs: ctx.weekEndMs,
+      catchUpFloors: ctx.catchUpFloors,
+      weekAnchorDate: plan.weekStart,
+      goalOverrideSources: goalOverrideSourcesFromPlan(plan)
+    }).blocks,
+    plan,
+    settings.calendars.sources
   );
-  const proposedBlocks =
-    plan != null
-      ? filterInvertedTimemapFromProposedBlocks(
-          allocateWeek({
-            plan,
-            busy: [...busy, ...systemBlocks],
-            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-            niceWeatherWindows,
-            settings,
-            weekStartMs,
-            weekEndMs,
-            weekAnchorDate: isoCalendarDay(weekStartMs, settings.timezone)
-          }).blocks,
-          plan,
-          settings.calendars.sources
-        )
-      : [];
-  const events = plan ? proposedBlocks.map((b) => toGeneratedEvent(userId, plan, b)) : [];
-  const gymTravelBlocks = plan
-    ? gymGoalTravelBlocksFromProposed(proposedBlocks, plan.goals, settings.travel, settings.gym)
-    : [];
+
+  const proposedBlocks = coalesceAdjacentWeeklyGoalBlocksForIcs(proposedBlocksRaw);
+  const events = proposedBlocks.map((b) => toGeneratedEvent(userId, plan, b));
+  const gymTravelBlocks = gymGoalTravelBlocksFromProposed(
+    proposedBlocks,
+    plan.goals,
+    settings.travel,
+    settings.gym
+  );
   const systemEvents = [
-    ...systemBlocks.map((b) => toGeneratedSystemEvent(userId, b)),
+    ...ctx.systemBlocks.map((b) => toGeneratedSystemEvent(userId, b)),
     ...gymTravelBlocks.map((b) => toGeneratedSystemEvent(userId, b))
   ];
 
-  const mergedEvents = [...events, ...systemEvents, ...weatherTimemapEvents].sort(
+  const weatherClipped = ctx.weatherTimemapEvents.filter(
+    (e) => e.endMs > nowMs && e.startMs < snapshotEndMs
+  );
+
+  const invertedTimemap = invertedCalendarTimemapEvents({
+    userId,
+    plan,
+    goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
+    calendarSources: settings.calendars.sources,
+    windowStartMs: nowMs,
+    windowEndMs: snapshotEndMs,
+    stableUid: buildStableUid
+  });
+
+  const mergedEvents = [...events, ...systemEvents, ...weatherClipped, ...invertedTimemap].sort(
     (a, b) => a.startMs - b.startMs
   );
 
   await saveSnapshot(userId, {
     generatedAt: Date.now(),
-    windowStartMs: window.startMs,
-    windowEndMs: window.endMs,
+    windowStartMs: nowMs,
+    windowEndMs: snapshotEndMs,
     events: mergedEvents
   });
 

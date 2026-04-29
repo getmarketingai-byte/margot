@@ -14,7 +14,7 @@ import {
   type AllocatedBlockSnapshot,
   type WeeklyPlan
 } from "@calendar-automations/schema";
-import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
+import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
@@ -188,7 +188,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           weekStartMs,
           weekEndMs,
           catchUpFloors: weeklyReview.catchUpAdjustments ?? {},
-          weekAnchorDate: localMondayIso(tz)
+          weekAnchorDate: localMondayIso(tz),
+          goalOverrideSources: goalOverrideSourcesFromPlan(plan)
         });
       } else {
         const baselineAllocation = allocateWeek({
@@ -200,7 +201,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           weekStartMs,
           weekEndMs,
           catchUpFloors: {},
-          weekAnchorDate: localMondayIso(tz)
+          weekAnchorDate: localMondayIso(tz),
+          goalOverrideSources: goalOverrideSourcesFromPlan(plan)
         });
         const weekDates = isoDatesForWeek(weekStartMs, tz);
         const dailyReviewsRange = await loadDailyReviewsInRange(
@@ -236,7 +238,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           weekStartMs,
           weekEndMs,
           catchUpFloors,
-          weekAnchorDate: localMondayIso(tz)
+          weekAnchorDate: localMondayIso(tz),
+          goalOverrideSources: goalOverrideSourcesFromPlan(plan)
         });
       }
       const todaysBlocks: AllocatedBlockSnapshot[] = allocation.blocks
