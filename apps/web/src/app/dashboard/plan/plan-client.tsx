@@ -788,6 +788,13 @@ function OptionsEditor({
   );
   const setConstraints = visibleConstraints.filter((c) => c.isSet(draft));
   const unsetConstraints = visibleConstraints.filter((c) => !c.isSet(draft));
+  const clearAllConstraints = () => {
+    const cleared = setConstraints.reduce<GoalDraft>(
+      (nextDraft, constraint) => ({ ...nextDraft, ...constraint.clear(nextDraft) }),
+      draft
+    );
+    onChange(cleared);
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -797,21 +804,32 @@ function OptionsEditor({
           to refine.
         </p>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {setConstraints.map((c) => (
-            <ConstraintRow
-              key={c.id}
-              label={c.label}
-              onRemove={() => update(c.clear(draft))}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={clearAllConstraints}
+              className="rounded-full border border-ink-200 px-2.5 py-1 text-xs text-ink-600 hover:border-accent hover:text-accent dark:border-ink-600 dark:text-ink-200"
             >
-              <ConstraintBody
-                id={c.id}
-                draft={draft}
-                update={update}
-                wheelAreas={wheelAreas}
-              />
-            </ConstraintRow>
-          ))}
+              Clear constraints
+            </button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {setConstraints.map((c) => (
+              <ConstraintRow
+                key={c.id}
+                label={c.label}
+                onRemove={() => update(c.clear(draft))}
+              >
+                <ConstraintBody
+                  id={c.id}
+                  draft={draft}
+                  update={update}
+                  wheelAreas={wheelAreas}
+                />
+              </ConstraintRow>
+            ))}
+          </div>
         </div>
       )}
 

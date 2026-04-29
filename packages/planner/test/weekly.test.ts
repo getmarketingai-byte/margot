@@ -156,6 +156,75 @@ describe("allocateWeek", () => {
     }
   });
 
+  it("avoids duplicate same-goal auto blocks on the same day", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
+    const mondayStart = weekStartMs;
+    const busy: BusyEvent[] = [
+      // Monday free windows: 09:00-10:00 and 14:00-15:00 (fragmented).
+      { id: "m0", startMs: mondayStart, endMs: mondayStart + 9 * HOUR_MS, busy: true },
+      { id: "m1", startMs: mondayStart + 10 * HOUR_MS, endMs: mondayStart + 14 * HOUR_MS, busy: true },
+      { id: "m2", startMs: mondayStart + 15 * HOUR_MS, endMs: mondayStart + DAY_MS, busy: true }
+    ];
+    const result = allocateWeek({
+      plan: {
+        id: "single-day-no-dupe",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "single-day",
+            title: "Single day",
+            targetMinutes: 120,
+            dayOfWeek: "monday",
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const mondayBlocks = result.blocks.filter(
+      (b) => b.goalId === "single-day" && b.startMs >= mondayStart && b.startMs < mondayStart + DAY_MS
+    );
+    expect(mondayBlocks.length).toBeLessThanOrEqual(1);
+  });
+
+  it("avoids consecutive-day placements when non-adjacent options exist", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
+    const result = allocateWeek({
+      plan: {
+        id: "avoid-consecutive",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "spaced",
+            title: "Spaced",
+            minMinutesPerWeek: 120,
+            maxMinutesPerWeek: 120,
+            frequencyPerWeek: 2,
+            maxMinutesPerDay: 60,
+            daysOfWeek: ["monday", "tuesday", "wednesday"],
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const days = result.blocks
+      .filter((b) => b.goalId === "spaced")
+      .map((b) => Math.floor((b.startMs - weekStartMs) / DAY_MS))
+      .sort((a, b) => a - b);
+    expect(days).toEqual([0, 2]); // Monday + Wednesday, not Tuesday.
+  });
+
   it("respects multi-day pinning when daysOfWeek is set", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const result = allocateWeek({

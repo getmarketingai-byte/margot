@@ -893,6 +893,64 @@ function allocateGoal(
   const minPerDay = norm.minMinutesPerDay ?? 0;
   const perDayBudget = Math.max(perDay, minPerDay);
 
+  const dayHeadroomFor = (dayIdx: number): number => {
+    const day = days[dayIdx]!;
+    const dayMinutesAlready = blocks
+      .filter((b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs)
+      .reduce((acc, b) => acc + Math.floor((b.endMs - b.startMs) / MS_PER_MIN), 0);
+    const dayLoggedMinutes = loggedGoalBusyMinutesForDay(busy, goal.id, day.startMs, day.endMs);
+    return norm.maxMinutesPerDay !== undefined
+      ? Math.max(0, norm.maxMinutesPerDay - (dayMinutesAlready + dayLoggedMinutes))
+      : Number.POSITIVE_INFINITY;
+  };
+
+  const hasFuturePlacementWindow = (dayIdx: number): boolean => {
+    const day = days[dayIdx]!;
+    const candidateGaps = placementWindowsForDay(
+      day.gaps,
+      day.startMs,
+      day.endMs,
+      availabilityWindows,
+      niceWeatherWindows,
+      goal
+    );
+    const futureCandidateGaps =
+      nowMs === undefined
+        ? candidateGaps
+        : candidateGaps
+            .map((g) => ({ startMs: Math.max(g.startMs, nowMs), endMs: g.endMs }))
+            .filter((g) => g.endMs > g.startMs);
+    return futureCandidateGaps.length > 0;
+  };
+
+  const occupiedGoalDayIndexes = (): Set<number> => {
+    const out = new Set<number>();
+    for (const b of blocks) {
+      if (b.goalId !== goal.id) continue;
+      const idx = dayIndexForMsInWeek(b.startMs, weekStartMs, tz);
+      if (idx >= 0) out.add(idx);
+    }
+    return out;
+  };
+
+  const hasAdjacentGoalDay = (dayIdx: number, occupied: ReadonlySet<number>): boolean =>
+    occupied.has(dayIdx - 1) || occupied.has(dayIdx + 1);
+
+  const hasNonAdjacentAlternativeDay = (
+    currentDayIdx: number,
+    occupied: ReadonlySet<number>
+  ): boolean => {
+    for (const altDayIdx of allowedDays) {
+      if (altDayIdx === currentDayIdx) continue;
+      if (occupied.has(altDayIdx)) continue;
+      if (hasAdjacentGoalDay(altDayIdx, occupied)) continue;
+      if (dayHeadroomFor(altDayIdx) < QUANTUM) continue;
+      if (!hasFuturePlacementWindow(altDayIdx)) continue;
+      return true;
+    }
+    return false;
+  };
+
   let slotIndex = 0;
   /** Drag overrides that failed `tryPinGoalBlock` — treat as unpinned so we do not auto-place duplicates on later passes. */
   const ignoredGoalPinKeys = new Set<string>();
@@ -917,9 +975,13 @@ function allocateGoal(
       if (norm.frequencyPerWeek !== undefined && pass === 0 && daysScheduledThisPass >= targetDays)
         break;
       const day = days[dayIdx]!;
-      const dayMinutesAlready = blocks
-        .filter((b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs)
-        .reduce((acc, b) => acc + Math.floor((b.endMs - b.startMs) / MS_PER_MIN), 0);
+      const dayGoalBlocks = blocks.filter(
+        (b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs
+      );
+      const dayMinutesAlready = dayGoalBlocks.reduce(
+        (acc, b) => acc + Math.floor((b.endMs - b.startMs) / MS_PER_MIN),
+        0
+      );
       const dayLoggedMinutes = loggedGoalBusyMinutesForDay(busy, goal.id, day.startMs, day.endMs);
       const dayHeadroom =
         norm.maxMinutesPerDay !== undefined
@@ -963,6 +1025,20 @@ function allocateGoal(
         } else if (ovDay < 0) {
           ignoredGoalPinKeys.add(dragKey);
         }
+      }
+
+      // Guardrail: avoid auto-creating duplicate same-goal blocks on a day.
+      // This reduces context switching and prevents back-to-back duplicate runs.
+      if (dayGoalBlocks.length > 0) continue;
+
+      // Secondary guardrail: avoid placing this goal on consecutive days when
+      // a non-adjacent day is still available for placement.
+      const occupiedDays = occupiedGoalDayIndexes();
+      if (
+        hasAdjacentGoalDay(dayIdx, occupiedDays) &&
+        hasNonAdjacentAlternativeDay(dayIdx, occupiedDays)
+      ) {
+        continue;
       }
 
       const candidateGaps = placementWindowsForDay(
