@@ -281,15 +281,16 @@ function BudgetChip({
   }
 
   return (
-    <div className="card grid gap-3 sm:grid-cols-3">
-      <Stat label="Free time" value={formatMinutes(summary.freeMinutes)} />
+    <div className="card grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Stat label="Total free" value={formatMinutes(summary.freeMinutes)} />
+      <Stat label="Unallocated remainder" value={formatMinutes(summary.remainingMinutes)} />
       <Stat label="Goals" value={String(summary.goalCount)} />
       <Stat
         label={
           summary.hasWeightedShare
             ? "Weekly split"
             : summary.equalShareGoals > 0
-              ? "Each unconstrained goal"
+              ? "Each unconstrained goal (from remainder)"
               : "All goals fixed"
         }
         value={

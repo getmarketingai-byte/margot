@@ -924,7 +924,7 @@ function allocateGoal(
       const dayHeadroom =
         norm.maxMinutesPerDay !== undefined
           ? Math.max(0, norm.maxMinutesPerDay - (dayMinutesAlready + dayLoggedMinutes))
-          : perDayBudget;
+          : Number.POSITIVE_INFINITY;
       if (dayHeadroom < QUANTUM) continue;
 
       const dragKey = buildGoalDragKey(goal.id, weekAnchorDate, slotIndex);
@@ -997,7 +997,13 @@ function allocateGoal(
         gymTravelPadMin
       );
       if (!slot) continue;
-      const wantThisDay = Math.min(remainingMinutes, perDayBudget, dayHeadroom);
+      // First pass aims for an even spread. If some days cannot fit that budget,
+      // later passes let minutes spill into other allowed days (unless the user
+      // explicitly set frequency/max-per-day constraints).
+      const preferEvenSplitThisPass =
+        pass === 0 || norm.frequencyPerWeek !== undefined || norm.maxMinutesPerDay !== undefined;
+      const targetThisDay = preferEvenSplitThisPass ? perDayBudget : remainingMinutes;
+      const wantThisDay = Math.min(remainingMinutes, targetThisDay, dayHeadroom);
       const usedMinutes = Math.min(wantThisDay, slot.minutes);
       if (usedMinutes < QUANTUM) continue;
       // Honour minMinutesPerDay: never place a tiny block when the user asked
