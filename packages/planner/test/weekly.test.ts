@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  achievedMinutesForGoal,
   allocateWeek,
   buildGoalDragKey,
   computeAllocationRemainderFractions
 } from "../src/weekly";
+import type { AllocatedBlock } from "../src/weekly";
 import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
 import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION, weeklyGoalSchema } from "@calendar-automations/schema";
 import type { BusyEvent } from "../src/types";
@@ -698,6 +700,36 @@ describe("allocateWeek", () => {
     const targetB = result.metrics.perGoal["b"]!.targetMinutes;
     expect(targetA).toBe(targetB);
     expect(result.metrics.perGoal["a"]!.scheduledMinutes).toBeGreaterThanOrEqual(120);
+  });
+
+  it("merges overlapping day-sheet and block intervals so achieved minutes are not doubled", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const logStart = weekStartMs + 10 * HOUR_MS;
+    const logEnd = weekStartMs + 12 * HOUR_MS;
+    const busy: BusyEvent = {
+      sourceId: `daysheet-goal:overlap:${logStart}:${logEnd}`,
+      title: "Logged",
+      startMs: logStart,
+      endMs: logEnd,
+      busy: true,
+      source: "internal"
+    };
+    const block: AllocatedBlock = {
+      goalId: "overlap",
+      title: "Overlap",
+      startMs: logStart,
+      endMs: logEnd,
+      energyMode: "neutral"
+    };
+    expect(achievedMinutesForGoal("overlap", [busy], [block], weekStartMs, weekEndMs)).toBe(120);
+
+    const blockShifted: AllocatedBlock = {
+      ...block,
+      startMs: weekStartMs + 11 * HOUR_MS,
+      endMs: weekStartMs + 13 * HOUR_MS
+    };
+    expect(achievedMinutesForGoal("overlap", [busy], [blockShifted], weekStartMs, weekEndMs)).toBe(180);
   });
 
   it("applies weekly and daily caps together when both are set", () => {

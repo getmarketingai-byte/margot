@@ -36,7 +36,7 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 | Field | Meaning |
 |--------|---------|
 | `targetMinutes` | `plannedWeeklyMinutes` (Pass 1+2 result; full-week budget). |
-| `scheduledMinutes` | **Achieved:** `max(logged, pinnedActualMinutes) + (non–actual-pin block minutes)`. Counts day-sheet logs + drag/auto blocks; actual pins are not double-counted vs logs when using `max`. |
+| `scheduledMinutes` | **Achieved:** merged **union** of wall-time intervals from `daysheet-goal:` busy events and **all** allocator blocks for that goal (including actual pins). Overlaps count once so the same slot is not credited as both logged and proposed. |
 | `unplacedMinutes` | `max(0, placementDemandAfterLogs − sum(all goal block minutes for that id))`. |
 
 ### Utilisation

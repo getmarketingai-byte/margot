@@ -111,7 +111,7 @@ export interface WeekMetrics {
   /**
    * goalId -> progress vs weekly plan.
    * - `targetMinutes`: Pass 1+2 planned weekly minutes (full-week free budget), before day-sheet credit.
-   * - `scheduledMinutes`: achieved = max(logged,pinsActual)+auto+drag blocks (see ALLOCATOR_BUSINESS_RULES.md).
+   * - `scheduledMinutes`: achieved = merged union of day-sheet (`daysheet-goal:`) and goal block intervals (see ALLOCATOR_BUSINESS_RULES.md).
    * - `unplacedMinutes`: placement demand after log credit still unmet by calendar blocks (>= 0).
    */
   perGoal: Record<
@@ -1638,30 +1638,67 @@ function sortBlocksByEnergyCurve(
   void energy;
 }
 
-function achievedMinutesForGoal(
+/**
+ * Achieved wall-time for a goal: union of day-sheet busy (`daysheet-goal:`) and
+ * all allocator blocks (auto, drag, actual pins). Overlapping intervals count once
+ * so logged + proposed for the same slot is not double-counted in the Plan row.
+ */
+export function achievedMinutesForGoal(
   goalId: string,
   busy: readonly BusyEvent[],
   blocks: readonly AllocatedBlock[],
   weekStartMs: number,
-  weekEndMs: number,
-  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
-  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">
+  weekEndMs: number
 ): number {
-  const logged = loggedGoalBusyMinutesForWindow(busy, goalId, weekStartMs, weekEndMs);
-  const pinActual = pinnedActualGoalOverrideMinutesForWindow(
-    goalId,
-    weekStartMs,
-    weekEndMs,
-    goalOverrides,
-    goalOverrideSources
-  );
-  let autoAndDrag = 0;
+  return mergedGoalCoverageMinutes(goalId, busy, blocks, weekStartMs, weekEndMs);
+}
+
+function clipIntervalToWindow(iv: Interval, windowStartMs: number, windowEndMs: number): Interval | null {
+  const startMs = Math.max(iv.startMs, windowStartMs);
+  const endMs = Math.min(iv.endMs, windowEndMs);
+  if (endMs <= startMs) return null;
+  return { startMs, endMs };
+}
+
+function mergeIntervalsSorted(intervals: Interval[]): Interval[] {
+  if (intervals.length === 0) return [];
+  const sorted = [...intervals].sort((a, b) => a.startMs - b.startMs);
+  const out: Interval[] = [];
+  let cur = sorted[0]!;
+  for (let i = 1; i < sorted.length; i++) {
+    const n = sorted[i]!;
+    if (n.startMs <= cur.endMs) {
+      cur = { startMs: cur.startMs, endMs: Math.max(cur.endMs, n.endMs) };
+    } else {
+      out.push(cur);
+      cur = n;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function mergedGoalCoverageMinutes(
+  goalId: string,
+  busy: readonly BusyEvent[],
+  blocks: readonly AllocatedBlock[],
+  weekStartMs: number,
+  weekEndMs: number
+): number {
+  const raw: Interval[] = [];
+  const prefix = `daysheet-goal:${goalId}:`;
+  for (const ev of busy) {
+    if (!ev.sourceId?.startsWith(prefix)) continue;
+    const c = clipIntervalToWindow({ startMs: ev.startMs, endMs: ev.endMs }, weekStartMs, weekEndMs);
+    if (c) raw.push(c);
+  }
   for (const b of blocks) {
     if (b.segment || b.goalId !== goalId) continue;
-    if (b.pinnedFromOverride && b.overrideSource === "actual") continue;
-    autoAndDrag += Math.floor((b.endMs - b.startMs) / MS_PER_MIN);
+    const c = clipIntervalToWindow({ startMs: b.startMs, endMs: b.endMs }, weekStartMs, weekEndMs);
+    if (c) raw.push(c);
   }
-  return Math.max(logged, pinActual) + autoAndDrag;
+  const merged = mergeIntervalsSorted(raw);
+  return merged.reduce((acc, iv) => acc + Math.floor((iv.endMs - iv.startMs) / MS_PER_MIN), 0);
 }
 
 function goalBlockMinutesPlaced(goalId: string, blocks: readonly AllocatedBlock[]): number {
@@ -1698,15 +1735,7 @@ function computeMetrics(
     const target = p?.plannedWeeklyMinutes ?? g.targetMinutes ?? 0;
     const placementDemand = p?.effectiveMinutes ?? 0;
     const placedBlocks = goalBlockMinutesPlaced(g.id, blocks);
-    const achieved = achievedMinutesForGoal(
-      g.id,
-      busy,
-      blocks,
-      weekStartMs,
-      weekEndMs,
-      goalOverrides,
-      goalOverrideSources
-    );
+    const achieved = achievedMinutesForGoal(g.id, busy, blocks, weekStartMs, weekEndMs);
     perGoal[g.id] = {
       targetMinutes: target,
       scheduledMinutes: achieved,
