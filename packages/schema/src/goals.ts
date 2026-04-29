@@ -161,9 +161,9 @@ export const weeklyGoalSchema = z.object({
    */
   commitmentLevel: commitmentLevel.default("committed"),
   /**
-   * When `allocator.allocationMode` is `"even"`, Pass 2 splits post-floor
-   * remainder using this percentage alongside goals that omit it (they split
-   * what is left equally). Ignored in `"finish-early"` mode.
+   * Pass 2 splits the post-floor remainder using this percentage alongside goals
+   * that omit it (they split what is left equally). Calendar packing
+   * (`allocator.allocationMode`) is separate and does not change this weighting.
    */
   allocationSharePercent: z.number().int().min(1).max(100).optional(),
   /**

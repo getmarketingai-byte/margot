@@ -26,7 +26,7 @@ function loadInvertedVisibilityMap(): Record<string, boolean> {
 }
 
 function isInvertedGoalShown(map: Record<string, boolean>, goalId: string): boolean {
-  return map[goalId] !== false;
+  return map[goalId] === true;
 }
 
 function applyProposedOptimisticTimes(

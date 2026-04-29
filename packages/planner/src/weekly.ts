@@ -15,9 +15,10 @@
  *        - the user's `energyOrdering.mode`
  *        - Wheel-of-Life weekly minute floors per area
  *        - PPF minimum-touches and minimum-percent targets
- *   4. In "even" allocation mode, spread slack inside each tight free window as
- *      equal gaps between goal runs (skipped when a window is mostly unused,
- *      e.g. inverted-calendar pockets inside a full-day gap snapshot).
+ *   4. Optionally spread slack inside each tight free window as equal gaps
+ *      between goal runs when `allocator.allocationMode` is `"even"` (skipped
+ *      for `"finish-early"` and when a window is mostly unused, e.g. inverted-
+ *      calendar pockets). Weekly target minutes do not depend on this mode.
  *   5. Goals with `specialGoalType: "gym"` reserve an extra quantised band of
  *      `settings.gym.driveMinutes` on each side of the workout block (same
  *      default one-way drive as calendar gym legs) so nothing else stacks in
@@ -331,19 +332,12 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  * Pass 1 + Pass 2: derive each goal's `effectiveMinutes` for the week.
  *
  *   - Pass 1 reserves every goal's `minMinutesPerWeek` as a floor.
- *   - Pass 2 distributes the remaining free time. Behavior depends on
- *     `allocator.allocationMode`:
- *
- *       "even" (default): split the remainder evenly across goals that have
- *       not yet hit their `maxMinutesPerWeek` (weekly targets). Goals with no
- *       time fields ("equal share" goals) start at 0 and receive their slice
- *       in this pass. After placement, slack inside each original free window
- *       is spread as equal gaps between consecutive goal runs so leftover time
- *       reads as breathing room between blocks, not one lump at the tail.
- *
- *       "finish-early": top up each goal in user/priority order to its
- *       `maxMinutesPerWeek` cap, then stop. Goals without a cap stay at their
- *       floor, leaving the remainder as free time at the end of the day/week.
+ *   - Pass 2 distributes the remaining free time: weighted share of the
+ *     remainder (`allocationSharePercent` plus equal split for goals without
+ *     it), respecting caps. Calendar layout then uses `allocator.allocationMode`
+ *     only: `"even"` spreads slack inside each free window as gaps between goal
+ *     runs; `"finish-early"` leaves blocks packed without that padding so
+ *     leftover time stays toward the end of the window.
  *
  *   - When floors exceed `totalFreeMin`, we either scale floors proportionally
  *     (default) or pay them in user order until time runs out (strict).
@@ -473,29 +467,9 @@ function distributeMinutes(
 
   let remainder = totalFreeMin - floorTotal;
 
-  if (allocator.allocationMode === "finish-early") {
-    // Pass 2 (finish-early): fill goals one after another in user/priority
-    // order, topping each up to its weekly cap. Goals without a cap don't
-    // grow past their floor, so leftover time stays as free time the placer
-    // will simply not consume — surfaced to the UI as "free time at the end
-    // of the day/week".
-    const ordered = [...prepared].sort((a, b) => a.index - b.index);
-    for (const p of ordered) {
-      if (remainder < QUANTUM) break;
-      const cap = p.norm.maxMinutesPerWeek;
-      if (cap === undefined) continue;
-      const headroom = Math.max(0, cap - p.effectiveMinutes);
-      if (headroom < QUANTUM) continue;
-      const give = quantise(Math.min(headroom, remainder));
-      if (give <= 0) continue;
-      p.effectiveMinutes += give;
-      remainder -= give;
-    }
-    return { prepared, overcommitted, notScheduled };
-  }
-
-  // Pass 2 (even): weighted share of the remainder (allocationSharePercent +
-  // equal split for goals without it), then rounds respect caps / spillover.
+  // Pass 2: weighted share of the remainder (allocationSharePercent + equal split
+  // for goals without it), then rounds respect caps / spillover. Packing/buffers
+  // on the calendar are controlled separately via `allocator.allocationMode`.
   const remainderFractions = computeAllocationRemainderFractions(goals);
 
   const eligible = () =>
@@ -554,8 +528,8 @@ export function gymTravelPadMinutesForGoal(
  * padding before the first goal run, between runs of different goals, and
  * after the last run. Blocks inside a run keep their relative packing.
  *
- * This intentionally introduces visible "breathing room" between goal runs when
- * `allocator.allocationMode` is `"even"` — not fragmentation from placement bugs.
+ * This intentionally introduces visible "breathing room" between goal runs in
+ * `"even"` packing mode — not fragmentation from placement bugs.
  */
 function spreadEvenGoalBuffersInSnapshotGaps(
   blocks: AllocatedBlock[],
