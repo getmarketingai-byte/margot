@@ -97,8 +97,9 @@ export const weeklyGoalSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   /**
-   * Legacy fixed weekly target. When present and the new min/max fields are
-   * absent, normalisation treats this as `min = max = targetMinutes`.
+   * Hint-only weekly minutes from quick add / older UIs. Does **not** set a
+   * weekly floor or ceiling unless `minMinutesPerWeek` / `maxMinutesPerWeek`
+   * are also set; see `normaliseGoalTime`.
    */
   targetMinutes: z.number().int().positive().optional(),
   /** Reserve at least this many minutes per week (allocator Pass 1). */
@@ -208,7 +209,7 @@ export interface NormalisedGoalTime {
   frequencyPerWeek?: number;
   /** True when the goal carries no time fields, no share %, and should equal-share. */
   isEqualShare: boolean;
-  /** True when the legacy `targetMinutes` field was used to derive bounds. */
+  /** True when only legacy `targetMinutes` is set (no explicit min/max/day range). */
   isLegacyTarget: boolean;
 }
 
@@ -216,11 +217,16 @@ export interface NormalisedGoalTime {
  * Normalises a goal's mixed time fields into a single canonical shape.
  *
  * Rules:
- *   1. If only `targetMinutes` is set, treat it as `min == max == targetMinutes`.
+ *   1. If only `targetMinutes` is set (legacy / simple picker), it does **not**
+ *      set weekly min or max — the goal **equal-shares** the post-floor remainder
+ *      like an unconstrained row. `targetMinutes` stays on the goal for UX hints
+ *      only; use explicit `minMinutesPerWeek` / `maxMinutesPerWeek` when the user
+ *      needs an exact weekly band.
  *   2. If `minMinutesPerDay` is set without `minMinutesPerWeek`, derive
  *      `min/wk = min/day × scheduledDays`, but only when cadence is explicit
  *      (`frequencyPerWeek`, `dayOfWeek`, or `daysOfWeek`). Same for max.
- *   3. A goal with no time fields is "equal share".
+ *   3. A goal with no explicit weekly/day bounds (`minMinutesPerWeek`, etc.) is
+ *      "equal share", **including** when only legacy `targetMinutes` is set.
  */
 export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   const hasAnyRange =
@@ -243,11 +249,6 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   let minMinutesPerWeek = goal.minMinutesPerWeek;
   let maxMinutesPerWeek = goal.maxMinutesPerWeek;
 
-  if (!hasAnyRange && hasLegacyTarget) {
-    minMinutesPerWeek = goal.targetMinutes;
-    maxMinutesPerWeek = goal.targetMinutes;
-  }
-
   if (
     minMinutesPerWeek === undefined &&
     goal.minMinutesPerDay !== undefined &&
@@ -265,7 +266,6 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
 
   const isEqualShare =
     !hasAnyRange &&
-    !hasLegacyTarget &&
     goal.frequencyPerWeek === undefined &&
     goal.allocationSharePercent === undefined;
 

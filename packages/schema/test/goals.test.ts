@@ -63,6 +63,23 @@ describe("WeeklyGoal energy classification fields", () => {
     expect(parsed.allocationSharePercent).toBe(40);
   });
 
+  it("treats targetMinutes-only as equal-share (no weekly min/max)", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Quick add",
+        targetMinutes: 180,
+        priority: 3,
+        energyMode: "neutral",
+        ppfHorizon: "unspecified"
+      })
+    );
+    expect(norm.isEqualShare).toBe(true);
+    expect(norm.minMinutesPerWeek).toBeUndefined();
+    expect(norm.maxMinutesPerWeek).toBeUndefined();
+    expect(norm.isLegacyTarget).toBe(true);
+  });
+
   it("sets isEqualShare false when only allocationSharePercent is set", () => {
     const goal = weeklyGoalSchema.parse({
       id: "g1",

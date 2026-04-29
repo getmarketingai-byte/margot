@@ -15,6 +15,7 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 - **Pass 1:** Reserves each goal’s weekly floor (`minMinutesPerWeek`, subject to weekly cap).
 - **Pass 2:** Splits the **remainder** of `weekCapacityMinutes` across eligible goals (`allocationSharePercent` weighting + equal share for others). Packing mode (`even` vs `finish-early`) affects **calendar layout only**, not these minute totals.
 - **Output per goal:** `plannedWeeklyMinutes` — the **weekly plan target** shown in the UI as “X / week”. It does **not** shrink mid-week just because `nowMs` has moved.
+- **Schema `WeeklyGoal.targetMinutes`:** when it is the **only** time hint (no explicit weekly or per-day min/max), it does **not** set a floor or ceiling — the goal **equal-shares** Pass 2 like an unconstrained row. For a fixed weekly slice, set **`minMinutesPerWeek` / `maxMinutesPerWeek`** (optionally equal) explicitly.
 
 ## Day-sheet credit (before Pass 3)
 

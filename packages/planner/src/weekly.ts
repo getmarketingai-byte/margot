@@ -750,8 +750,8 @@ function wheelTopUpGoals(
   for (const g of realGoals) {
     if (!g.wheelAreaId) continue;
     // Estimate how much existing goals are already committing to this area.
-    // We use the simplest available signal — the floor (or legacy target) — so
-    // wheel top-ups only fire when the user clearly hasn't covered the area.
+    // We use explicit weekly min (else max) — `targetMinutes` alone does not
+    // count here; wheel top-ups reflect uncovered floors vs real min/max.
     const norm = normaliseGoalTime(g);
     const committed = norm.minMinutesPerWeek ?? norm.maxMinutesPerWeek ?? 0;
     minutesByArea[g.wheelAreaId] = (minutesByArea[g.wheelAreaId] ?? 0) + committed;

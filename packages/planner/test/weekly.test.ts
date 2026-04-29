@@ -112,8 +112,10 @@ describe("allocateWeek", () => {
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
     expect(result.blocks.length).toBeGreaterThan(0);
-    expect(result.metrics.perGoal["g1"]!.targetMinutes).toBe(240);
-    expect(result.metrics.perGoal["g3"]!.scheduledMinutes).toBeGreaterThan(0);
+    const t1 = result.metrics.perGoal["g1"]!.targetMinutes;
+    expect(t1).toBe(result.metrics.perGoal["g2"]!.targetMinutes);
+    expect(t1).toBe(result.metrics.perGoal["g3"]!.targetMinutes);
+    expect(t1).toBeGreaterThan(240);
   });
 
   it("computes PPF mix percentages across allocated time", () => {
@@ -1022,7 +1024,8 @@ describe("allocateWeek", () => {
         {
           id: "gym-goal",
           title: "Gym",
-          targetMinutes: 60,
+          minMinutesPerWeek: 60,
+          maxMinutesPerWeek: 60,
           dayOfWeek: "monday",
           energyMode: "hyperfocus",
           ppfHorizon: "unspecified",
@@ -1037,7 +1040,8 @@ describe("allocateWeek", () => {
         {
           id: "plain-goal",
           title: "Gym",
-          targetMinutes: 60,
+          minMinutesPerWeek: 60,
+          maxMinutesPerWeek: 60,
           dayOfWeek: "monday",
           energyMode: "hyperfocus",
           ppfHorizon: "unspecified"
@@ -1213,7 +1217,7 @@ describe("allocateWeek", () => {
       id: "goal-ov-p",
       weekStart: "2026-04-27",
       timezone: "UTC",
-      goals: [goal({ id: "solo", title: "Solo", targetMinutes: 120 })],
+      goals: [goal({ id: "solo", title: "Solo", minMinutesPerWeek: 120, maxMinutesPerWeek: 120 })],
       overrides: []
     };
     const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
@@ -1450,7 +1454,7 @@ describe("allocateWeek", () => {
         id: "p",
         weekStart: weekStartIso,
         timezone: "UTC",
-        goals: [goal({ id: "solo", title: "Solo", targetMinutes: 4000 })]
+        goals: [goal({ id: "solo", title: "Solo", minMinutesPerWeek: 4000, maxMinutesPerWeek: 4000 })]
       },
       busy: [],
       settings: buildSettings(),

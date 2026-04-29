@@ -653,16 +653,6 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
     ppfHorizon: goal.ppfHorizon ?? "unspecified",
     commitmentLevel: goal.commitmentLevel ?? "committed"
   };
-  // Legacy `targetMinutes` behaved as a fixed weekly target (min == max).
-  // Surface it through the new constraints UI so users can see/edit/clear it.
-  if (
-    goal.targetMinutes !== undefined &&
-    goal.minMinutesPerWeek === undefined &&
-    goal.maxMinutesPerWeek === undefined
-  ) {
-    draft.minMinutesPerWeek = goal.targetMinutes;
-    draft.maxMinutesPerWeek = goal.targetMinutes;
-  }
   if (goal.minMinutesPerWeek !== undefined) draft.minMinutesPerWeek = goal.minMinutesPerWeek;
   if (goal.maxMinutesPerWeek !== undefined) draft.maxMinutesPerWeek = goal.maxMinutesPerWeek;
   if (goal.minMinutesPerDay !== undefined) draft.minMinutesPerDay = goal.minMinutesPerDay;
