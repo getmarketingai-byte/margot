@@ -82,6 +82,41 @@ describe("WeeklyGoal energy classification fields", () => {
     expect(norm.maxMinutesPerWeek).toBeUndefined();
     expect(norm.maxMinutesPerDay).toBe(480);
   });
+  it("does not inflate min/week from min/day when cadence is unconstrained", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Gym",
+        minMinutesPerDay: 60
+      })
+    );
+    expect(norm.minMinutesPerWeek).toBeUndefined();
+    expect(norm.minMinutesPerDay).toBe(60);
+  });
+
+  it("derives min/week from min/day when frequency is explicit", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Gym",
+        minMinutesPerDay: 45,
+        frequencyPerWeek: 3
+      })
+    );
+    expect(norm.minMinutesPerWeek).toBe(135);
+  });
+
+  it("derives min/week from pinned weekdays when frequency is absent", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Gym",
+        minMinutesPerDay: 30,
+        daysOfWeek: ["monday", "wednesday"]
+      })
+    );
+    expect(norm.minMinutesPerWeek).toBe(60);
+  });
 });
 
 describe("blockOverrideSchema", () => {

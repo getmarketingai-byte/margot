@@ -218,12 +218,9 @@ export interface NormalisedGoalTime {
  * Rules:
  *   1. If only `targetMinutes` is set, treat it as `min == max == targetMinutes`.
  *   2. If `minMinutesPerDay` is set without `minMinutesPerWeek`, derive
- *      `min/wk = min/day × (frequencyPerWeek ?? 7)`.
- *      `maxMinutesPerDay` does **not** imply `maxMinutesPerWeek`: without an
- *      explicit weekly cap, even-mode allocation treats the weekly ceiling as
- *      unbounded for distribution and splits free time fairly across goals; the
- *      per-day max still clamps placement day by day.
- *   3. A goal with no time fields and no `allocationSharePercent` is "equal share".
+ *      `min/wk = min/day × scheduledDays`, but only when cadence is explicit
+ *      (`frequencyPerWeek`, `dayOfWeek`, or `daysOfWeek`). Same for max.
+ *   3. A goal with no time fields is "equal share".
  */
 export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   const hasAnyRange =
@@ -232,7 +229,16 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
     goal.minMinutesPerDay !== undefined ||
     goal.maxMinutesPerDay !== undefined;
   const hasLegacyTarget = goal.targetMinutes !== undefined;
-  const days = goal.frequencyPerWeek ?? 7;
+  const constrainedDaysFromWeekdays =
+    goal.daysOfWeek && goal.daysOfWeek.length > 0
+      ? goal.daysOfWeek.length
+      : goal.dayOfWeek
+        ? 1
+        : undefined;
+  const inferredScheduledDays =
+    goal.frequencyPerWeek !== undefined && constrainedDaysFromWeekdays !== undefined
+      ? Math.min(goal.frequencyPerWeek, constrainedDaysFromWeekdays)
+      : goal.frequencyPerWeek ?? constrainedDaysFromWeekdays;
 
   let minMinutesPerWeek = goal.minMinutesPerWeek;
   let maxMinutesPerWeek = goal.maxMinutesPerWeek;
@@ -242,8 +248,19 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
     maxMinutesPerWeek = goal.targetMinutes;
   }
 
-  if (minMinutesPerWeek === undefined && goal.minMinutesPerDay !== undefined) {
-    minMinutesPerWeek = goal.minMinutesPerDay * days;
+  if (
+    minMinutesPerWeek === undefined &&
+    goal.minMinutesPerDay !== undefined &&
+    inferredScheduledDays !== undefined
+  ) {
+    minMinutesPerWeek = goal.minMinutesPerDay * inferredScheduledDays;
+  }
+  if (
+    maxMinutesPerWeek === undefined &&
+    goal.maxMinutesPerDay !== undefined &&
+    inferredScheduledDays !== undefined
+  ) {
+    maxMinutesPerWeek = goal.maxMinutesPerDay * inferredScheduledDays;
   }
 
   const isEqualShare =
