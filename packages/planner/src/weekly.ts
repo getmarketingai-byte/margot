@@ -260,6 +260,26 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     settings.allocator,
     input.catchUpFloors
   );
+  // Logged day-sheet minutes should reduce remaining weekly demand for the same
+  // goal. If those minutes are also represented as source="actual" pins, the
+  // pin itself already consumes weekly demand, so only subtract unpinned logs.
+  for (const p of prepared) {
+    const weeklyLoggedMinutes = loggedGoalBusyMinutesForWindow(
+      busy,
+      p.goal.id,
+      weekStartMs,
+      weekEndMs
+    );
+    const weeklyPinnedActualMinutes = pinnedActualGoalOverrideMinutesForWindow(
+      p.goal.id,
+      weekStartMs,
+      weekEndMs,
+      goalOverrides,
+      goalOverrideSources
+    );
+    const unpinnedLoggedMinutes = Math.max(0, weeklyLoggedMinutes - weeklyPinnedActualMinutes);
+    p.effectiveMinutes = Math.max(0, p.effectiveMinutes - unpinnedLoggedMinutes);
+  }
 
   /** Free gaps after segments, before goals — used to even out inter-goal slack in "even" mode. */
   const gapsBeforeGoals = days.map((d) => d.gaps.map((g) => ({ ...g })));
@@ -1120,6 +1140,44 @@ function allocateGoal(
       `[allocateWeek] Goal "${goal.title}" (${goal.id}) has ${remainingMinutes} min unscheduled after ${maxPasses} passes (availability/nice-weather squeeze).`
     );
   }
+}
+
+function pinnedActualGoalOverrideMinutesForWindow(
+  goalId: string,
+  windowStartMs: number,
+  windowEndMs: number,
+  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
+  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">
+): number {
+  let total = 0;
+  const keySuffix = `:${goalId}`;
+  for (const [key, override] of goalOverrides) {
+    if (!key.endsWith(keySuffix)) continue;
+    if (goalOverrideSources.get(key) !== "actual") continue;
+    const startMs = Math.max(override.startMs, windowStartMs);
+    const endMs = Math.min(override.endMs, windowEndMs);
+    if (endMs <= startMs) continue;
+    total += Math.floor((endMs - startMs) / MS_PER_MIN);
+  }
+  return total;
+}
+
+function loggedGoalBusyMinutesForWindow(
+  busy: readonly BusyEvent[],
+  goalId: string,
+  windowStartMs: number,
+  windowEndMs: number
+): number {
+  const prefix = `daysheet-goal:${goalId}:`;
+  let total = 0;
+  for (const ev of busy) {
+    if (!ev.sourceId?.startsWith(prefix)) continue;
+    const startMs = Math.max(ev.startMs, windowStartMs);
+    const endMs = Math.min(ev.endMs, windowEndMs);
+    if (endMs <= startMs) continue;
+    total += Math.floor((endMs - startMs) / MS_PER_MIN);
+  }
+  return total;
 }
 
 function loggedGoalBusyMinutesForDay(

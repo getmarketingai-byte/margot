@@ -624,12 +624,12 @@ describe("allocateWeek", () => {
   it("counts day-sheet logged goal minutes toward maxMinutesPerDay headroom", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const mondayStart = weekStartMs;
-    const mondayNoon = mondayStart + 12 * HOUR_MS;
+    const mondayFortyFive = mondayStart + 45 * 60_000;
     const loggedBusy: BusyEvent = {
-      sourceId: `daysheet-goal:workout:${mondayStart}:${mondayNoon}`,
+      sourceId: `daysheet-goal:workout:${mondayStart}:${mondayFortyFive}`,
       title: "Workout (logged)",
       startMs: mondayStart,
-      endMs: mondayNoon,
+      endMs: mondayFortyFive,
       busy: true,
       source: "internal"
     };
@@ -664,8 +664,39 @@ describe("allocateWeek", () => {
         b.startMs >= mondayStart + DAY_MS &&
         b.startMs < mondayStart + 2 * DAY_MS
     );
-    expect(mondayBlocks.length).toBe(0);
+    const mondayScheduled = mondayBlocks.reduce((sum, b) => sum + (b.endMs - b.startMs) / 60_000, 0);
+    expect(mondayScheduled).toBeLessThanOrEqual(15);
     expect(tuesdayBlocks.length).toBeGreaterThan(0);
+  });
+
+  it("reduces equal-share weekly target by logged day-sheet minutes for that goal", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
+    const logged: BusyEvent = {
+      sourceId: `daysheet-goal:a:${weekStartMs}:${weekStartMs + 120 * 60_000}`,
+      title: "A (logged)",
+      startMs: weekStartMs,
+      endMs: weekStartMs + 120 * 60_000,
+      busy: true,
+      source: "internal"
+    };
+    const result = allocateWeek({
+      plan: {
+        id: "equal-with-logged",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          { id: "a", title: "A", priority: 3, energyMode: "neutral", ppfHorizon: "unspecified" },
+          { id: "b", title: "B", priority: 3, energyMode: "neutral", ppfHorizon: "unspecified" }
+        ]
+      },
+      busy: [logged],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const targetA = result.metrics.perGoal["a"]!.targetMinutes;
+    const targetB = result.metrics.perGoal["b"]!.targetMinutes;
+    expect(targetB - targetA).toBeGreaterThanOrEqual(120);
   });
 
   it("applies weekly and daily caps together when both are set", () => {
