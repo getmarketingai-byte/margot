@@ -218,7 +218,11 @@ export interface NormalisedGoalTime {
  * Rules:
  *   1. If only `targetMinutes` is set, treat it as `min == max == targetMinutes`.
  *   2. If `minMinutesPerDay` is set without `minMinutesPerWeek`, derive
- *      `min/wk = min/day × (frequencyPerWeek ?? 7)`. Same for max.
+ *      `min/wk = min/day × (frequencyPerWeek ?? 7)`.
+ *      `maxMinutesPerDay` does **not** imply `maxMinutesPerWeek`: without an
+ *      explicit weekly cap, even-mode allocation treats the weekly ceiling as
+ *      unbounded for distribution and splits free time fairly across goals; the
+ *      per-day max still clamps placement day by day.
  *   3. A goal with no time fields and no `allocationSharePercent` is "equal share".
  */
 export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
@@ -240,9 +244,6 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
 
   if (minMinutesPerWeek === undefined && goal.minMinutesPerDay !== undefined) {
     minMinutesPerWeek = goal.minMinutesPerDay * days;
-  }
-  if (maxMinutesPerWeek === undefined && goal.maxMinutesPerDay !== undefined) {
-    maxMinutesPerWeek = goal.maxMinutesPerDay * days;
   }
 
   const isEqualShare =

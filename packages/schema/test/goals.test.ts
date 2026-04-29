@@ -71,6 +71,17 @@ describe("WeeklyGoal energy classification fields", () => {
     });
     expect(normaliseGoalTime(goal).isEqualShare).toBe(false);
   });
+
+  it("does not derive maxMinutesPerWeek from maxMinutesPerDay alone", () => {
+    const goal = weeklyGoalSchema.parse({
+      id: "g1",
+      title: "Capped per day only",
+      maxMinutesPerDay: 480
+    });
+    const norm = normaliseGoalTime(goal);
+    expect(norm.maxMinutesPerWeek).toBeUndefined();
+    expect(norm.maxMinutesPerDay).toBe(480);
+  });
 });
 
 describe("blockOverrideSchema", () => {
