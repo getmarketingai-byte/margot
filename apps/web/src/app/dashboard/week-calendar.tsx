@@ -374,23 +374,39 @@ export function WeekCalendar({
     );
   }
 
+  const invertedGoalIdsSorted = [
+    ...new Set(
+      system
+        .filter((b) => b.system === "inverted-timemap" && b.invertedGoalId)
+        .map((b) => b.invertedGoalId!)
+    )
+  ].sort();
+  const invertedBarOffsetByGoalId = new Map(invertedGoalIdsSorted.map((id, i) => [id, i]));
+
   const systemPositions: Array<
     PositionedBlock & {
       kind: SystemBlock["system"];
       override?: SystemBlock["override"];
       sourceStartMs: number;
       sourceEndMs: number;
+      invertedGoalId?: string;
+      invertedBarOffsetIndex?: number;
     }
   > = [];
   for (const b of system) {
     const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+    const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
+    const invertedBarOffsetIndex =
+      invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
     for (const s of slices) {
       systemPositions.push({
         ...s,
         kind: b.system,
         override: b.override,
         sourceStartMs: b.startMs,
-        sourceEndMs: b.endMs
+        sourceEndMs: b.endMs,
+        invertedGoalId,
+        invertedBarOffsetIndex
       });
     }
   }
@@ -432,13 +448,28 @@ export function WeekCalendar({
   const hasTravel = systemPositions.some((p) => p.kind === "travel");
   const hasRoutine = systemPositions.some((p) => p.kind === "routine");
   const hasWeather = systemPositions.some((p) => p.kind === "weather");
+  const invertedLegend: { goalId: string; title: string }[] = [];
+  const invertedLegendSeen = new Set<string>();
+  for (const s of system) {
+    if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
+    if (invertedLegendSeen.has(s.invertedGoalId)) continue;
+    invertedLegendSeen.add(s.invertedGoalId);
+    invertedLegend.push({ goalId: s.invertedGoalId, title: s.title });
+  }
+  invertedLegend.sort((a, b) => a.goalId.localeCompare(b.goalId));
   const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system);
 
   return (
     <div className="card p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
         <div className="font-semibold">{title}</div>
-        <Legend hasSleep={hasSleep} hasTravel={hasTravel} hasRoutine={hasRoutine} hasWeather={hasWeather} />
+        <Legend
+          hasSleep={hasSleep}
+          hasTravel={hasTravel}
+          hasRoutine={hasRoutine}
+          hasWeather={hasWeather}
+          invertedLegend={invertedLegend}
+        />
       </div>
       <div className="overflow-x-auto">
         <div className={`grid ${minWidthClass} gap-1`} style={{ gridTemplateColumns }}>
@@ -526,12 +557,14 @@ function Legend({
   hasSleep,
   hasTravel,
   hasRoutine,
-  hasWeather
+  hasWeather,
+  invertedLegend
 }: {
   hasSleep: boolean;
   hasTravel: boolean;
   hasRoutine: boolean;
   hasWeather: boolean;
+  invertedLegend: readonly { goalId: string; title: string }[];
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-400">
@@ -566,6 +599,16 @@ function Legend({
           Outside
         </span>
       )}
+      {invertedLegend.map((row) => (
+        <span key={row.goalId} className="inline-flex max-w-[10rem] items-center gap-1" title={row.title}>
+          <span
+            aria-hidden
+            className="block h-3 w-1.5 shrink-0 rounded-sm border border-ink-300/50 dark:border-ink-500/50"
+            style={{ backgroundColor: goalColorFromKey(row.goalId) }}
+          />
+          <span className="truncate">{row.title}</span>
+        </span>
+      ))}
       <span className="inline-flex items-center gap-1">
         <span aria-hidden className="block h-3 w-3 rounded-sm bg-accent" />
         Proposed
@@ -664,6 +707,8 @@ function SystemBlockSlice({
     override?: SystemBlock["override"];
     sourceStartMs: number;
     sourceEndMs: number;
+    invertedGoalId?: string;
+    invertedBarOffsetIndex?: number;
   };
   pxPerHour: number;
 }) {
@@ -679,6 +724,31 @@ function SystemBlockSlice({
           width: 5,
           backgroundImage:
             "repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 2px, rgba(255,255,255,0.05) 2px 4px)"
+        }}
+      />
+    );
+  }
+  if (block.kind === "inverted-timemap") {
+    const colorKey = block.invertedGoalId ?? block.title;
+    const barColor = goalColorFromKey(colorKey);
+    const offset = (block.invertedBarOffsetIndex ?? 0) * 7;
+    /** Past the weather “outside” pill (`left-1.5` + 5px width + 2px gap). */
+    const leftPx = 6 + 5 + 2 + offset * 7;
+    return (
+      <div
+        title={block.title}
+        aria-label={`Calendar availability: ${block.title}`}
+        className="pointer-events-none absolute z-[29] rounded-full border shadow-[0_0_0_1px_rgba(255,255,255,0.35)] dark:shadow-[0_0_0_1px_rgba(15,23,42,0.55)]"
+        style={{
+          top: block.topPx,
+          height: block.heightPx,
+          width: 5,
+          left: leftPx,
+          borderColor: barColor,
+          backgroundColor: barColor,
+          opacity: 0.88,
+          backgroundImage:
+            "repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 2px, rgba(255,255,255,0.06) 2px 4px)"
         }}
       />
     );

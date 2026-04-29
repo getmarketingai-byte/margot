@@ -11,6 +11,7 @@ import { gymGoalTravelBlocksFromProposed } from "@/lib/week-blocks";
 import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
+import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
@@ -167,6 +168,28 @@ export default async function PlanPage() {
       source: "internal" as const,
       system: "weather" as const
     }));
+  const invertedTimemapPreviewBlocks = invertedCalendarTimemapEvents({
+    userId,
+    plan,
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+    calendarSources: settings.calendars.sources,
+    windowStartMs: weekStartMs,
+    windowEndMs: nextWeekEndMs,
+    stableUid: buildStableUid
+  }).map((e) => {
+    const goalTag = e.tags.find((t) => t.startsWith("goal:"));
+    const invertedGoalId = goalTag ? goalTag.slice("goal:".length) : "";
+    return {
+      sourceId: `inverted-preview-${e.uid}`,
+      title: e.title,
+      startMs: e.startMs,
+      endMs: e.endMs,
+      busy: true,
+      source: "internal" as const,
+      system: "inverted-timemap" as const,
+      ...(invertedGoalId ? { invertedGoalId } : {})
+    };
+  });
   const proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
     mergeOrphanGoalOverrideBlocks(
       [...allocation.blocks, ...allocationNextWeek.blocks],
@@ -189,6 +212,7 @@ export default async function PlanPage() {
     ...systemBlocks,
     ...nextWeekSystemBlocks,
     ...weatherPreviewBlocks,
+    ...invertedTimemapPreviewBlocks,
     ...gymGoalTravelOverlay
   ];
 

@@ -44,7 +44,12 @@ const MINUTE_MS = 60 * 1000;
 
 export interface SystemBlock extends BusyEvent {
   /** Distinguishes which subsystem produced the block (for UI styling). */
-  system: "sleep" | "travel" | "routine" | "weather";
+  system: "sleep" | "travel" | "routine" | "weather" | "inverted-timemap";
+  /**
+   * When `system` is `inverted-timemap`, the planner goal id backing this
+   * invert-free-busy calendar (used for colour + per-source toggles).
+   */
+  invertedGoalId?: string;
   /**
    * Optional UI hint:
    *   - "split" / "underMinimum"  — sleep

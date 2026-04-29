@@ -77,6 +77,8 @@ function systemBlockKind(block: SystemBlock): GeneratedEvent["kind"] {
       return "routine";
     case "weather":
       return "timemap";
+    case "inverted-timemap":
+      return "timemap";
   }
 }
 
