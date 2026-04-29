@@ -25,6 +25,7 @@ export type ChipKind =
   | "max-day"
   | "frequency"
   | "day"
+  | "share"
   | "energy"
   | "polarity"
   | "attention"
@@ -48,7 +49,8 @@ const SUMMARY_ROW_CHIP_KEYS = new Set<ChipKind>([
   "min-day",
   "max-day",
   "frequency",
-  "day"
+  "day",
+  "share"
 ]);
 
 const ENERGY_LABELS: Record<EnergyMode, string> = {
@@ -140,6 +142,12 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   if (goal.maxMinutesPerDay !== undefined) {
     chips.push({ key: "max-day", label: `≤ ${formatMinutes(goal.maxMinutesPerDay)}/day` });
   }
+  if (goal.allocationSharePercent !== undefined) {
+    chips.push({
+      key: "share",
+      label: `${goal.allocationSharePercent}% of remainder`
+    });
+  }
   if (goal.frequencyPerWeek !== undefined) {
     chips.push({ key: "frequency", label: `${goal.frequencyPerWeek}×/wk` });
   }
@@ -229,10 +237,13 @@ export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
  * - `freeMinutes`: total free time across the week (server-computed).
  * - `allocationMode` (default `"even"`):
  *   - `"even"`: goals with a `min` reserve their floor first; remaining minutes
- *     split equally across goals that aren't already capped.
+ *     split fairly across goals that aren't already capped (weekly targets).
+ *     The server allocator also spaces blocks within tight free windows.
  *   - `"finish-early"`: goals are filled in user/priority order up to their
  *     cap. Unbounded goals stay at their floor; leftover free time is shown as
  *     "free time at end".
+ *   - `allocationSharePercent` on a goal weights that goal's slice of the
+ *     post-floor remainder in `"even"` mode only (see allocator).
  */
 export function summariseAllocation(
   goals: readonly WeeklyGoal[],
@@ -247,8 +258,11 @@ export function summariseAllocation(
   perEqualShareMinutes: number;
   allocationMode: "even" | "finish-early";
   finishEarlyLeftoverMinutes: number;
+  /** True when some scheduling goal sets `allocationSharePercent`. */
+  hasWeightedShare: boolean;
 } {
   const schedulingGoals = filterSchedulingGoals(goals);
+  const hasWeightedShare = schedulingGoals.some((g) => g.allocationSharePercent !== undefined);
   let reserved = 0;
   let equalShareCount = 0;
   let plannedFromCaps = 0;
@@ -276,7 +290,8 @@ export function summariseAllocation(
     equalShareGoals: equalShareCount,
     perEqualShareMinutes: perEqual,
     allocationMode,
-    finishEarlyLeftoverMinutes: finishEarlyLeftover
+    finishEarlyLeftoverMinutes: finishEarlyLeftover,
+    hasWeightedShare
   };
 }
 

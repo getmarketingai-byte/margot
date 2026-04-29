@@ -55,4 +55,17 @@ describe("UserSettings schema", () => {
       })
     ).toThrow();
   });
+
+  it("migrateSettings seeds schedulerFrameworkInclusion from legacy wheel/ppf/hpp flags", () => {
+    const migrated = migrateSettings({
+      wheel: { enabled: true, areas: [] },
+      ppf: { enabled: true, targets: [] },
+      hpp: { enabled: false, hp6MinTouchesPerMonth: {} }
+    } as Parameters<typeof migrateSettings>[0]);
+    expect(migrated.schedulerFrameworkInclusion.wheel).toBe(true);
+    expect(migrated.schedulerFrameworkInclusion.ppfPillar).toBe(true);
+    expect(migrated.schedulerFrameworkInclusion.hp6).toBe(false);
+    expect(migrated.wheel.enabled).toBe(true);
+    expect(migrated.ppf.enabled).toBe(true);
+  });
 });

@@ -94,3 +94,11 @@ export function localMondayIso(timezone: string, reference = new Date()): string
     .toString()
     .padStart(2, "0")}-${parts.day.toString().padStart(2, "0")}`;
 }
+
+/** ISO calendar date (YYYY-MM-DD) for the instant `ms` in `timezone`. */
+export function isoCalendarDay(ms: number, timezone: string): string {
+  const parts = partsInTimezone(ms, timezone);
+  return `${parts.year.toString().padStart(4, "0")}-${parts.month
+    .toString()
+    .padStart(2, "0")}-${parts.day.toString().padStart(2, "0")}`;
+}

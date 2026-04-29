@@ -156,7 +156,8 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
         settings,
         weekStartMs,
         weekEndMs,
-        catchUpFloors: weeklyReview.catchUpAdjustments
+        catchUpFloors: weeklyReview.catchUpAdjustments,
+        weekAnchorDate: localMondayIso(tz)
       });
       const todaysBlocks: AllocatedBlockSnapshot[] = allocation.blocks
         .filter(

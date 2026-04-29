@@ -218,12 +218,13 @@ export async function updateWeeklyIntent(input: WeeklyIntent): Promise<void> {
 }
 
 /**
- * Persist a drag override for a sleep or routine block. Overrides live on
- * the WeeklyPlan rather than UserSettings so a fresh week starts clean.
+ * Persist a drag override for a sleep, routine, or weekly goal block. Overrides
+ * live on the WeeklyPlan rather than UserSettings so a fresh week starts clean.
  *
  * The `key` uniquely identifies the original computed block (`"0".."6"` for
- * sleep nights, `"morning-${i}"` / `"shutdown-${i}"` for routines). Setting
- * an override with the same key replaces the previous one.
+ * sleep nights, `"morning-${i}"` / `"shutdown-${i}"` for routines, planner-built
+ * strings for goal slots (`buildGoalDragKey` in the planner package).
+ * Setting an override with the same kind + key replaces the previous one.
  */
 export async function setBlockOverride(
   override: Omit<BlockOverride, "setAt">
@@ -258,6 +259,47 @@ export async function clearBlockOverride(
   const plan = await loadOrCreatePlan(userId, settings.timezone);
   const before = plan.overrides.length;
   plan.overrides = plan.overrides.filter((o) => !(o.kind === kind && o.key === key));
+  if (plan.overrides.length === before) return;
+  await savePlan(userId, plan);
+  revalidatePlanRoutes();
+}
+
+/**
+ * Batch upsert goal calendar drag overrides when one visual bar maps to multiple
+ * allocator slices (merged adjacent blocks). Single save + revalidation.
+ */
+export async function setGoalBlockOverridesBatch(
+  updates: Array<Omit<BlockOverride, "setAt">>
+): Promise<void> {
+  if (updates.length === 0) return;
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  const setAt = Date.now();
+  let next = [...plan.overrides];
+  for (const u of updates) {
+    const parsed = blockOverrideSchema.parse({ ...u, setAt });
+    next = next.filter((o) => !(o.kind === parsed.kind && o.key === parsed.key));
+    next.push(parsed);
+  }
+  plan.overrides = next;
+  await savePlan(userId, plan);
+  revalidatePlanRoutes();
+}
+
+/** Remove all goal drag overrides matching `keys` in one write (merged-bar reset). */
+export async function clearGoalDragOverrides(keys: readonly string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  const keySet = new Set(keys);
+  const before = plan.overrides.length;
+  plan.overrides = plan.overrides.filter((o) => !(o.kind === "goal" && keySet.has(o.key)));
   if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
   revalidatePlanRoutes();

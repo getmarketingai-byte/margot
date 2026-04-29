@@ -9,7 +9,8 @@
  *
  *   2. **Search window.** When the target collides with a busy event we widen
  *      to `[windowStartMs, windowEndMs]` (typically 20:00 the night before
- *      through 12:00 the wake day) and look for the first gap big enough.
+ *      through 12:00 the wake day) and pick the **latest** free gap that fits
+ *      `durationHours` (differs from Sleep.gs, which anchored at gap start).
  *
  *   3. **Split fallback.** If no single gap fits the desired duration we
  *      pick the two largest gaps that each meet `minBlockHours` and split
@@ -26,10 +27,84 @@ import type { SleepSettings } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps } from "./intervals";
 
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/** Mirrors `_sleepIsTravelConflict` in Sleep.gs — not shown as the primary conflict reason. */
+function isTravelLikeConflictTitle(title: string): boolean {
+  const t = (title || "").trim();
+  return t.startsWith("[Drive]") || t.includes("->");
+}
+
+/**
+ * Busy events overlapping the ideal target window, for titling when sleep is
+ * placed elsewhere (port of conflictTitles / lastMainConflict in Sleep.gs).
+ */
+function targetOverlapMeta(
+  busy: readonly BusyEvent[],
+  targetStartMs: number,
+  targetEndMs: number
+): { hadOverlap: boolean; lastMainTitle: string | null } {
+  let hadOverlap = false;
+  let best: { endMs: number; title: string } | null = null;
+  for (const ev of busy) {
+    if (!ev.busy) continue;
+    if (!(ev.startMs < targetEndMs && ev.endMs > targetStartMs)) continue;
+    hadOverlap = true;
+    const raw = (ev.title || "").trim();
+    const t = raw.length > 0 ? raw : "(no title)";
+    if (isTravelLikeConflictTitle(t)) continue;
+    if (!best || ev.endMs > best.endMs) best = { endMs: ev.endMs, title: t };
+  }
+  return { hadOverlap, lastMainTitle: best?.title ?? null };
+}
+
+export type SleepPlacement =
+  | "override"
+  | "target"
+  | "gap"
+  | "split"
+  | "largest-gap";
+
 export interface PlacedSleep extends Interval {
   /** true when this is the secondary half of a split sleep window. */
   split: boolean;
   underMinimum: boolean;
+  /** How this interval was chosen (for UI / parity with legacy calendar titles). */
+  placement: SleepPlacement;
+  /** True when some busy interval overlapped the ideal target window. */
+  targetHadOverlap: boolean;
+  /** Last non-travel overlapping busy title by end time, if any. */
+  targetOverlapTitle: string | null;
+}
+
+function truncateTitle(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, Math.max(0, maxLen - 3))}...`;
+}
+
+/**
+ * Human-readable sleep title, including reasons when sleep moved or shrank
+ * (parity with Sleep.gs extended titles).
+ */
+export function formatSleepBlockTitle(p: PlacedSleep, idealDurationHours: number): string {
+  const base = p.split ? "Sleep (split)" : "Sleep";
+  if (p.placement === "override") return base;
+
+  const hrs = (p.endMs - p.startMs) / MS_PER_HOUR;
+  const roundedHrs = Math.round(hrs * 10) / 10;
+  const parts: string[] = [];
+  if (p.underMinimum || roundedHrs + 1e-6 < idealDurationHours) {
+    parts.push(`less than ideal sleep ${roundedHrs}h`);
+  }
+  if (p.placement !== "target") {
+    if (p.targetOverlapTitle) {
+      parts.push(`conflicts: ${truncateTitle(p.targetOverlapTitle, 72)}`);
+    } else if (p.targetHadOverlap) {
+      parts.push("moved; conflict had no title");
+    }
+  }
+  if (parts.length === 0) return base;
+  return `${base} (${parts.join(", ")})`;
 }
 
 export interface PlaceSleepOptions {
@@ -48,8 +123,6 @@ export interface PlaceSleepOptions {
    */
   override?: { startMs: number; endMs: number };
 }
-
-const MS_PER_HOUR = 60 * 60 * 1000;
 
 /**
  * Build sleep blocks for a single night's window.
@@ -79,7 +152,10 @@ export function placeSleepBlock(
           startMs,
           endMs,
           split: false,
-          underMinimum: endMs - startMs < desiredMs
+          underMinimum: endMs - startMs < desiredMs,
+          placement: "override" as const,
+          targetHadOverlap: false,
+          targetOverlapTitle: null
         }
       ];
     }
@@ -95,6 +171,11 @@ export function placeSleepBlock(
   const requestedEnd = options.targetEndMs ?? windowEndMs;
   const targetEnd = Math.min(Math.max(requestedEnd, windowStartMs), windowEndMs);
   const targetStart = Math.max(windowStartMs, targetEnd - desiredMs);
+  const { hadOverlap: targetHadOverlap, lastMainTitle: targetOverlapTitle } = targetOverlapMeta(
+    busy,
+    targetStart,
+    targetEnd
+  );
 
   if (targetEnd - targetStart >= minMs && !overlapsAny(targetStart, targetEnd, merged)) {
     return [
@@ -102,7 +183,10 @@ export function placeSleepBlock(
         startMs: targetStart,
         endMs: targetEnd,
         split: false,
-        underMinimum: targetEnd - targetStart < desiredMs
+        underMinimum: targetEnd - targetStart < desiredMs,
+        placement: "target",
+        targetHadOverlap,
+        targetOverlapTitle
       }
     ];
   }
@@ -116,7 +200,17 @@ export function placeSleepBlock(
     const gap = gaps[i]!;
     if (gap.endMs - gap.startMs >= desiredMs) {
       const start = Math.max(gap.startMs, gap.endMs - desiredMs);
-      return [{ startMs: start, endMs: gap.endMs, split: false, underMinimum: false }];
+      return [
+        {
+          startMs: start,
+          endMs: gap.endMs,
+          split: false,
+          underMinimum: false,
+          placement: "gap",
+          targetHadOverlap,
+          targetOverlapTitle
+        }
+      ];
     }
   }
 
@@ -130,7 +224,10 @@ export function placeSleepBlock(
       startMs: p.startMs,
       endMs: Math.min(p.endMs, p.startMs + desiredMs),
       split: true,
-      underMinimum: total < desiredMs
+      underMinimum: total < desiredMs,
+      placement: "split" as const,
+      targetHadOverlap,
+      targetOverlapTitle
     }));
   }
 
@@ -144,7 +241,10 @@ export function placeSleepBlock(
       startMs: largest.startMs,
       endMs: largest.endMs,
       split: false,
-      underMinimum: true
+      underMinimum: true,
+      placement: "largest-gap",
+      targetHadOverlap,
+      targetOverlapTitle
     }
   ];
 }

@@ -236,6 +236,7 @@ export function PlanClient({
               total={goals.length}
               wheelAreas={wheelAreas}
               wheelLabel={wheelLabel}
+              allocationMode={allocationMode}
               scheduledMinutes={scheduledByGoal[goal.id]}
               effectiveTarget={effectiveTargetByGoal[goal.id]}
               pace={paceByGoal?.[goal.id]}
@@ -294,11 +295,19 @@ function BudgetChip({
       <Stat label="Free time" value={formatMinutes(summary.freeMinutes)} />
       <Stat label="Goals" value={String(summary.goalCount)} />
       <Stat
-        label={summary.equalShareGoals > 0 ? "Each unconstrained goal" : "All goals fixed"}
+        label={
+          summary.allocationMode === "even" && summary.hasWeightedShare
+            ? "Even-mode split"
+            : summary.equalShareGoals > 0
+              ? "Each unconstrained goal"
+              : "All goals fixed"
+        }
         value={
-          summary.equalShareGoals > 0
-            ? `~${formatMinutes(summary.perEqualShareMinutes)}/wk`
-            : `${formatMinutes(summary.reservedMinutes)} reserved`
+          summary.allocationMode === "even" && summary.hasWeightedShare
+            ? "Weighted (% share)"
+            : summary.equalShareGoals > 0
+              ? `~${formatMinutes(summary.perEqualShareMinutes)}/wk`
+              : `${formatMinutes(summary.reservedMinutes)} reserved`
         }
       />
     </div>
@@ -394,6 +403,7 @@ function GoalRow({
   total,
   wheelAreas,
   wheelLabel,
+  allocationMode,
   scheduledMinutes,
   effectiveTarget,
   pace,
@@ -410,6 +420,7 @@ function GoalRow({
   total: number;
   wheelAreas: WheelOption[];
   wheelLabel: (id: string) => string;
+  allocationMode: "even" | "finish-early";
   scheduledMinutes?: number;
   effectiveTarget?: number;
   pace?: GoalPaceInfo;
@@ -586,6 +597,7 @@ function GoalRow({
               draft={draft}
               onChange={commitDraft}
               wheelAreas={wheelAreas}
+              allocationMode={allocationMode}
             />
           </div>
         </div>
@@ -641,6 +653,7 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.latestHour !== undefined) draft.latestHour = goal.latestHour;
   if (goal.anchor !== undefined) draft.anchor = goal.anchor;
   if (goal.specialGoalType !== undefined) draft.specialGoalType = goal.specialGoalType;
+  if (goal.allocationSharePercent !== undefined) draft.allocationSharePercent = goal.allocationSharePercent;
   return draft;
 }
 
@@ -658,6 +671,7 @@ type ConstraintId =
   | "min-day"
   | "max-week"
   | "max-day"
+  | "share-remainder"
   | "frequency"
   | "days"
   | "energy"
@@ -680,11 +694,13 @@ function isDaySet(d: GoalDraft): boolean {
 function OptionsEditor({
   draft,
   onChange,
-  wheelAreas
+  wheelAreas,
+  allocationMode
 }: {
   draft: GoalDraft;
   onChange: (draft: GoalDraft) => void;
   wheelAreas: WheelOption[];
+  allocationMode: "even" | "finish-early";
 }) {
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
 
@@ -719,6 +735,13 @@ function OptionsEditor({
       isSet: (d) => d.maxMinutesPerDay !== undefined,
       initialise: () => ({ maxMinutesPerDay: 120 }),
       clear: () => ({ maxMinutesPerDay: undefined })
+    },
+    {
+      id: "share-remainder",
+      label: "Share of remainder",
+      isSet: (d) => d.allocationSharePercent !== undefined,
+      initialise: () => ({ allocationSharePercent: 40 }),
+      clear: () => ({ allocationSharePercent: undefined })
     },
     {
       id: "frequency",
@@ -791,6 +814,7 @@ function OptionsEditor({
                 draft={draft}
                 update={update}
                 wheelAreas={wheelAreas}
+                allocationMode={allocationMode}
               />
             </ConstraintRow>
           ))}
@@ -850,12 +874,14 @@ function ConstraintBody({
   id,
   draft,
   update,
-  wheelAreas
+  wheelAreas,
+  allocationMode
 }: {
   id: ConstraintId;
   draft: GoalDraft;
   update: (changes: Partial<GoalDraft>) => void;
   wheelAreas: WheelOption[];
+  allocationMode: "even" | "finish-early";
 }) {
   switch (id) {
     case "min-week":
@@ -866,6 +892,33 @@ function ConstraintBody({
       return <DurationField value={draft.maxMinutesPerWeek} onChange={(v) => update({ maxMinutesPerWeek: v === undefined ? undefined : Math.max(1, v) })} hint="Weekly ceiling." />;
     case "max-day":
       return <DurationField value={draft.maxMinutesPerDay} onChange={(v) => update({ maxMinutesPerDay: v === undefined ? undefined : Math.max(1, v) })} hint="Daily cap so this doesn't dominate a day." />;
+    case "share-remainder":
+      return (
+        <label className="flex flex-col gap-1 text-xs">
+          <span>Percent (1–100)</span>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={draft.allocationSharePercent ?? ""}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                update({ allocationSharePercent: undefined });
+                return;
+              }
+              const n = Number(e.target.value);
+              if (!Number.isFinite(n)) return;
+              update({ allocationSharePercent: Math.min(100, Math.max(1, Math.round(n))) });
+            }}
+            placeholder="40"
+            className="field"
+          />
+          <span className="text-ink-400">
+            Share of time left after weekly mins are reserved (Even allocation only).
+            {allocationMode === "finish-early" ? " Finish-early mode ignores this field." : ""}
+          </span>
+        </label>
+      );
     case "frequency":
       return (
         <input

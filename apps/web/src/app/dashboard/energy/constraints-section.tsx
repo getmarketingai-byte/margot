@@ -1,7 +1,11 @@
 import { revalidatePath } from "next/cache";
 import { authOrPreview } from "@/lib/auth";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
-import type { Hp6HabitKey, PpfPillarKey } from "@calendar-automations/schema";
+import {
+  coerceSettingsAfterLegacyWheelPpfHppEdit,
+  type Hp6HabitKey,
+  type PpfPillarKey
+} from "@calendar-automations/schema";
 
 const PILLARS: PpfPillarKey[] = ["personal", "professional", "financial"];
 const HP6: { key: Hp6HabitKey; label: string }[] = [
@@ -33,10 +37,13 @@ async function updateWheel(formData: FormData): Promise<void> {
       minMinutesPerWeek: Math.max(0, Math.floor(minMinutes || 0))
     };
   });
-  await saveSettings(userId, {
-    ...settings,
-    wheel: { ...settings.wheel, enabled: true, areas }
-  });
+  await saveSettings(
+    userId,
+    coerceSettingsAfterLegacyWheelPpfHppEdit({
+      ...settings,
+      wheel: { ...settings.wheel, enabled: true, areas }
+    })
+  );
   revalidatePlanningSurfaces();
 }
 
@@ -51,10 +58,13 @@ async function updatePpf(formData: FormData): Promise<void> {
     minPercent: Math.max(0, Math.min(100, Number(formData.get(`pct_${p}`) ?? 0))),
     minTouchesPerWeek: Math.max(0, Number(formData.get(`touches_${p}`) ?? 0))
   }));
-  await saveSettings(userId, {
-    ...settings,
-    ppf: { enabled: true, targets }
-  });
+  await saveSettings(
+    userId,
+    coerceSettingsAfterLegacyWheelPpfHppEdit({
+      ...settings,
+      ppf: { enabled: true, targets }
+    })
+  );
   revalidatePlanningSurfaces();
 }
 
@@ -67,14 +77,17 @@ async function updateHpp(formData: FormData): Promise<void> {
   const hp6MinTouchesPerMonth = Object.fromEntries(
     HP6.map((h) => [h.key, Math.max(0, Number(formData.get(`hp6_${h.key}`) ?? 0))])
   ) as Record<Hp6HabitKey, number>;
-  await saveSettings(userId, {
-    ...settings,
-    hpp: {
-      ...settings.hpp,
-      enabled: true,
-      hp6MinTouchesPerMonth
-    }
-  });
+  await saveSettings(
+    userId,
+    coerceSettingsAfterLegacyWheelPpfHppEdit({
+      ...settings,
+      hpp: {
+        ...settings.hpp,
+        enabled: true,
+        hp6MinTouchesPerMonth
+      }
+    })
+  );
   revalidatePlanningSurfaces();
 }
 
@@ -146,8 +159,8 @@ export async function ConstraintsSection() {
       <details className="card" open>
         <summary className="cursor-pointer text-sm font-semibold">Spare time distribution</summary>
         <p className="mt-1 text-xs text-ink-400">
-          How should spare unallocated time be split across your goals once their minimums are
-          covered?
+          After your weekly minimums are covered, how should spare time affect targets and how the
+          week is packed on the calendar?
         </p>
         <form action={updateAllocationMode} className="mt-3 flex flex-col gap-2 text-sm">
           <label className="flex items-start gap-2">
@@ -159,8 +172,9 @@ export async function ConstraintsSection() {
               className="mt-1"
             />
             <span>
-              <strong>Evenly distributed</strong> — share leftover free time across goals so each
-              one grows by roughly the same amount.
+              <strong>Evenly distributed</strong> — fair weekly targets above your floors, and
+              leftover slack inside each free window is opened up as equal spacing between goal
+              blocks (not one tail of empty time).
             </span>
           </label>
           <label className="flex items-start gap-2">

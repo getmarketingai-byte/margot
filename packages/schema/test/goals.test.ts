@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { weeklyGoalSchema } from "../src/goals";
+import { blockOverrideSchema, normaliseGoalTime, weeklyGoalSchema } from "../src/goals";
 
 describe("WeeklyGoal energy classification fields", () => {
   it("defaults the new energy/attention/workLayer fields when omitted", () => {
@@ -52,5 +52,37 @@ describe("WeeklyGoal energy classification fields", () => {
     expect(parsed.energyPolarity).toBe("neutral");
     expect(parsed.attentionMode).toBe("unspecified");
     expect(parsed.workLayer).toBe("unspecified");
+  });
+
+  it("round-trips allocationSharePercent", () => {
+    const parsed = weeklyGoalSchema.parse({
+      id: "g1",
+      title: "Weighted",
+      allocationSharePercent: 40
+    });
+    expect(parsed.allocationSharePercent).toBe(40);
+  });
+
+  it("sets isEqualShare false when only allocationSharePercent is set", () => {
+    const goal = weeklyGoalSchema.parse({
+      id: "g1",
+      title: "Share only",
+      allocationSharePercent: 25
+    });
+    expect(normaliseGoalTime(goal).isEqualShare).toBe(false);
+  });
+});
+
+describe("blockOverrideSchema", () => {
+  it("accepts kind goal with planner-style key", () => {
+    const parsed = blockOverrideSchema.parse({
+      kind: "goal",
+      key: "goal:2026-04-28:0:uuid-here",
+      startMs: 1_000,
+      endMs: 2_000,
+      setAt: 99
+    });
+    expect(parsed.kind).toBe("goal");
+    expect(parsed.source).toBe("drag");
   });
 });

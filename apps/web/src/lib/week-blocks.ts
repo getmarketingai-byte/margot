@@ -22,13 +22,18 @@
  *     into one block. Pure visualisation fix; busy-stream is the same.
  */
 
-import { placeSleepBlock } from "@calendar-automations/planner";
-import type { BusyEvent } from "@calendar-automations/planner";
+import {
+  formatSleepBlockTitle,
+  gymTravelPadMinutesForGoal,
+  placeSleepBlock
+} from "@calendar-automations/planner";
+import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
 import type {
   GymSettings,
   SleepSettings,
   TimemapSettings,
-  TravelSettings
+  TravelSettings,
+  WeeklyGoal
 } from "@calendar-automations/schema";
 import { localMidnightMs, partsInTimezone } from "./week";
 import { legKey, type LegResolver, type ResolveRequest } from "./routing";
@@ -499,7 +504,7 @@ export function computeSleepBlocks(
           : undefined;
       const block: SystemBlock = {
         sourceId: `sleep-${d}-${p.startMs}`,
-        title: p.split ? "Sleep (split)" : "Sleep",
+        title: formatSleepBlockTitle(p, sleep.durationHours),
         startMs: p.startMs,
         endMs: p.endMs,
         busy: true,
@@ -620,6 +625,51 @@ export function computeRoutineBlocks(
         });
       }
     }
+  }
+  return out;
+}
+
+/**
+ * Travel overlays for Perfect Week blocks whose goal is `specialGoalType:
+ * "gym"`. Uses the same drive tag and quantised one-way minutes as the
+ * allocator (`gymTravelPadMinutesForGoal` / `settings.gym.driveMinutes`).
+ */
+export function gymGoalTravelBlocksFromProposed(
+  blocks: readonly AllocatedBlock[],
+  goals: readonly WeeklyGoal[],
+  travel: TravelSettings,
+  gym: GymSettings
+): SystemBlock[] {
+  const tag = travel.driveEventTag || "[Drive]";
+  const goalById = new Map(goals.map((g) => [g.id, g] as const));
+  const out: SystemBlock[] = [];
+  for (const b of blocks) {
+    if (b.segment) continue;
+    const g = goalById.get(b.goalId);
+    if (!g || g.specialGoalType !== "gym") continue;
+    const padMin = gymTravelPadMinutesForGoal(g, gym);
+    if (padMin <= 0) continue;
+    const padMs = padMin * MINUTE_MS;
+    out.push({
+      sourceId: `${b.goalId}-${b.startMs}-gym-pre`,
+      title: `${tag} → ${b.title}`,
+      startMs: b.startMs - padMs,
+      endMs: b.startMs,
+      busy: true,
+      source: "internal",
+      system: "travel",
+      variant: "drive-pre"
+    });
+    out.push({
+      sourceId: `${b.goalId}-${b.startMs}-gym-post`,
+      title: `${tag} ← ${b.title}`,
+      startMs: b.endMs,
+      endMs: b.endMs + padMs,
+      busy: true,
+      source: "internal",
+      system: "travel",
+      variant: "drive-post"
+    });
   }
   return out;
 }

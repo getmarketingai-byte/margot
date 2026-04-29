@@ -12,11 +12,14 @@
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
+  coerceSettingsAfterSchedulerFrameworkInclusionPatch,
   filterSchedulingGoals,
   type PlacementSignalKey,
+  type SchedulerFrameworkInclusion,
   type VisionSettings,
   type WeeklyPlan,
   placementPrioritySettingsSchema,
+  schedulerFrameworkInclusionSchema,
   visionSettingsSchema,
   weeklyIntentSchema
 } from "@calendar-automations/schema";
@@ -101,31 +104,25 @@ async function updatePlacementPriority(
   revalidatePath("/dashboard/plan");
 }
 
-async function updateFrameworkInScheduler(
-  framework: "wheel" | "ppf" | "hpp",
-  enabled: boolean
+async function patchSchedulerFrameworkInclusion(
+  patch: Partial<SchedulerFrameworkInclusion>
 ): Promise<void> {
   "use server";
   const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
-  if (framework === "wheel") {
-    await saveSettings(userId, {
+  const schedulerFrameworkInclusion = schedulerFrameworkInclusionSchema.parse({
+    ...settings.schedulerFrameworkInclusion,
+    ...patch
+  });
+  await saveSettings(
+    userId,
+    coerceSettingsAfterSchedulerFrameworkInclusionPatch({
       ...settings,
-      wheel: { ...settings.wheel, enabled }
-    });
-  } else if (framework === "ppf") {
-    await saveSettings(userId, {
-      ...settings,
-      ppf: { ...settings.ppf, enabled }
-    });
-  } else {
-    await saveSettings(userId, {
-      ...settings,
-      hpp: { ...settings.hpp, enabled }
-    });
-  }
+      schedulerFrameworkInclusion
+    })
+  );
   revalidatePath("/dashboard/energy");
   revalidatePath("/dashboard/plan");
 }
@@ -155,13 +152,11 @@ export default async function PlanningHubPage() {
         initialVision={settings.vision}
         initialPlacementOrder={settings.placementPriority.order}
         wheelAreas={wheelAreas}
-        wheelSchedulerEnabled={settings.wheel.enabled}
-        ppfSchedulerEnabled={settings.ppf.enabled}
-        hppSchedulerEnabled={settings.hpp.enabled}
+        schedulerFrameworkInclusion={settings.schedulerFrameworkInclusion}
         saveVision={updateVision}
         savePlacementOrder={updatePlacementPriority}
         saveWeeklyIntent={updateWeeklyIntent}
-        saveFrameworkScheduler={updateFrameworkInScheduler}
+        patchSchedulerFrameworkInclusion={patchSchedulerFrameworkInclusion}
       />
 
       <ConstraintsSection />

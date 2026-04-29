@@ -14,7 +14,14 @@
  *        - the user's `energyOrdering.mode`
  *        - Wheel-of-Life weekly minute floors per area
  *        - PPF minimum-touches and minimum-percent targets
- *   4. Within a day, sort blocks to preserve the energy curve
+ *   4. In "even" allocation mode, spread slack inside each tight free window as
+ *      equal gaps between goal runs (skipped when a window is mostly unused,
+ *      e.g. inverted-calendar pockets inside a full-day gap snapshot).
+ *   5. Goals with `specialGoalType: "gym"` reserve an extra quantised band of
+ *      `settings.gym.driveMinutes` on each side of the workout block (same
+ *      default one-way drive as calendar gym legs) so nothing else stacks in
+ *      the commute window.
+ *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
  * The allocator returns both placed blocks and a metrics object with
@@ -25,10 +32,12 @@ import type {
   AllocatorSettings,
   ConsistencySegment,
   EnergyOrderingSettings,
+  Hp6HabitKey,
   PlacementPrioritySettings,
   PlacementSignalKey,
+  PpfHorizonKey,
   PpfPillarKey,
-  PpfSettings,
+  SchedulerFrameworkInclusion,
   UserSettings,
   WheelArea,
   WheelSettings
@@ -63,6 +72,11 @@ const DAY_INDEX: Record<DayOfWeek, number> = {
   sunday: 6
 };
 
+/** Stable drag override key for week-scoped goal blocks (calendar DnD). */
+export function buildGoalDragKey(goalId: string, weekAnchorDate: string, slotIndex: number): string {
+  return `goal:${weekAnchorDate}:${slotIndex}:${goalId}`;
+}
+
 export interface AllocatedBlock {
   goalId: string;
   title: string;
@@ -74,6 +88,15 @@ export interface AllocatedBlock {
   hp6Habit?: string;
   /** True when this is a "non-negotiable" consistency segment, not a goal. */
   segment?: boolean;
+  /**
+   * Stable key for calendar drag overrides (`kind: "goal"` on WeeklyPlan.overrides).
+   * Format: `goal:<weekAnchorIso>:<slotIndex>:<goalId>`.
+   */
+  dragKey?: string;
+  /** True when placement used persisted override times for `dragKey`. */
+  pinnedFromOverride?: boolean;
+  /** True when `WeeklyPlan.overrides` still contains this `dragKey` (reset clears). */
+  dragOverrideSaved?: boolean;
 }
 
 export interface WeekMetrics {
@@ -90,6 +113,11 @@ export interface WeekMetrics {
   /** PPF pillar -> percent of total goal-allocated minutes. */
   ppfPercent: Record<PpfPillarKey, number>;
   ppfGaps: Array<{ pillar: PpfPillarKey; reason: "minPercent" | "minTouches" }>;
+  /**
+   * HP6 habits below the derived weekly touch floor (monthly minimum ÷ 4, rounded up).
+   * Empty when HP6 is excluded from the scheduler or all minimums are zero.
+   */
+  hp6Gaps: Array<{ habit: Hp6HabitKey; scheduledTouches: number; minTouches: number }>;
   /** Total available minutes vs scheduled minutes. */
   utilisation: { availableMinutes: number; scheduledMinutes: number };
   /**
@@ -130,6 +158,12 @@ export interface AllocateInput {
    * Missing or zero entries are no-ops, preserving baseline behaviour.
    */
   catchUpFloors?: Record<string, number>;
+  /**
+   * Monday ISO date (`YYYY-MM-DD`) identifying which weekly allocation window this
+   * run represents—must align with `weekStartMs` so goal drag keys do not collide
+   * across adjacent weeks. Defaults to `plan.weekStart`.
+   */
+  weekAnchorDate?: string;
 }
 
 export interface AllocateResult {
@@ -152,6 +186,11 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const tz = plan.timezone || settings.timezone;
   const weekStartMs = input.weekStartMs ?? parseLocalDateMs(plan.weekStart, tz);
   const weekEndMs = input.weekEndMs ?? weekStartMs + 7 * DAY_MS;
+  const weekAnchorDate = input.weekAnchorDate ?? plan.weekStart;
+  const goalOverrides = new Map<string, { startMs: number; endMs: number }>();
+  for (const o of plan.overrides ?? []) {
+    if (o.kind === "goal") goalOverrides.set(o.key, { startMs: o.startMs, endMs: o.endMs });
+  }
 
   const days: { startMs: number; endMs: number; gaps: Interval[] }[] = [];
   for (let d = 0; d < 7; d++) {
@@ -172,9 +211,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   }
 
   const schedulingGoals = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
+  const fw = settings.schedulerFrameworkInclusion;
 
   // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
-  const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel);
+  const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel, fw.wheel);
   const goalsForAllocation = [...schedulingGoals, ...wheelTopUps];
 
   // Three-pass distribution.
@@ -190,6 +230,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     input.catchUpFloors
   );
 
+  /** Free gaps after segments, before goals — used to even out inter-goal slack in "even" mode. */
+  const gapsBeforeGoals = days.map((d) => d.gaps.map((g) => ({ ...g })));
+
   // Pass 3 — placement: schedule each prepared goal, day by day, honouring
   // per-day caps. Order matters when free time is scarce, so we sort:
   //   1. commitment tier (non-negotiable → committed → nice-to-have),
@@ -197,9 +240,11 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   //   3. then by user-provided list order,
   //   4. then by remaining minutes desc as a final tie-breaker.
   prepared.sort((a, b) => {
-    const aTier = commitmentRank(a.goal.commitmentLevel);
-    const bTier = commitmentRank(b.goal.commitmentLevel);
-    if (aTier !== bTier) return aTier - bTier;
+    if (fw.commitment) {
+      const aTier = commitmentRank(a.goal.commitmentLevel);
+      const bTier = commitmentRank(b.goal.commitmentLevel);
+      if (aTier !== bTier) return aTier - bTier;
+    }
     const aHasFloor = (a.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
     const bHasFloor = (b.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
     if (aHasFloor !== bHasFloor) return aHasFloor - bHasFloor;
@@ -215,9 +260,24 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       blocks,
       settings.energyOrdering,
       settings.placementPriority,
+      fw,
       tz,
-      input.goalAvailabilityWindows?.[p.goal.id]
+      settings,
+      input.goalAvailabilityWindows?.[p.goal.id],
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate,
+      goalOverrides
     );
+  }
+
+  for (const b of blocks) {
+    if (!b.dragKey || b.segment) continue;
+    if (goalOverrides.has(b.dragKey)) b.dragOverrideSaved = true;
+  }
+
+  if (settings.allocator.allocationMode === "even") {
+    spreadEvenGoalBuffersInSnapshotGaps(blocks, gapsBeforeGoals);
   }
 
   if (settings.energyOrdering.mode !== "ignore") {
@@ -226,7 +286,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     blocks.sort((a, b) => a.startMs - b.startMs);
   }
 
-  const metrics = computeMetrics(plan, prepared, blocks, days, settings.wheel, settings.ppf);
+  const metrics = computeMetrics(plan, prepared, blocks, days, settings);
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
   return { blocks, metrics };
@@ -240,9 +300,11 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  *     `allocator.allocationMode`:
  *
  *       "even" (default): split the remainder evenly across goals that have
- *       not yet hit their `maxMinutesPerWeek`. Goals with no time fields
- *       ("equal share" goals) start at 0 and receive their slice in this pass,
- *       so all available time gets allocated.
+ *       not yet hit their `maxMinutesPerWeek` (weekly targets). Goals with no
+ *       time fields ("equal share" goals) start at 0 and receive their slice
+ *       in this pass. After placement, slack inside each original free window
+ *       is spread as equal gaps between consecutive goal runs so leftover time
+ *       reads as breathing room between blocks, not one lump at the tail.
  *
  *       "finish-early": top up each goal in user/priority order to its
  *       `maxMinutesPerWeek` cap, then stop. Goals without a cap stay at their
@@ -251,6 +313,58 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  *   - When floors exceed `totalFreeMin`, we either scale floors proportionally
  *     (default) or pay them in user order until time runs out (strict).
  */
+
+/** Weight each goal's Pass 2 share of post-floor remainder (even allocation mode). */
+export function computeAllocationRemainderFractions(goals: readonly WeeklyGoal[]): number[] {
+  const n = goals.length;
+  if (n === 0) return [];
+
+  const fractions = Array<number>(n).fill(0);
+  const pctIndices: number[] = [];
+  const pctRaw: number[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const pct = goals[i]!.allocationSharePercent;
+    if (pct !== undefined) {
+      pctIndices.push(i);
+      pctRaw.push(pct);
+    }
+  }
+
+  if (pctIndices.length > 0) {
+    let sumPct = 0;
+    for (const p of pctRaw) sumPct += p;
+    const scaleDown = sumPct > 100 ? 100 / sumPct : 1;
+    for (let j = 0; j < pctIndices.length; j++) {
+      const idx = pctIndices[j]!;
+      fractions[idx] = (pctRaw[j]! * scaleDown) / 100;
+    }
+  }
+
+  let sumFracPct = 0;
+  for (const idx of pctIndices) sumFracPct += fractions[idx]!;
+
+  const eqIndices: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (goals[i]!.allocationSharePercent === undefined) eqIndices.push(i);
+  }
+
+  const rest = 1 - sumFracPct;
+  if (eqIndices.length > 0) {
+    const share = rest / eqIndices.length;
+    for (const i of eqIndices) fractions[i] = share;
+  } else {
+    const total = fractions.reduce((a, b) => a + b, 0);
+    if (total > 1e-12 && Math.abs(total - 1) > 1e-9) {
+      for (let i = 0; i < n; i++) {
+        fractions[i] = fractions[i]! / total;
+      }
+    }
+  }
+
+  return fractions;
+}
+
 function distributeMinutes(
   goals: readonly WeeklyGoal[],
   totalFreeMin: number,
@@ -353,32 +467,33 @@ function distributeMinutes(
     return { prepared, overcommitted, notScheduled };
   }
 
-  // Pass 2 (even): equal-share the remainder up to each goal's ceiling.
-  // Anyone whose effective minutes is below their cap (or who has no cap) is
-  // eligible to receive more time. Equal-share goals (no time fields at all)
-  // and goals with a floor below max both count.
+  // Pass 2 (even): weighted share of the remainder (allocationSharePercent +
+  // equal split for goals without it), then rounds respect caps / spillover.
+  const remainderFractions = computeAllocationRemainderFractions(goals);
+
   const eligible = () =>
     prepared.filter((p) => {
       const cap = p.norm.maxMinutesPerWeek;
-      // Pinned-target goals (min == max via legacy) shouldn't grow.
       if (cap !== undefined && p.effectiveMinutes >= cap) return false;
-      // Goals that explicitly opted out of equal share by setting only a floor
-      // still grow — having a floor doesn't disqualify you from extra time.
-      // Goals with NO bounds at all are equal-share too.
       return true;
     });
 
-  // We iterate up to `prepared.length` rounds, capping or fully consuming.
   let rounds = prepared.length + 1;
   while (remainder >= QUANTUM && rounds-- > 0) {
     const set = eligible();
     if (set.length === 0) break;
-    const share = quantise(remainder / set.length);
-    if (share <= 0) break;
+    let sumW = 0;
+    for (const p of set) sumW += remainderFractions[p.index]!;
+    const useEqual = sumW <= 1e-12;
     let consumed = 0;
     for (const p of set) {
+      const unit =
+        useEqual ? 1 / set.length : remainderFractions[p.index]! / sumW;
       const cap = p.norm.maxMinutesPerWeek;
-      const headroom = cap === undefined ? share : Math.max(0, cap - p.effectiveMinutes);
+      const share = quantise(remainder * unit);
+      if (share <= 0) continue;
+      const headroom =
+        cap === undefined ? share : Math.max(0, cap - p.effectiveMinutes);
       const give = Math.min(share, headroom, remainder - consumed);
       if (give <= 0) continue;
       p.effectiveMinutes += give;
@@ -393,6 +508,69 @@ function distributeMinutes(
 
 function quantise(min: number): number {
   return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
+}
+
+/**
+ * One-way drive padding (minutes) for gym-type weekly goals, rounded to the
+ * same 15-minute grid as placement. Exported for calendar travel overlays.
+ */
+export function gymTravelPadMinutesForGoal(
+  goal: Pick<WeeklyGoal, "specialGoalType">,
+  gym: Pick<UserSettings["gym"], "driveMinutes">
+): number {
+  if (goal.specialGoalType !== "gym") return 0;
+  return quantise(Math.max(0, gym.driveMinutes));
+}
+
+/**
+ * Within each original free gap (post-segment snapshot), split slack evenly as
+ * padding before the first goal run, between runs of different goals, and
+ * after the last run. Blocks inside a run keep their relative packing.
+ */
+function spreadEvenGoalBuffersInSnapshotGaps(
+  blocks: AllocatedBlock[],
+  snapshot: readonly Interval[][]
+): void {
+  for (const dayGaps of snapshot) {
+    for (const G of dayGaps) {
+      const inside = blocks.filter(
+        (b) =>
+          !b.segment &&
+          b.startMs >= G.startMs &&
+          b.endMs <= G.endMs &&
+          b.startMs < b.endMs
+      );
+      if (inside.length === 0) continue;
+      inside.sort((a, b) => a.startMs - b.startMs);
+      const runs: { goalId: string; items: AllocatedBlock[] }[] = [];
+      for (const b of inside) {
+        const last = runs[runs.length - 1];
+        if (last && last.goalId === b.goalId) last.items.push(b);
+        else runs.push({ goalId: b.goalId, items: [b] });
+      }
+      let totalDur = 0;
+      for (const b of inside) totalDur += b.endMs - b.startMs;
+      const span = G.endMs - G.startMs;
+      const slackMs = span - totalDur;
+      if (slackMs < QUANTUM * MS_PER_MIN) continue;
+      // Skip gaps where goals only occupy a small pocket (e.g. inverted-calendar
+      // windows inside a full-day free snapshot) — spreading across the whole
+      // snapshot would violate those bounds.
+      if (slackMs > span * 0.7) continue;
+      const k = runs.length;
+      const rawPad = slackMs / (k + 1);
+      let cursor = G.startMs + rawPad;
+      for (const run of runs) {
+        for (const b of run.items) {
+          const dur = b.endMs - b.startMs;
+          b.startMs = cursor;
+          b.endMs = cursor + dur;
+          cursor = b.endMs;
+        }
+        cursor += rawPad;
+      }
+    }
+  }
 }
 
 /* ──────────────────────────── helpers ───────────────────────────────────── */
@@ -452,9 +630,10 @@ function consumeFromGaps(gaps: Interval[], startMs: number, endMs: number): void
 
 function wheelTopUpGoals(
   realGoals: readonly WeeklyGoal[],
-  wheel: WheelSettings
+  wheel: WheelSettings,
+  wheelFrameworkInScheduler: boolean
 ): WeeklyGoal[] {
-  if (!wheel.enabled) return [];
+  if (!wheelFrameworkInScheduler) return [];
   const minutesByArea: Record<string, number> = {};
   for (const g of realGoals) {
     if (!g.wheelAreaId) continue;
@@ -488,18 +667,111 @@ function wheelTopUpGoals(
   return topUps;
 }
 
+function dayIndexForMsInWeek(ms: number, weekStartMs: number, tz: string): number {
+  const dk = dateKeyInTz(ms, tz);
+  for (let d = 0; d < 7; d++) {
+    const ds = weekStartMs + d * DAY_MS;
+    if (dateKeyInTz(ds, tz) === dk) return d;
+  }
+  return -1;
+}
+
+/** True when [innerStart, innerEnd) lies contiguously inside the union of free gaps. */
+function intervalFullyInsideGaps(gaps: readonly Interval[], innerStart: number, innerEnd: number): boolean {
+  if (innerEnd <= innerStart) return false;
+  let t = innerStart;
+  const sorted = [...gaps].sort((a, b) => a.startMs - b.startMs);
+  for (const g of sorted) {
+    if (g.endMs <= t) continue;
+    if (g.startMs > t) return false;
+    t = Math.max(t, g.endMs);
+    if (t >= innerEnd) return true;
+  }
+  return t >= innerEnd;
+}
+
+function tryPinGoalBlock(
+  pinned: { startMs: number; endMs: number },
+  dragKey: string,
+  goal: WeeklyGoal,
+  day: { startMs: number; endMs: number; gaps: Interval[] },
+  blocks: AllocatedBlock[],
+  tz: string,
+  gymTravelPadMs: number,
+  availabilityWindows: readonly Interval[] | undefined,
+  weekStartMs: number,
+  weekEndMs: number,
+  dayHeadroom: number,
+  remainingMinutes: number
+): number | null {
+  let startMs = Math.max(pinned.startMs, weekStartMs);
+  let endMs = Math.min(pinned.endMs, weekEndMs);
+  if (endMs <= startMs) return null;
+
+  let durMin = Math.round((endMs - startMs) / MS_PER_MIN);
+  durMin = Math.max(QUANTUM, Math.round(durMin / QUANTUM) * QUANTUM);
+  endMs = startMs + durMin * MS_PER_MIN;
+  if (endMs > weekEndMs) return null;
+
+  if (dateKeyInTz(startMs, tz) !== dateKeyInTz(day.startMs, tz)) return null;
+
+  const earliest = goal.earliestHour ?? 0;
+  const latest = goal.latestHour ?? 24;
+  const startHour = hourInTz(startMs, tz);
+  const endHourLast = hourInTz(endMs - 1, tz);
+  if (startHour < earliest || endHourLast >= latest) return null;
+
+  if (durMin > dayHeadroom || durMin > remainingMinutes) return null;
+
+  const candidateGaps = availabilityWindows
+    ? intersectWithAvailability(day.gaps, availabilityWindows, day.startMs, day.endMs)
+    : day.gaps;
+  if (
+    !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
+    !intervalFullyInsideGaps(day.gaps, startMs - gymTravelPadMs, endMs + gymTravelPadMs)
+  ) {
+    return null;
+  }
+
+  const consumeStart = startMs - gymTravelPadMs;
+  const consumeEnd = endMs + gymTravelPadMs;
+  consumeFromGaps(day.gaps, consumeStart, consumeEnd);
+  blocks.push({
+    goalId: goal.id,
+    title: goal.title,
+    startMs,
+    endMs,
+    energyMode: goal.energyMode,
+    ...(goal.wheelAreaId !== undefined ? { wheelAreaId: goal.wheelAreaId } : {}),
+    ...(goal.ppfPillar !== undefined ? { ppfPillar: goal.ppfPillar } : {}),
+    ...(goal.hp6Habit !== undefined ? { hp6Habit: goal.hp6Habit } : {}),
+    dragKey,
+    pinnedFromOverride: true
+  });
+  return durMin;
+}
+
 function allocateGoal(
   prepared: PreparedGoal,
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   blocks: AllocatedBlock[],
   energy: EnergyOrderingSettings,
   placement: PlacementPrioritySettings,
+  frameworkInclusion: SchedulerFrameworkInclusion,
   tz: string,
-  availabilityWindows?: readonly Interval[]
+  settings: UserSettings,
+  availabilityWindows: readonly Interval[] | undefined,
+  weekStartMs: number,
+  weekEndMs: number,
+  weekAnchorDate: string,
+  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
   if (remainingMinutes <= 0) return;
+
+  const gymTravelPadMin = gymTravelPadMinutesForGoal(goal, settings.gym);
+  const gymTravelPadMs = gymTravelPadMin * MS_PER_MIN;
 
   const allowedDays =
     goal.daysOfWeek && goal.daysOfWeek.length > 0
@@ -523,6 +795,8 @@ function allocateGoal(
   const minPerDay = norm.minMinutesPerDay ?? 0;
   const perDayBudget = Math.max(perDay, minPerDay);
 
+  let slotIndex = 0;
+
   // We may need to walk the days more than once when frequencyPerWeek limits
   // us to N days but our first pass couldn't place the full budget. Two rounds
   // cover typical weekly goals; inverted-calendar windows often squeeze all
@@ -544,6 +818,36 @@ function allocateGoal(
           ? Math.max(0, norm.maxMinutesPerDay - dayMinutesAlready)
           : perDayBudget;
       if (dayHeadroom < QUANTUM) continue;
+
+      const dragKey = buildGoalDragKey(goal.id, weekAnchorDate, slotIndex);
+      const pinned = goalOverrides.get(dragKey);
+      if (pinned !== undefined) {
+        const ovDay = dayIndexForMsInWeek(pinned.startMs, weekStartMs, tz);
+        if (ovDay >= 0 && ovDay !== dayIdx) continue;
+        if (ovDay === dayIdx && ovDay >= 0) {
+          const pinMinutes = tryPinGoalBlock(
+            pinned,
+            dragKey,
+            goal,
+            day,
+            blocks,
+            tz,
+            gymTravelPadMs,
+            availabilityWindows,
+            weekStartMs,
+            weekEndMs,
+            dayHeadroom,
+            remainingMinutes
+          );
+          if (pinMinutes !== null && pinMinutes >= QUANTUM) {
+            remainingMinutes -= pinMinutes;
+            slotIndex++;
+            daysScheduledThisPass++;
+            continue;
+          }
+        }
+      }
+
       const candidateGaps = availabilityWindows
         ? intersectWithAvailability(day.gaps, availabilityWindows, day.startMs, day.endMs)
         : day.gaps;
@@ -559,8 +863,10 @@ function allocateGoal(
         dayHeadroom,
         energy,
         placement,
+        frameworkInclusion,
         tz,
-        placedToday
+        placedToday,
+        gymTravelPadMin
       );
       if (!slot) continue;
       const wantThisDay = Math.min(remainingMinutes, perDayBudget, dayHeadroom);
@@ -574,8 +880,10 @@ function allocateGoal(
         if (bigger < minPerDay) continue;
       }
       const ms = usedMinutes * MS_PER_MIN;
-      const { startMs, endMs } = placeBlockInGap(slot.gap, ms, goal, tz);
-      consumeFromGaps(day.gaps, startMs, endMs);
+      const { startMs, endMs } = placeBlockInGap(slot.gap, ms, goal, tz, gymTravelPadMs);
+      const consumeStart = startMs - gymTravelPadMs;
+      const consumeEnd = endMs + gymTravelPadMs;
+      consumeFromGaps(day.gaps, consumeStart, consumeEnd);
       blocks.push({
         goalId: goal.id,
         title: goal.title,
@@ -584,9 +892,12 @@ function allocateGoal(
         energyMode: goal.energyMode,
         ...(goal.wheelAreaId !== undefined ? { wheelAreaId: goal.wheelAreaId } : {}),
         ...(goal.ppfPillar !== undefined ? { ppfPillar: goal.ppfPillar } : {}),
-        ...(goal.hp6Habit !== undefined ? { hp6Habit: goal.hp6Habit } : {})
+        ...(goal.hp6Habit !== undefined ? { hp6Habit: goal.hp6Habit } : {}),
+        dragKey,
+        pinnedFromOverride: false
       });
       remainingMinutes -= usedMinutes;
+      slotIndex++;
       daysScheduledThisPass++;
     }
     if (daysScheduledThisPass === 0) break;
@@ -620,8 +931,10 @@ function pickGapForGoal(
   perDay: number,
   energy: EnergyOrderingSettings,
   placement: PlacementPrioritySettings,
+  frameworkInclusion: SchedulerFrameworkInclusion,
   tz: string,
-  placedToday: readonly AllocatedBlock[] = []
+  placedToday: readonly AllocatedBlock[] = [],
+  gymTravelPadMin = 0
 ): { gap: Interval; minutes: number } | null {
   const earliest = goal.earliestHour ?? 0;
   const latest = goal.latestHour ?? 24;
@@ -632,16 +945,18 @@ function pickGapForGoal(
     const endHour = hourInTz(g.endMs - 1, tz);
     if (endHour < earliest || startHour >= latest) continue;
     const lengthMin = Math.floor((g.endMs - g.startMs) / MS_PER_MIN);
-    if (lengthMin < 15) continue;
+    const innerMin =
+      gymTravelPadMin > 0 ? lengthMin - 2 * gymTravelPadMin : lengthMin;
+    if (innerMin < QUANTUM) continue;
     const energyScore =
       weights.energyMode * scoreGapForEnergy(g, goal.energyMode, energy, tz);
     const suggestionScore =
       energy.mode === "ignore"
         ? 0
-        : scoreEnergyAwareness(g, goal, tz, placedToday, weights);
+        : scoreEnergyAwareness(g, goal, tz, placedToday, weights, frameworkInclusion);
     candidates.push({
       gap: g,
-      minutes: Math.min(perDay, lengthMin),
+      minutes: Math.min(perDay, innerMin),
       score: energyScore + suggestionScore
     });
   }
@@ -775,13 +1090,75 @@ const WORK_LAYER_TARGET_HOUR: Record<WorkLayer, number | null> = {
   unspecified: null
 };
 
+/** Prefer nearer-term goals earlier in the day; long-horizon later (weak signal). */
+const PPF_HORIZON_TARGET_HOUR: Record<PpfHorizonKey, number | null> = {
+  y1: 10,
+  y3: 13,
+  y5: 16,
+  unspecified: null
+};
+
+const HP6_HABIT_KEYS: readonly Hp6HabitKey[] = [
+  "clarity",
+  "energy",
+  "necessity",
+  "productivity",
+  "influence",
+  "courage"
+];
+
+function hp6TouchesFromWeeklyMinMonthly(minMonthly: number): number {
+  if (minMonthly <= 0) return 0;
+  return Math.max(1, Math.ceil(minMonthly / 4));
+}
+
+function computeHp6Gaps(
+  blocks: readonly AllocatedBlock[],
+  settings: UserSettings,
+  fw: SchedulerFrameworkInclusion
+): WeekMetrics["hp6Gaps"] {
+  if (!fw.hp6) return [];
+  const out: WeekMetrics["hp6Gaps"] = [];
+  /** Count allocator blocks touching each habit (one block = one weekly touch toward the floor). */
+  const counts: Record<Hp6HabitKey, number> = {
+    clarity: 0,
+    energy: 0,
+    necessity: 0,
+    productivity: 0,
+    influence: 0,
+    courage: 0
+  };
+  for (const b of blocks) {
+    if (b.segment) continue;
+    if (b.segment) continue;
+    const habitKey = b.hp6Habit as Hp6HabitKey | undefined;
+    if (!habitKey) continue;
+    counts[habitKey]++;
+  }
+  for (const habit of HP6_HABIT_KEYS) {
+    const monthly = settings.hpp.hp6MinTouchesPerMonth[habit] ?? 0;
+    const needed = hp6TouchesFromWeeklyMinMonthly(monthly);
+    if (needed <= 0) continue;
+    const scheduledTouches = counts[habit] ?? 0;
+    if (scheduledTouches < needed) {
+      out.push({
+        habit,
+        scheduledTouches,
+        minTouches: needed
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Compute the additive suggestion-pass score for placing `goal` at `gap`.
  *
- * Combines three nudges:
- *   1. attentionMode → preferred hour (hyperfocus morning, hyperaware afternoon)
- *   2. workLayer     → preferred hour (needle-mover early, play evening)
- *   3. energyPolarity → adjacency to already-placed drain/energise blocks
+ * Combines nudges guarded by scheduler inclusion flags:
+ *   1. attentionMode → preferred hour
+ *   2. workLayer     → preferred hour
+ *   3. ppfHorizon → weak hour tilt by horizon tier
+ *   4. energyPolarity → adjacency to already-placed drain/energise blocks
  *
  * Returns a score whose magnitude is dwarfed by `scoreGapForEnergy` so legacy
  * placement behaviour is preserved when the new fields are unspecified.
@@ -791,29 +1168,49 @@ function scoreEnergyAwareness(
   goal: WeeklyGoal,
   tz: string,
   placedToday: readonly AllocatedBlock[],
-  weights: SignalWeights
+  weights: SignalWeights,
+  frameworkInclusion: SchedulerFrameworkInclusion
 ): number {
   let score = 0;
   const startHour = hourInTz(gap.startMs, tz);
 
-  const attentionTarget = ATTENTION_TARGET_HOUR[goal.attentionMode ?? "unspecified"];
-  if (attentionTarget !== null) {
-    score -=
-      weights.attentionMode *
-      ENERGY_SUGGESTION_WEIGHTS.attentionPenaltyPerHour *
-      Math.abs(startHour - attentionTarget);
+  if (frameworkInclusion.attention) {
+    const attentionTarget = ATTENTION_TARGET_HOUR[goal.attentionMode ?? "unspecified"];
+    if (attentionTarget !== null) {
+      score -=
+        weights.attentionMode *
+        ENERGY_SUGGESTION_WEIGHTS.attentionPenaltyPerHour *
+        Math.abs(startHour - attentionTarget);
+    }
   }
 
-  const layerTarget = WORK_LAYER_TARGET_HOUR[goal.workLayer ?? "unspecified"];
-  if (layerTarget !== null) {
-    score -=
-      weights.workLayer *
-      ENERGY_SUGGESTION_WEIGHTS.workLayerPenaltyPerHour *
-      Math.abs(startHour - layerTarget);
+  if (frameworkInclusion.workLayer) {
+    const layerTarget = WORK_LAYER_TARGET_HOUR[goal.workLayer ?? "unspecified"];
+    if (layerTarget !== null) {
+      score -=
+        weights.workLayer *
+        ENERGY_SUGGESTION_WEIGHTS.workLayerPenaltyPerHour *
+        Math.abs(startHour - layerTarget);
+    }
+  }
+
+  /** Soft hour bias by horizon tier (weak nudge beneath energyMode curve). */
+  if (frameworkInclusion.ppfHorizon) {
+    const horizonTarget = PPF_HORIZON_TARGET_HOUR[goal.ppfHorizon ?? "unspecified"];
+    if (horizonTarget !== null) {
+      score -=
+        weights.workLayer *
+        ENERGY_SUGGESTION_WEIGHTS.workLayerPenaltyPerHour *
+        0.35 *
+        Math.abs(startHour - horizonTarget);
+    }
   }
 
   const polarity = goal.energyPolarity ?? "neutral";
-  if (polarity === "drain" || polarity === "energise") {
+  if (
+    frameworkInclusion.polarity &&
+    (polarity === "drain" || polarity === "energise")
+  ) {
     const windowMs = ENERGY_SUGGESTION_WEIGHTS.drainAdjacencyWindowMin * MS_PER_MIN;
     for (const placed of placedToday) {
       if (placed.segment) continue;
@@ -836,19 +1233,29 @@ function scoreEnergyAwareness(
   return score;
 }
 
+function insetGapByPadding(gap: Interval, padMs: number): Interval | null {
+  const startMs = gap.startMs + padMs;
+  const endMs = gap.endMs - padMs;
+  if (endMs <= startMs) return null;
+  return { startMs, endMs };
+}
+
 function placeBlockInGap(
   gap: Interval,
   ms: number,
   goal: WeeklyGoal,
-  tz: string
+  tz: string,
+  travelPadMs = 0
 ): Interval {
+  const inner =
+    travelPadMs > 0 ? insetGapByPadding(gap, travelPadMs)! : gap;
   // Prefer the beginning of the gap if hyperfocus, end if hyperaware.
   if (goal.energyMode === "hyperaware") {
-    const endMs = Math.min(gap.endMs, gap.startMs + (gap.endMs - gap.startMs));
+    const endMs = Math.min(inner.endMs, inner.startMs + (inner.endMs - inner.startMs));
     return { startMs: endMs - ms, endMs };
   }
   void tz;
-  return { startMs: gap.startMs, endMs: gap.startMs + ms };
+  return { startMs: inner.startMs, endMs: inner.startMs + ms };
 }
 
 function sortBlocksByEnergyCurve(
@@ -864,13 +1271,15 @@ function computeMetrics(
   prepared: readonly PreparedGoal[],
   blocks: readonly AllocatedBlock[],
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
-  wheel: WheelSettings,
-  ppf: PpfSettings
+  settings: UserSettings
 ): WeekMetrics {
+  const wheel = settings.wheel;
+  const ppf = settings.ppf;
+  const fw = settings.schedulerFrameworkInclusion;
   const perGoal: Record<string, { scheduledMinutes: number; targetMinutes: number }> = {};
   // Target = the bounds the allocator decided to pursue this week, which for
   // legacy goals matches `targetMinutes` and for new goals reflects the
-  // floor + equal-share allocation.
+  // floor + equal-share of remaining weekly minutes (before calendar packing).
   const preparedById = new Map(prepared.map((p) => [p.goal.id, p] as const));
   for (const g of plan.goals) {
     const p = preparedById.get(g.id);
@@ -899,7 +1308,7 @@ function computeMetrics(
     }
   }
 
-  const wheelGaps = wheel.enabled
+  const wheelGaps = fw.wheel
     ? wheel.areas
         .filter((a: WheelArea) => a.minMinutesPerWeek > 0)
         .map((a) => ({ areaId: a.id, shortMinutes: a.minMinutesPerWeek - (wheelMinutes[a.id] ?? 0) }))
@@ -914,7 +1323,7 @@ function computeMetrics(
   }
 
   const ppfGaps: WeekMetrics["ppfGaps"] = [];
-  if (ppf.enabled) {
+  if (fw.ppfPillar && ppf.enabled) {
     for (const t of ppf.targets) {
       if (t.minPercent > 0 && ppfPercent[t.pillar] < t.minPercent) {
         ppfGaps.push({ pillar: t.pillar, reason: "minPercent" });
@@ -924,6 +1333,8 @@ function computeMetrics(
       }
     }
   }
+
+  const hp6Gaps = computeHp6Gaps(blocks, settings, fw);
 
   const availableMinutes = days.reduce(
     (acc, d) =>
@@ -939,6 +1350,7 @@ function computeMetrics(
     ppfTouches,
     ppfPercent,
     ppfGaps,
+    hp6Gaps,
     utilisation: { availableMinutes, scheduledMinutes: totalScheduled },
     notScheduled: []
   };

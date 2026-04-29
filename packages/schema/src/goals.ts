@@ -159,7 +159,13 @@ export const weeklyGoalSchema = z.object({
    * "committed" so existing goals round-trip cleanly. Drives placement order
    * in the weekly allocator and surfaces as a board on the planning hub.
    */
-  commitmentLevel: commitmentLevel.default("committed")
+  commitmentLevel: commitmentLevel.default("committed"),
+  /**
+   * When `allocator.allocationMode` is `"even"`, Pass 2 splits post-floor
+   * remainder using this percentage alongside goals that omit it (they split
+   * what is left equally). Ignored in `"finish-early"` mode.
+   */
+  allocationSharePercent: z.number().int().min(1).max(100).optional()
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
 
@@ -192,7 +198,7 @@ export interface NormalisedGoalTime {
   maxMinutesPerDay?: number;
   /** Number of days the goal should occupy across the week, when specified. */
   frequencyPerWeek?: number;
-  /** True when the goal carries no time fields and should equal-share. */
+  /** True when the goal carries no time fields, no share %, and should equal-share. */
   isEqualShare: boolean;
   /** True when the legacy `targetMinutes` field was used to derive bounds. */
   isLegacyTarget: boolean;
@@ -205,7 +211,7 @@ export interface NormalisedGoalTime {
  *   1. If only `targetMinutes` is set, treat it as `min == max == targetMinutes`.
  *   2. If `minMinutesPerDay` is set without `minMinutesPerWeek`, derive
  *      `min/wk = min/day × (frequencyPerWeek ?? 7)`. Same for max.
- *   3. A goal with no time fields is "equal share".
+ *   3. A goal with no time fields and no `allocationSharePercent` is "equal share".
  */
 export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   const hasAnyRange =
@@ -234,7 +240,8 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   const isEqualShare =
     !hasAnyRange &&
     !hasLegacyTarget &&
-    goal.frequencyPerWeek === undefined;
+    goal.frequencyPerWeek === undefined &&
+    goal.allocationSharePercent === undefined;
 
   const result: NormalisedGoalTime = {
     isEqualShare,
@@ -249,12 +256,15 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
 }
 
 /**
- * User-supplied overrides for system-generated blocks (sleep + routines).
+ * User-supplied overrides for system-generated blocks (sleep + routines) and
+ * weekly allocated goal blocks (drag-to-move on the calendar).
  *
  * Stored on the WeeklyPlan rather than on UserSettings so a fresh week
  * starts clean. Keys identify the original computed block:
  *   - kind="sleep"    → key is the night index "0".."6"
  *   - kind="routine"  → key is "morning-${idx}" or "shutdown-${idx}"
+ *   - kind="goal"     → key is `goal:<weekAnchorIso>:<slotIndex>:<goalId>`
+ *                       (constructed by the planner).
  *
  * `source` distinguishes a UI drag ("drag") from a recorded actual time
  * captured externally ("actual"). Both are honoured the same way by the
@@ -262,7 +272,7 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
  * surface user edits versus measurements.
  */
 export const blockOverrideSchema = z.object({
-  kind: z.enum(["sleep", "routine"]),
+  kind: z.enum(["sleep", "routine", "goal"]),
   key: z.string().min(1),
   startMs: z.number().int(),
   endMs: z.number().int(),
@@ -299,7 +309,7 @@ export const weeklyPlanSchema = z.object({
   weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   timezone: z.string(),
   goals: z.array(weeklyGoalSchema).default([]),
-  /** User-supplied drag overrides for sleep + routine blocks. */
+  /** User-supplied drag overrides for sleep, routine, and goal blocks. */
   overrides: z.array(blockOverrideSchema).default([]),
   /** Weekly intention prompts (Burchard-style). Optional; blank for new weeks. */
   weeklyIntent: weeklyIntentSchema.default({} as never)

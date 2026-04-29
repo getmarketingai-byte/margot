@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { allocateWeek } from "../src/weekly";
-import type { WeeklyPlan, UserSettings } from "@calendar-automations/schema";
-import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION } from "@calendar-automations/schema";
+import {
+  allocateWeek,
+  buildGoalDragKey,
+  computeAllocationRemainderFractions
+} from "../src/weekly";
+import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
+import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION, weeklyGoalSchema } from "@calendar-automations/schema";
 import type { BusyEvent } from "../src/types";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -9,6 +13,15 @@ const DAY_MS = 24 * HOUR_MS;
 
 function buildSettings(overrides: Partial<UserSettings> = {}): UserSettings {
   return { ...DEFAULT_USER_SETTINGS, schemaVersion: SETTINGS_SCHEMA_VERSION, ...overrides };
+}
+
+function goal(p: Partial<WeeklyGoal> & Pick<WeeklyGoal, "id" | "title">): WeeklyGoal {
+  return weeklyGoalSchema.parse({
+    priority: 3,
+    energyMode: "neutral",
+    ppfHorizon: "unspecified",
+    ...p
+  });
 }
 
 const plan: WeeklyPlan = {
@@ -140,6 +153,86 @@ describe("allocateWeek", () => {
     }
   });
 
+  it("even mode spreads slack in a free window as equal buffers between goals", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const tuesdayStart = weekStartMs + DAY_MS;
+    const busy: BusyEvent[] = [
+      {
+        id: "b1",
+        startMs: tuesdayStart,
+        endMs: tuesdayStart + 12 * HOUR_MS,
+        busy: true
+      },
+      {
+        id: "b2",
+        startMs: tuesdayStart + 18 * HOUR_MS,
+        endMs: tuesdayStart + DAY_MS,
+        busy: true
+      }
+    ];
+    const result = allocateWeek({
+      plan: {
+        id: "even-buffers",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "a",
+            title: "A",
+            daysOfWeek: ["tuesday"],
+            maxMinutesPerWeek: 60,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "b",
+            title: "B",
+            daysOfWeek: ["tuesday"],
+            maxMinutesPerWeek: 60,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "c",
+            title: "C",
+            daysOfWeek: ["tuesday"],
+            maxMinutesPerWeek: 60,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings({
+        allocator: { starvationMode: "proportional", allocationMode: "even" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+
+    const tuesdayEnd = tuesdayStart + DAY_MS;
+    const tuesdayBlocks = result.blocks
+      .filter((b) => !b.segment && b.startMs >= tuesdayStart && b.endMs <= tuesdayEnd)
+      .sort((a, b) => a.startMs - b.startMs);
+
+    expect(tuesdayBlocks.length).toBe(3);
+    const windowStart = tuesdayStart + 12 * HOUR_MS;
+    const windowEnd = tuesdayStart + 18 * HOUR_MS;
+    const gapsMin = [
+      (tuesdayBlocks[0]!.startMs - windowStart) / 60_000,
+      (tuesdayBlocks[1]!.startMs - tuesdayBlocks[0]!.endMs) / 60_000,
+      (tuesdayBlocks[2]!.startMs - tuesdayBlocks[1]!.endMs) / 60_000,
+      (windowEnd - tuesdayBlocks[2]!.endMs) / 60_000
+    ];
+    for (const g of gapsMin) {
+      expect(g).toBeGreaterThan(43);
+      expect(g).toBeLessThan(47);
+    }
+  });
+
   it("equal-shares free time across constraint-free goals", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const result = allocateWeek({
@@ -163,6 +256,70 @@ describe("allocateWeek", () => {
     const min = Math.min(...targets);
     expect(max - min).toBeLessThanOrEqual(15);
     expect(min).toBeGreaterThan(0);
+  });
+
+  it("weights free-time targets by allocationSharePercent in even mode", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "pct-even",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "a",
+            title: "A",
+            allocationSharePercent: 50
+          }),
+          goal({ id: "b", title: "B" }),
+          goal({ id: "c", title: "C" })
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const ta = result.metrics.perGoal["a"]!.targetMinutes;
+    const tb = result.metrics.perGoal["b"]!.targetMinutes;
+    const tc = result.metrics.perGoal["c"]!.targetMinutes;
+    expect(tb).toBeGreaterThan(0);
+    expect(tc).toBeGreaterThan(0);
+    expect(Math.abs(tb - tc)).toBeLessThanOrEqual(30);
+    expect(ta / tb).toBeGreaterThan(1.5);
+    expect(ta / tb).toBeLessThan(2.5);
+  });
+
+  it("ignores allocationSharePercent when allocation mode is finish-early", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "fe-pct",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "first",
+            title: "First",
+            maxMinutesPerWeek: 120
+          }),
+          goal({
+            id: "second",
+            title: "Second",
+            maxMinutesPerWeek: 120,
+            allocationSharePercent: 99
+          })
+        ]
+      },
+      busy: [],
+      settings: buildSettings({
+        allocator: { starvationMode: "proportional", allocationMode: "finish-early" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["first"]!.targetMinutes).toBe(120);
+    expect(result.metrics.perGoal["second"]!.targetMinutes).toBe(120);
   });
 
   it("honours minMinutesPerWeek as a floor before equal-share", () => {
@@ -486,6 +643,83 @@ describe("allocateWeek", () => {
     expect(result.metrics.perGoal["floored-second"]!.targetMinutes).toBe(240);
   });
 
+  it("gym special goal reserves quantised drive padding on each side of the workout", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    // Monday: only 10:00–11:15 is free (75 min).
+    const busy: BusyEvent[] = [
+      {
+        sourceId: "mon-am",
+        title: "Busy",
+        startMs: weekStartMs,
+        endMs: weekStartMs + 10 * HOUR_MS,
+        busy: true,
+        source: "google"
+      },
+      {
+        sourceId: "mon-pm",
+        title: "Busy2",
+        startMs: weekStartMs + 11.25 * HOUR_MS,
+        endMs: weekStartMs + DAY_MS,
+        busy: true,
+        source: "google"
+      }
+    ];
+    const gymPlan: WeeklyPlan = {
+      id: "gym-plan",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [
+        {
+          id: "gym-goal",
+          title: "Gym",
+          targetMinutes: 60,
+          dayOfWeek: "monday",
+          energyMode: "hyperfocus",
+          ppfHorizon: "unspecified",
+          specialGoalType: "gym"
+        }
+      ]
+    };
+    const plainPlan: WeeklyPlan = {
+      ...gymPlan,
+      id: "plain-plan",
+      goals: [
+        {
+          id: "plain-goal",
+          title: "Gym",
+          targetMinutes: 60,
+          dayOfWeek: "monday",
+          energyMode: "hyperfocus",
+          ppfHorizon: "unspecified"
+        }
+      ]
+    };
+    const settings = buildSettings({
+      gym: { ...DEFAULT_USER_SETTINGS.gym, driveMinutes: 10 }
+    });
+    // driveMinutes 10 → 15 min grid each way → inner window 75 − 30 = 45 min.
+    const gymResult = allocateWeek({
+      plan: gymPlan,
+      busy,
+      settings,
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const plainResult = allocateWeek({
+      plan: plainPlan,
+      busy,
+      settings,
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const gymBlock = gymResult.blocks.find((b) => b.goalId === "gym-goal");
+    const plainBlock = plainResult.blocks.find((b) => b.goalId === "plain-goal");
+    expect(gymBlock).toBeDefined();
+    expect(plainBlock).toBeDefined();
+    expect(Math.floor((gymBlock!.endMs - gymBlock!.startMs) / 60_000)).toBe(45);
+    expect(Math.floor((plainBlock!.endMs - plainBlock!.startMs) / 60_000)).toBe(60);
+  });
+
   it("restricts a goal to inverted-calendar availability windows", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const result = allocateWeek({
@@ -564,6 +798,59 @@ describe("allocateWeek", () => {
     expect(result.metrics.perGoal["work"]!.targetMinutes).toBe(7 * 24 * 60);
     expect(result.metrics.perGoal["friend-map"]!.scheduledMinutes).toBe(0);
     expect(result.blocks.filter((b) => b.goalId === "friend-map").length).toBe(0);
+  });
+
+  it("honours goal drag override placement and dragKey", () => {
+    const simplePlan: WeeklyPlan = {
+      id: "goal-ov-p",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [goal({ id: "solo", title: "Solo", targetMinutes: 120 })],
+      overrides: []
+    };
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const base = allocateWeek({
+      plan: simplePlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: "2026-04-27"
+    });
+    const first = base.blocks.find((b) => b.goalId === "solo");
+    expect(first?.dragKey).toBe(buildGoalDragKey("solo", "2026-04-27", 0));
+    const delta = 2 * HOUR_MS;
+    const key = first!.dragKey!;
+    const withOv: WeeklyPlan = {
+      ...simplePlan,
+      overrides: [
+        {
+          kind: "goal",
+          key,
+          startMs: first!.startMs + delta,
+          endMs: first!.endMs + delta,
+          source: "drag",
+          setAt: 1
+        }
+      ]
+    };
+    const moved = allocateWeek({
+      plan: withOv,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: "2026-04-27"
+    });
+    const placed = moved.blocks.find((b) => b.goalId === "solo" && b.dragKey === key);
+    expect(placed?.startMs).toBe(first!.startMs + delta);
+    expect(placed?.pinnedFromOverride).toBe(true);
+    expect(placed?.dragOverrideSaved).toBe(true);
+  });
+
+  it("buildGoalDragKey scopes overrides by week anchor and slot", () => {
+    expect(buildGoalDragKey("goal-id", "2026-05-04", 0)).toBe("goal:2026-05-04:0:goal-id");
+    expect(buildGoalDragKey("a:b", "2026-04-27", 3)).toBe("goal:2026-04-27:3:a:b");
   });
 });
 
@@ -857,5 +1144,111 @@ describe("allocateWeek energy-aware suggestion pass", () => {
     expect(blocks.length).toBeGreaterThan(0);
     const earliest = Math.min(...blocks.map((b) => b.startMs));
     expect(earliest).toBe(weekStartMs);
+  });
+
+  it("skips PPF mix gap detection when schedulerFrameworkInclusion.ppfPillar is false", () => {
+    const ws = DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion;
+    const result = allocateWeek({
+      plan,
+      busy: [],
+      settings: buildSettings({
+        schedulerFrameworkInclusion: { ...ws, ppfPillar: false },
+        ppf: {
+          enabled: true,
+          targets: [
+            { pillar: "professional", minPercent: 95, minTouchesPerWeek: 0 },
+            { pillar: "personal", minPercent: 0, minTouchesPerWeek: 0 },
+            { pillar: "financial", minPercent: 0, minTouchesPerWeek: 0 }
+          ]
+        }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.ppfGaps.length).toBe(0);
+  });
+
+  it("prioritizes list index over commitment tier when schedulerFrameworkInclusion.commitment is false", () => {
+    const tierPlan: WeeklyPlan = {
+      id: "commit-off",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [
+        {
+          id: "nice_first",
+          title: "Nice listed first",
+          minMinutesPerWeek: 180,
+          energyMode: "neutral",
+          ppfHorizon: "unspecified",
+          commitmentLevel: "nice_to_have"
+        },
+        {
+          id: "must_second",
+          title: "Must listed second",
+          minMinutesPerWeek: 180,
+          energyMode: "neutral",
+          ppfHorizon: "unspecified",
+          commitmentLevel: "non_negotiable"
+        }
+      ]
+    };
+    const result = allocateWeek({
+      plan: tierPlan,
+      busy: [],
+      settings: buildSettings({
+        schedulerFrameworkInclusion: {
+          ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
+          commitment: false
+        }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const niceEarliest = Math.min(...result.blocks.filter((b) => b.goalId === "nice_first").map((b) => b.startMs));
+    const mustEarliest = Math.min(...result.blocks.filter((b) => b.goalId === "must_second").map((b) => b.startMs));
+    /** Without commitment tiers, nicer goal (list index 0) should allocate before non-negotiable at index 1. */
+    expect(niceEarliest).toBeLessThan(mustEarliest);
+  });
+});
+
+describe("computeAllocationRemainderFractions", () => {
+  it("splits between explicit percent goals and equal-share goals", () => {
+    const f = computeAllocationRemainderFractions([
+      goal({ id: "a", title: "A", allocationSharePercent: 50 }),
+      goal({ id: "b", title: "B" }),
+      goal({ id: "c", title: "C" })
+    ]);
+    expect(f[0]).toBeCloseTo(0.5, 5);
+    expect(f[1]).toBeCloseTo(0.25, 5);
+    expect(f[2]).toBeCloseTo(0.25, 5);
+  });
+
+  it("normalizes when explicit percents sum above 100", () => {
+    const f = computeAllocationRemainderFractions([
+      goal({ id: "a", title: "A", allocationSharePercent: 60 }),
+      goal({ id: "b", title: "B", allocationSharePercent: 50 })
+    ]);
+    expect(f[0]).toBeCloseTo(60 / 110, 5);
+    expect(f[1]).toBeCloseTo(50 / 110, 5);
+  });
+
+  it("scales up when only percent goals sum below 100", () => {
+    const f = computeAllocationRemainderFractions([
+      goal({ id: "a", title: "A", allocationSharePercent: 30 }),
+      goal({ id: "b", title: "B", allocationSharePercent: 30 }),
+      goal({ id: "c", title: "C", allocationSharePercent: 30 })
+    ]);
+    expect(f[0]).toBeCloseTo(1 / 3, 5);
+    expect(f[1]).toBeCloseTo(1 / 3, 5);
+    expect(f[2]).toBeCloseTo(1 / 3, 5);
+  });
+
+  it("distributes evenly when no goal sets allocationSharePercent", () => {
+    const f = computeAllocationRemainderFractions([
+      goal({ id: "a", title: "A" }),
+      goal({ id: "b", title: "B" })
+    ]);
+    expect(f[0]).toBeCloseTo(0.5, 5);
+    expect(f[1]).toBeCloseTo(0.5, 5);
   });
 });

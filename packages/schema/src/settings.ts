@@ -467,20 +467,125 @@ export const allocatorSettingsSchema = z.object({
    */
   starvationMode: z.enum(["proportional", "strict"]).default("proportional"),
   /**
-   * How spare (unallocated) free time is distributed across goals after each
-   * goal's `minMinutesPerWeek` floor has been reserved.
+   * How spare (unallocated) free time is used after each goal's
+   * `minMinutesPerWeek` floor has been reserved.
    *
-   *   "even": split remaining minutes evenly across eligible goals so every
-   *   goal grows by roughly the same amount (default; matches legacy behavior).
+   *   "even": split remaining minutes fairly across eligible goals for weekly
+   *   targets (same as legacy), then when packing the calendar spread slack
+   *   inside each free window as equal gaps between goal blocks instead of
+   *   one lump of empty time at the end of the window (default).
    *
    *   "finish-early": fill goals one after another in user/priority order,
    *   topping each up to its cap before moving to the next. Later goals may
    *   receive nothing, leaving the leftover free time as a single block of
-   *   "finish early" time at the end of the day/week.
+   *   "finish early" time at the end of the day/week. Placement does not insert
+   *   even inter-goal buffers.
    */
   allocationMode: z.enum(["even", "finish-early"]).default("even")
 });
 export type AllocatorSettings = z.infer<typeof allocatorSettingsSchema>;
+
+/* ─────────────────── 13b. Planning Hub scheduler framework inclusion ──────── */
+
+/** Keys aligned with Planning Hub boards / allocator switches. */
+export const schedulerFrameworkInclusionKeys = [
+  "commitment",
+  "polarity",
+  "attention",
+  "workLayer",
+  "wheel",
+  "ppfPillar",
+  "ppfHorizon",
+  "hp6"
+] as const;
+export type SchedulerFrameworkInclusionKey = (typeof schedulerFrameworkInclusionKeys)[number];
+
+/**
+ * Fine-grained control over which framework dimensions participate in allocator
+ * behavior. Legacy `wheel.enabled` / `ppf.enabled` / `hpp.enabled` are kept in
+ * sync on read/write via helpers below.
+ */
+export const schedulerFrameworkInclusionSchema = z.object({
+  commitment: z.boolean().default(true),
+  polarity: z.boolean().default(true),
+  attention: z.boolean().default(true),
+  workLayer: z.boolean().default(true),
+  wheel: z.boolean().default(false),
+  ppfPillar: z.boolean().default(false),
+  ppfHorizon: z.boolean().default(true),
+  hp6: z.boolean().default(false)
+});
+export type SchedulerFrameworkInclusion = z.infer<typeof schedulerFrameworkInclusionSchema>;
+
+/**
+ * Populate inclusion from legacy booleans only (used when migrating old JSON blobs).
+ */
+export function defaultSchedulerFrameworkInclusionFromLegacy(
+  raw: Partial<{
+    wheel: { enabled?: boolean };
+    ppf: { enabled?: boolean };
+    hpp: { enabled?: boolean };
+  }>
+): SchedulerFrameworkInclusion {
+  const w = raw.wheel?.enabled ?? false;
+  const p = raw.ppf?.enabled ?? false;
+  const h = raw.hpp?.enabled ?? false;
+  return {
+    commitment: true,
+    polarity: true,
+    attention: true,
+    workLayer: true,
+    wheel: w,
+    ppfPillar: p,
+    /** Legacy had a single PPF toggle covering both pillar rules and horizon tagging. */
+    ppfHorizon: p,
+    hp6: h
+  };
+}
+
+/**
+ * Keep deprecated `wheel` / `ppf` / `hpp.enabled` booleans aligned with inclusion
+ * so existing UI and planners that read `.enabled` stay consistent.
+ */
+export function syncLegacyFrameworkFlagsFromInclusion(settings: UserSettings): UserSettings {
+  const inc = settings.schedulerFrameworkInclusion;
+  return {
+    ...settings,
+    wheel: { ...settings.wheel, enabled: inc.wheel },
+    ppf: { ...settings.ppf, enabled: inc.ppfPillar },
+    hpp: { ...settings.hpp, enabled: inc.hp6 }
+  };
+}
+
+/**
+ * After callers mutate legacy `wheel` / `ppf` / `hpp.enabled` directly, reconcile
+ * the three keyed inclusion fields with those booleans (`ppfHorizon` etc. preserved).
+ */
+export function syncSchedulerInclusionKeysFromLegacyBooleans(
+  settings: UserSettings
+): UserSettings {
+  return {
+    ...settings,
+    schedulerFrameworkInclusion: schedulerFrameworkInclusionSchema.parse({
+      ...settings.schedulerFrameworkInclusion,
+      wheel: settings.wheel.enabled,
+      ppfPillar: settings.ppf.enabled,
+      hp6: settings.hpp.enabled
+    })
+  };
+}
+
+/** Call before save when slices like `constraints-section` flipped `wheel` / `ppf` / `hpp.enabled`. */
+export function coerceSettingsAfterLegacyWheelPpfHppEdit(settings: UserSettings): UserSettings {
+  return syncLegacyFrameworkFlagsFromInclusion(syncSchedulerInclusionKeysFromLegacyBooleans(settings));
+}
+
+/** Call before save when Planning Hub patched `schedulerFrameworkInclusion`. */
+export function coerceSettingsAfterSchedulerFrameworkInclusionPatch(
+  settings: UserSettings
+): UserSettings {
+  return syncLegacyFrameworkFlagsFromInclusion(settings);
+}
 
 /* ──────────────────────────── Composite ─────────────────────────────────── */
 
@@ -514,33 +619,46 @@ export const userSettingsSchema = z.object({
    */
   vision: visionSettingsSchema.default({} as never),
   allocator: allocatorSettingsSchema.default({} as never),
-  travelCache: travelCacheSchema.default({} as never)
+  travelCache: travelCacheSchema.default({} as never),
+  /** Which Planning Hub framework dimensions participate in allocator behavior. */
+  schedulerFrameworkInclusion: schedulerFrameworkInclusionSchema.default({} as never)
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 /* ───────────────── Migration helper (forward-compatible) ─────────────────── */
+
+function coerceSchedulerFrameworkInclusionForParse(raw: Record<string, unknown>): void {
+  const legacyDefault = defaultSchedulerFrameworkInclusionFromLegacy({
+    wheel: raw.wheel as { enabled?: boolean } | undefined,
+    ppf: raw.ppf as { enabled?: boolean } | undefined,
+    hpp: raw.hpp as { enabled?: boolean } | undefined
+  });
+  const existing = raw.schedulerFrameworkInclusion;
+  if (!existing || typeof existing !== "object") {
+    raw.schedulerFrameworkInclusion = legacyDefault;
+  } else {
+    raw.schedulerFrameworkInclusion = schedulerFrameworkInclusionSchema.parse({
+      ...legacyDefault,
+      ...(existing as object)
+    });
+  }
+}
 
 /**
  * Given a possibly-untyped settings JSON pulled from the database, parse it through
  * the current schema. Older versions can be upgraded here as new versions land.
  */
 export function migrateSettings(raw: unknown): UserSettings {
-  let parsed: UserSettings;
-  if (raw && typeof raw === "object" && "schemaVersion" in raw) {
-    const version = (raw as { schemaVersion: unknown }).schemaVersion;
-    if (version === SETTINGS_SCHEMA_VERSION) {
-      parsed = userSettingsSchema.parse(raw);
-      parsed.calendars.sources = parsed.calendars.sources.map((source) =>
-        normaliseCalendarSource(source)
-      );
-      return parsed;
-    }
-    // Future: if (version === 1) { raw = migrate1to2(raw); }
-  }
-  parsed = userSettingsSchema.parse({
-    ...(raw as object | null | undefined),
+  const coerced: Record<string, unknown> =
+    raw && typeof raw === "object"
+      ? { ...(raw as object) }
+      : {};
+  coerceSchedulerFrameworkInclusionForParse(coerced);
+  let parsed = userSettingsSchema.parse({
+    ...coerced,
     schemaVersion: SETTINGS_SCHEMA_VERSION
   });
   parsed.calendars.sources = parsed.calendars.sources.map((source) => normaliseCalendarSource(source));
+  parsed = syncLegacyFrameworkFlagsFromInclusion(parsed);
   return parsed;
 }

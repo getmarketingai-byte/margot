@@ -10,8 +10,9 @@ import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
-import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
+import { isoCalendarDay, localMondayIso, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
+import { gymGoalTravelBlocksFromProposed } from "@/lib/week-blocks";
 import {
   isoDatesForWeek,
   loadDailyReviewsInRange,
@@ -166,7 +167,8 @@ export default async function PlanPage() {
     settings,
     weekStartMs,
     weekEndMs,
-    catchUpFloors
+    catchUpFloors,
+    weekAnchorDate: plan.weekStart
   });
   const allocationNextWeek = allocateWeek({
     plan,
@@ -174,7 +176,8 @@ export default async function PlanPage() {
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     settings,
     weekStartMs: nextWeekStartMs,
-    weekEndMs: nextWeekEndMs
+    weekEndMs: nextWeekEndMs,
+    weekAnchorDate: isoCalendarDay(nextWeekStartMs, settings.timezone)
   });
   const busyForCalendar = [...busy, ...busyNextWeek];
   const sleepBlockMs = [...systemBlocks, ...nextWeekSystemBlocks]
@@ -200,12 +203,23 @@ export default async function PlanPage() {
       source: "internal" as const,
       system: "weather" as const
     }));
-  const systemBlocksForCalendar = [...systemBlocks, ...nextWeekSystemBlocks, ...weatherPreviewBlocks];
   const proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
     [...allocation.blocks, ...allocationNextWeek.blocks],
     plan,
     settings.calendars.sources
   );
+  const gymGoalTravelOverlay = gymGoalTravelBlocksFromProposed(
+    proposedForCalendar,
+    plan.goals,
+    settings.travel,
+    settings.gym
+  );
+  const systemBlocksForCalendar = [
+    ...systemBlocks,
+    ...nextWeekSystemBlocks,
+    ...weatherPreviewBlocks,
+    ...gymGoalTravelOverlay
+  ];
 
   const scheduledByGoal: Record<string, number> = {};
   const effectiveTargetByGoal: Record<string, number> = {};

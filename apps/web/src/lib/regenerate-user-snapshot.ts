@@ -13,8 +13,8 @@ import { loadSettings } from "./settings-store";
 import { saveSnapshot } from "./snapshots";
 import { buildWeatherTimemapEvents } from "./weather-timemap";
 import { buildSystemBlocks, overridesFromPlan } from "./system-blocks-server";
-import { localMondayMidnightMs } from "./week";
-import type { SystemBlock } from "./week-blocks";
+import { isoCalendarDay, localMondayMidnightMs } from "./week";
+import { gymGoalTravelBlocksFromProposed, type SystemBlock } from "./week-blocks";
 
 /** Minimum age of the latest snapshot before a feed request triggers Google + replan. */
 export const FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS = 3 * 60 * 1000;
@@ -102,10 +102,8 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     overrides: overridesFromPlan(plan ?? undefined),
     nowMs: now
   });
-  const systemEvents = systemBlocks.map((b) => toGeneratedSystemEvent(userId, b));
-
-  const events =
-    plan
+  const proposedBlocks =
+    plan != null
       ? filterInvertedTimemapFromProposedBlocks(
           allocateWeek({
             plan,
@@ -113,12 +111,21 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
             goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
             settings,
             weekStartMs,
-            weekEndMs
+            weekEndMs,
+            weekAnchorDate: isoCalendarDay(weekStartMs, settings.timezone)
           }).blocks,
           plan,
           settings.calendars.sources
-        ).map((b) => toGeneratedEvent(userId, plan, b))
+        )
       : [];
+  const events = plan ? proposedBlocks.map((b) => toGeneratedEvent(userId, plan, b)) : [];
+  const gymTravelBlocks = plan
+    ? gymGoalTravelBlocksFromProposed(proposedBlocks, plan.goals, settings.travel, settings.gym)
+    : [];
+  const systemEvents = [
+    ...systemBlocks.map((b) => toGeneratedSystemEvent(userId, b)),
+    ...gymTravelBlocks.map((b) => toGeneratedSystemEvent(userId, b))
+  ];
 
   const sleepBlockMs = systemBlocks
     .filter((b) => b.system === "sleep")

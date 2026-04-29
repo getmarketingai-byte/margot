@@ -29,6 +29,7 @@ import type {
   PlacementSignalKey,
   PpfHorizonKey,
   PpfPillarKey,
+  SchedulerFrameworkInclusion,
   VisionSettings,
   WeeklyGoal,
   WeeklyIntent,
@@ -36,7 +37,6 @@ import type {
 } from "@calendar-automations/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { patchGoal } from "../plan/actions";
-import { FrameworkSchedulerToggles } from "./framework-scheduler-toggles";
 
 const HP6_LABELS: Record<Hp6HabitKey, string> = {
   clarity: "Clarity",
@@ -104,15 +104,12 @@ interface PlanningHubClientProps {
   initialVision: VisionSettings;
   initialPlacementOrder: readonly PlacementSignalKey[];
   wheelAreas: ReadonlyArray<{ id: string; label: string }>;
-  wheelSchedulerEnabled: boolean;
-  ppfSchedulerEnabled: boolean;
-  hppSchedulerEnabled: boolean;
+  schedulerFrameworkInclusion: SchedulerFrameworkInclusion;
   saveVision: (input: VisionSettings) => Promise<void>;
   savePlacementOrder: (order: readonly PlacementSignalKey[]) => Promise<void>;
   saveWeeklyIntent: (input: WeeklyIntent) => Promise<void>;
-  saveFrameworkScheduler: (
-    framework: "wheel" | "ppf" | "hpp",
-    enabled: boolean
+  patchSchedulerFrameworkInclusion: (
+    patch: Partial<SchedulerFrameworkInclusion>
   ) => Promise<void>;
 }
 
@@ -121,9 +118,9 @@ interface PlanningHubClientProps {
  *
  *   1. Weekly intentions card — short reflection prompts that anchor the week.
  *   2. Long-horizon vision — PPF-aligned text persisted on user settings.
- *   3. Framework boards — tags for each goal plus allocator toggles for Wheel / PPF / HP6 layers.
+ *   3. Framework boards — tag goals and flip allocator inclusion per framework in one strip.
  *   4. Active board — drag goals between columns to set the framework tag.
- *   6. Placement tie-break — rank the four placement signals.
+ *   5. Placement tie-break — rank the four placement signals.
  */
 export function PlanningHubClient(props: PlanningHubClientProps) {
   const {
@@ -132,13 +129,11 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     initialVision,
     initialPlacementOrder,
     wheelAreas,
-    wheelSchedulerEnabled,
-    ppfSchedulerEnabled,
-    hppSchedulerEnabled,
+    schedulerFrameworkInclusion: initialInclusion,
     saveVision,
     savePlacementOrder,
     saveWeeklyIntent,
-    saveFrameworkScheduler
+    patchSchedulerFrameworkInclusion
   } = props;
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const lastSeenSig = useRef<string>("");
@@ -156,6 +151,36 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
   );
 
   const boards = useMemo<BoardConfig[]>(() => buildBoardRegistry({ wheelAreas }), [wheelAreas]);
+
+  const inclusionSig = useMemo(() => JSON.stringify(initialInclusion), [initialInclusion]);
+  const [schedulerInclusion, setSchedulerInclusion] =
+    useState<SchedulerFrameworkInclusion>(initialInclusion);
+  useEffect(() => {
+    setSchedulerInclusion(initialInclusion);
+  }, [inclusionSig, initialInclusion]);
+
+  const [, inclusionTransition] = useTransition();
+
+  const setFrameworkInScheduler = (
+    key: keyof SchedulerFrameworkInclusion,
+    enabled: boolean
+  ) => {
+    const prev = schedulerInclusion[key];
+    setSchedulerInclusion((s) =>
+      ({
+        ...s,
+        [key]: enabled
+      }) as SchedulerFrameworkInclusion
+    );
+    inclusionTransition(async () => {
+      try {
+        await patchSchedulerFrameworkInclusion({ [key]: enabled });
+      } catch (err) {
+        console.error("patch scheduler framework inclusion failed", err);
+        setSchedulerInclusion((s) => ({ ...s, [key]: prev }) as SchedulerFrameworkInclusion);
+      }
+    });
+  };
 
   const [activeBoardKey, setActiveBoardKey] = useState<FrameworkKey>("commitment");
   const activeBoard = boards.find((b) => b.key === activeBoardKey) ?? boards[0]!;
@@ -186,10 +211,8 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
         boards={boards}
         activeBoardKey={activeBoard.key}
         onBoardChange={setActiveBoardKey}
-        wheelSchedulerEnabled={wheelSchedulerEnabled}
-        ppfSchedulerEnabled={ppfSchedulerEnabled}
-        hppSchedulerEnabled={hppSchedulerEnabled}
-        saveFrameworkScheduler={saveFrameworkScheduler}
+        schedulerInclusion={schedulerInclusion}
+        onToggleFrameworkInScheduler={setFrameworkInScheduler}
       />
 
       {goals.length === 0 ? (
@@ -492,14 +515,12 @@ function FrameworkBoardsPlanningSection(props: {
   boards: ReadonlyArray<BoardConfig>;
   activeBoardKey: FrameworkKey;
   onBoardChange: (key: FrameworkKey) => void;
-  wheelSchedulerEnabled: boolean;
-  ppfSchedulerEnabled: boolean;
-  hppSchedulerEnabled: boolean;
-  saveFrameworkScheduler: PlanningHubClientProps["saveFrameworkScheduler"];
+  schedulerInclusion: SchedulerFrameworkInclusion;
+  onToggleFrameworkInScheduler: (key: keyof SchedulerFrameworkInclusion, enabled: boolean) => void;
 }) {
   return (
     <section
-      className="card flex flex-col gap-4"
+      className="card flex flex-col gap-3"
       aria-labelledby="framework-boards-hub-heading"
     >
       <div>
@@ -507,48 +528,64 @@ function FrameworkBoardsPlanningSection(props: {
           Framework boards
         </h2>
         <p className="mt-1 text-xs text-ink-400">
-          Pick a board to tag goals (commitment, energy, work layer, Wheel, PPF, HP6). Checking a
-          layer under <span className="font-medium text-ink-600 dark:text-ink-200">In scheduler</span>{" "}
-          lets the allocator enforce that layer&apos;s rules from{" "}
+          Each pill is both a tagging board (right) and allocator inclusion (left checkbox). Detailed
+          floors, mix targets, and HP6 minimums stay in{" "}
           <a className="underline" href="#scheduling-constraints">
             Scheduling rules
-          </a>{" "}
-          — you can tag first and turn scheduling on when you&apos;re ready.
+          </a>
+          .
         </p>
       </div>
-      <FrameworkSchedulerToggles
-        variant="inline"
-        wheel={props.wheelSchedulerEnabled}
-        ppf={props.ppfSchedulerEnabled}
-        hpp={props.hppSchedulerEnabled}
-        save={props.saveFrameworkScheduler}
-      />
-      <nav
-        aria-label="Choose framework board"
-        className="border-t border-ink-200 pt-3 dark:border-ink-600"
-      >
-        <div className="flex flex-wrap gap-1.5">
+      <nav aria-label="Framework boards and allocator inclusion">
+        <ul className="flex flex-wrap gap-2">
           {props.boards.map((board) => {
             const active = board.key === props.activeBoardKey;
-            const baseClasses =
-              "rounded-full border px-2.5 py-1 text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+            const incKey = board.key as keyof SchedulerFrameworkInclusion;
+            const inScheduler = props.schedulerInclusion[incKey];
             return (
-              <button
-                key={board.key}
-                type="button"
-                onClick={() => props.onBoardChange(board.key)}
-                aria-pressed={active}
-                className={`${baseClasses} ${
-                  active
-                    ? "border-accent bg-accent text-accent-fg"
-                    : "border-ink-200 text-ink-600 hover:border-accent/40 dark:border-ink-600 dark:text-ink-200"
-                }`}
-              >
-                {board.title}
-              </button>
+              <li key={board.key}>
+                <div
+                  className={`inline-flex max-w-full items-stretch overflow-hidden rounded-full border text-xs transition focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-1 focus-within:ring-offset-white dark:focus-within:ring-offset-zinc-950 ${
+                    active
+                      ? "border-accent shadow-sm shadow-accent/20"
+                      : "border-ink-200 dark:border-ink-600"
+                  }`}
+                >
+                  <label
+                    title="Include this framework in allocator behavior"
+                    className={`flex cursor-pointer items-center gap-1.5 px-2 py-1.5 ${
+                      inScheduler
+                        ? "bg-accent/15 text-ink-800 dark:bg-accent/20 dark:text-ink-100"
+                        : "bg-ink-50/70 text-ink-500 dark:bg-ink-900/50 dark:text-ink-400"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 shrink-0 rounded border-ink-300 text-accent focus:ring-accent"
+                      checked={inScheduler}
+                      onChange={(e) => props.onToggleFrameworkInScheduler(incKey, e.target.checked)}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`Include ${board.title} in allocator`}
+                    />
+                    <span className="sr-only">allocator</span>
+                  </label>
+                  <button
+                    type="button"
+                    data-active={active}
+                    onClick={() => props.onBoardChange(board.key)}
+                    className={`px-2.5 py-1.5 font-medium transition ${
+                      active
+                        ? "bg-accent text-accent-fg"
+                        : "text-ink-700 hover:bg-ink-100/70 dark:text-ink-100 dark:hover:bg-ink-800/70"
+                    }`}
+                  >
+                    {board.title}
+                  </button>
+                </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       </nav>
     </section>
   );

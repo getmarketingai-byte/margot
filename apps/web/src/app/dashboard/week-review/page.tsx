@@ -111,7 +111,8 @@ export default async function WeekReviewPage() {
     settings,
     weekStartMs,
     weekEndMs,
-    catchUpFloors: weeklyReview.catchUpAdjustments
+    catchUpFloors: weeklyReview.catchUpAdjustments,
+    weekAnchorDate: weekStart
   });
   const effectiveTargetByGoal: Record<string, number> = {};
   for (const [id, m] of Object.entries(allocation.metrics.perGoal)) {
