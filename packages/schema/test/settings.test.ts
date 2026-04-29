@@ -3,6 +3,7 @@ import {
   DEFAULT_USER_SETTINGS,
   SETTINGS_SCHEMA_VERSION,
   migrateSettings,
+  settingsNeedHomeAddress,
   userSettingsSchema
 } from "../src/index";
 
@@ -16,6 +17,7 @@ describe("UserSettings schema", () => {
     expect(parsed.calendars.schedulingWindowDays).toBe(60);
     expect(parsed.allocator.starvationMode).toBe("proportional");
     expect(parsed.allocator.allocationMode).toBe("even");
+    expect(parsed.allocator.catchUpMode).toBe("automated");
   });
 
   it("accepts finish-early allocationMode", () => {
@@ -34,11 +36,33 @@ describe("UserSettings schema", () => {
     });
     expect(migrated.allocator.starvationMode).toBe("strict");
     expect(migrated.allocator.allocationMode).toBe("even");
+    expect(migrated.allocator.catchUpMode).toBe("automated");
   });
 
   it("DEFAULT_USER_SETTINGS round-trips", () => {
     const reparsed = userSettingsSchema.parse(DEFAULT_USER_SETTINGS);
     expect(reparsed).toEqual(DEFAULT_USER_SETTINGS);
+  });
+
+  it("settingsNeedHomeAddress when routing or weather is on", () => {
+    expect(
+      settingsNeedHomeAddress({
+        travel: { routingProvider: "disabled", homeAddress: undefined },
+        weather: { enabled: false }
+      })
+    ).toBe(false);
+    expect(
+      settingsNeedHomeAddress({
+        travel: { routingProvider: "openrouteservice", homeAddress: "x" },
+        weather: { enabled: false }
+      })
+    ).toBe(true);
+    expect(
+      settingsNeedHomeAddress({
+        travel: { routingProvider: "disabled", homeAddress: undefined },
+        weather: { enabled: true }
+      })
+    ).toBe(true);
   });
 
   it("migrateSettings stamps schemaVersion when absent", () => {
@@ -54,5 +78,18 @@ describe("UserSettings schema", () => {
         sleep: { idealWakeHour: 99 }
       })
     ).toThrow();
+  });
+
+  it("migrateSettings seeds schedulerFrameworkInclusion from legacy wheel/ppf/hpp flags", () => {
+    const migrated = migrateSettings({
+      wheel: { enabled: true, areas: [] },
+      ppf: { enabled: true, targets: [] },
+      hpp: { enabled: false, hp6MinTouchesPerMonth: {} }
+    } as Parameters<typeof migrateSettings>[0]);
+    expect(migrated.schedulerFrameworkInclusion.wheel).toBe(true);
+    expect(migrated.schedulerFrameworkInclusion.ppfPillar).toBe(true);
+    expect(migrated.schedulerFrameworkInclusion.hp6).toBe(false);
+    expect(migrated.wheel.enabled).toBe(true);
+    expect(migrated.ppf.enabled).toBe(true);
   });
 });

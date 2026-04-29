@@ -1,14 +1,32 @@
 import { eq } from "drizzle-orm";
-import { type WeeklyPlan } from "@calendar-automations/schema";
+import Link from "next/link";
+import {
+  filterSchedulingGoals,
+  type WeeklyPlan,
+  weeklyIntentSchema
+} from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid } from "@calendar-automations/planner";
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
-import { localMondayIso, localMondayMidnightMs } from "@/lib/week";
+import { isoCalendarDay, localMondayIso, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
+import { gymGoalTravelBlocksFromProposed } from "@/lib/week-blocks";
+import {
+  isoDatesForWeek,
+  loadDailyReviewsInRange,
+  loadWeeklyReview,
+  todayIsoInTz
+} from "@/lib/review-store";
+import {
+  catchUpFloorsFromGoalRollups,
+  computeGoalRollups
+} from "@/lib/review-rollup";
 import { computeSystemBlocks } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
+import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
+import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
@@ -20,8 +38,16 @@ export const dynamic = "force-dynamic";
 
 async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
+  const blank = weeklyIntentSchema.parse({});
   if (!db) {
-    return { id: "dev", weekStart, timezone, goals: [], overrides: [] };
+    return {
+      id: "dev",
+      weekStart,
+      timezone,
+      goals: [],
+      overrides: [],
+      weeklyIntent: blank
+    };
   }
   const rows = await db
     .select()
@@ -30,15 +56,30 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return { id: crypto.randomUUID(), weekStart, timezone, goals: [], overrides: [] };
+    return {
+      id: crypto.randomUUID(),
+      weekStart,
+      timezone,
+      goals: [],
+      overrides: [],
+      weeklyIntent: blank
+    };
   }
-  const stored = row.data as WeeklyPlan;
-  return { ...stored, id: row.id, weekStart, timezone, overrides: stored.overrides ?? [] };
+  const stored = row.data as Partial<WeeklyPlan>;
+  return {
+    ...stored,
+    id: row.id,
+    weekStart,
+    timezone,
+    goals: stored.goals ?? [],
+    overrides: stored.overrides ?? [],
+    weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
+  };
 }
 
 async function updateRoutines(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
@@ -72,14 +113,18 @@ async function updateRoutines(formData: FormData): Promise<void> {
 
   revalidatePath("/dashboard/plan");
   revalidatePath("/dashboard");
-  revalidatePath("/dashboard/constraints");
+  revalidatePath("/dashboard/energy");
 }
 
 export default async function PlanPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
+  const schedulingGoals = filterSchedulingGoals(plan.goals);
+  const weekStartIso = localMondayIso(settings.timezone);
+  const weeklyReview = await loadWeeklyReview(userId, weekStartIso, settings.timezone);
+  const catchUpMode = settings.allocator.catchUpMode;
 
   const weekStartMs = localMondayMidnightMs(settings.timezone);
   const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
@@ -118,32 +163,111 @@ export default async function PlanPage() {
     nextWeekResolver,
     settings.timemap
   );
-  const allocation = allocateWeek({
-    plan,
-    busy: [...busy, ...systemBlocks],
-    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-    settings,
+
+  const sleepBlockMs = [...systemBlocks, ...nextWeekSystemBlocks]
+    .filter((b) => b.system === "sleep")
+    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+  const weatherTimemapEvents = await buildWeatherTimemapEvents({
+    userId,
+    windowStartMs: weekStartMs,
+    windowEndMs: nextWeekEndMs,
+    weather: settings.weather,
+    homeAddress: settings.travel.homeAddress,
+    geocodes: settings.travelCache?.geocodes,
+    stableUid: buildStableUid,
+    sleepBlockMs
+  });
+  const niceWeatherThisWeek = outsideNiceWeatherIntervalsInRange(
+    weatherTimemapEvents,
     weekStartMs,
     weekEndMs
-  });
+  );
+  const niceWeatherNextWeek = outsideNiceWeatherIntervalsInRange(
+    weatherTimemapEvents,
+    nextWeekStartMs,
+    nextWeekEndMs
+  );
+
+  const weekDates = isoDatesForWeek(weekStartMs, settings.timezone);
+  const dailyReviews = await loadDailyReviewsInRange(
+    userId,
+    weekDates[0]!,
+    weekDates[weekDates.length - 1]!
+  );
+  const reviewsByDate = new Map(dailyReviews.map((r) => [r.date, r] as const));
+  const todayIso = todayIsoInTz(settings.timezone);
+  const todayIdx = weekDates.indexOf(todayIso);
+  const dayIndex = todayIdx >= 0 ? todayIdx : 6;
+  const nextWeekAnchor = isoCalendarDay(nextWeekStartMs, settings.timezone);
+
+  let allocation;
+  let resolvedCatchUpFloors: Record<string, number>;
+
+  if (catchUpMode === "manual") {
+    resolvedCatchUpFloors = weeklyReview.catchUpAdjustments ?? {};
+    allocation = allocateWeek({
+      plan,
+      busy: [...busy, ...systemBlocks],
+      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: niceWeatherThisWeek,
+      settings,
+      weekStartMs,
+      weekEndMs,
+      catchUpFloors: resolvedCatchUpFloors,
+      weekAnchorDate: plan.weekStart
+    });
+  } else {
+    const baselineAllocation = allocateWeek({
+      plan,
+      busy: [...busy, ...systemBlocks],
+      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: niceWeatherThisWeek,
+      settings,
+      weekStartMs,
+      weekEndMs,
+      catchUpFloors: {},
+      weekAnchorDate: plan.weekStart
+    });
+    const effectiveTargetBaseline: Record<string, number> = {};
+    for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
+      effectiveTargetBaseline[id] = m.targetMinutes;
+    }
+    const baselineRollups = computeGoalRollups({
+      goals: schedulingGoals,
+      reviewsByDate,
+      effectiveTargetByGoal: effectiveTargetBaseline,
+      weekDates,
+      dayIndex
+    });
+    resolvedCatchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
+    allocation = allocateWeek({
+      plan,
+      busy: [...busy, ...systemBlocks],
+      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: niceWeatherThisWeek,
+      settings,
+      weekStartMs,
+      weekEndMs,
+      catchUpFloors: resolvedCatchUpFloors,
+      weekAnchorDate: plan.weekStart
+    });
+  }
+
   const allocationNextWeek = allocateWeek({
     plan,
     busy: [...busyNextWeek, ...nextWeekSystemBlocks],
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+    niceWeatherWindows: niceWeatherNextWeek,
     settings,
     weekStartMs: nextWeekStartMs,
-    weekEndMs: nextWeekEndMs
+    weekEndMs: nextWeekEndMs,
+    catchUpFloors: catchUpMode === "automated" ? {} : undefined,
+    weekAnchorDate: nextWeekAnchor
   });
+
+  const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
-  const weatherPreviewBlocks = (
-    await buildWeatherTimemapEvents({
-      userId,
-      windowStartMs: weekStartMs,
-      windowEndMs: nextWeekEndMs,
-      weather: settings.weather,
-      stableUid: buildStableUid
-    })
-  )
+  const weatherPreviewBlocks = weatherTimemapEvents
     .filter((e) => e.title === "[Outside]")
     .map((e) => ({
       sourceId: `weather-${e.startMs}-${e.endMs}`,
@@ -154,14 +278,49 @@ export default async function PlanPage() {
       source: "internal" as const,
       system: "weather" as const
     }));
-  const systemBlocksForCalendar = [...systemBlocks, ...nextWeekSystemBlocks, ...weatherPreviewBlocks];
-  const proposedForCalendar = [...allocation.blocks, ...allocationNextWeek.blocks];
+  const proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
+    [...allocation.blocks, ...allocationNextWeek.blocks],
+    plan,
+    settings.calendars.sources
+  );
+  const gymGoalTravelOverlay = gymGoalTravelBlocksFromProposed(
+    proposedForCalendar,
+    plan.goals,
+    settings.travel,
+    settings.gym
+  );
+  const systemBlocksForCalendar = [
+    ...systemBlocks,
+    ...nextWeekSystemBlocks,
+    ...weatherPreviewBlocks,
+    ...gymGoalTravelOverlay
+  ];
 
   const scheduledByGoal: Record<string, number> = {};
   const effectiveTargetByGoal: Record<string, number> = {};
   for (const [id, m] of Object.entries(allocation.metrics.perGoal)) {
     scheduledByGoal[id] = m.scheduledMinutes;
     effectiveTargetByGoal[id] = m.targetMinutes;
+  }
+
+  // Pace rollups: day-sheet vs final allocator targets for badges.
+  const goalRollups = computeGoalRollups({
+    goals: schedulingGoals,
+    reviewsByDate,
+    effectiveTargetByGoal,
+    weekDates,
+    dayIndex
+  });
+  const paceByGoal: Record<
+    string,
+    { status: import("@/lib/review-rollup").PaceStatus; deltaMinutes: number; actualMinutes: number }
+  > = {};
+  for (const r of goalRollups) {
+    paceByGoal[r.goalId] = {
+      status: r.status,
+      deltaMinutes: r.deltaMinutes,
+      actualMinutes: r.effectiveActualMinutes
+    };
   }
 
   return (
@@ -174,60 +333,13 @@ export default async function PlanPage() {
         </p>
       </header>
 
-      <section className="card">
-        <div className="text-sm font-semibold">Daily routines</div>
-        <p className="mt-1 text-xs text-ink-400">
-          Morning and shutdown routines are reserved around sleep and block planner time-map slots
-          from being placed in the same window.
-        </p>
-        <form action={updateRoutines} className="mt-3 grid gap-3 sm:grid-cols-4">
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              name="morning_enabled"
-              defaultChecked={settings.timemap.morningRoutine.enabled}
-            />
-            <span>Enable morning routine</span>
-          </label>
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              name="shutdown_enabled"
-              defaultChecked={settings.timemap.shutdownRoutine.enabled}
-            />
-            <span>Enable shutdown routine</span>
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            Morning minutes
-            <input
-              type="number"
-              name="morning_minutes"
-              min={0}
-              max={180}
-              step={5}
-              defaultValue={settings.timemap.morningRoutine.minutes}
-              className="field"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            Shutdown minutes
-            <input
-              type="number"
-              name="shutdown_minutes"
-              min={0}
-              max={180}
-              step={5}
-              defaultValue={settings.timemap.shutdownRoutine.minutes}
-              className="field"
-            />
-          </label>
-          <div className="sm:col-span-4">
-            <button type="submit" className="btn-primary w-full text-xs">
-              Save routines
-            </button>
-          </div>
-        </form>
-      </section>
+      {catchUpActive && (
+        <CatchUpBanner
+          adjustments={resolvedCatchUpFloors}
+          goals={schedulingGoals}
+          mode={catchUpMode}
+        />
+      )}
 
       {allocation.metrics.overcommitted ? (
         <Overcommitted
@@ -241,20 +353,84 @@ export default async function PlanPage() {
         left={
           <div className="flex flex-col gap-5">
             <PlanClient
-              initialGoals={plan.goals}
+              initialGoals={schedulingGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.availableMinutes}
               wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
               scheduledByGoal={scheduledByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}
               allocationMode={settings.allocator.allocationMode}
+              paceByGoal={paceByGoal}
             />
+
+            <section className="card">
+              <div className="text-sm font-semibold">Daily routines</div>
+              <p className="mt-1 text-xs text-ink-400">
+                Morning and shutdown routines are reserved around sleep and block planner time-map
+                slots from being placed in the same window.
+              </p>
+              <form action={updateRoutines} className="mt-3 grid gap-4 sm:grid-cols-2">
+                <div className="flex min-w-0 flex-col gap-3">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      name="morning_enabled"
+                      defaultChecked={settings.timemap.morningRoutine.enabled}
+                    />
+                    <span>Enable morning routine</span>
+                  </label>
+                  <label className="flex min-w-0 flex-col gap-1 text-xs">
+                    Morning minutes
+                    <input
+                      type="number"
+                      name="morning_minutes"
+                      min={0}
+                      max={180}
+                      step={5}
+                      defaultValue={settings.timemap.morningRoutine.minutes}
+                      className="field w-full"
+                    />
+                  </label>
+                </div>
+                <div className="flex min-w-0 flex-col gap-3">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      name="shutdown_enabled"
+                      defaultChecked={settings.timemap.shutdownRoutine.enabled}
+                    />
+                    <span>Enable shutdown routine</span>
+                  </label>
+                  <label className="flex min-w-0 flex-col gap-1 text-xs">
+                    Shutdown minutes
+                    <input
+                      type="number"
+                      name="shutdown_minutes"
+                      min={0}
+                      max={180}
+                      step={5}
+                      defaultValue={settings.timemap.shutdownRoutine.minutes}
+                      className="field w-full"
+                    />
+                  </label>
+                </div>
+                <div className="sm:col-span-2">
+                  <button type="submit" className="btn-primary w-full text-xs">
+                    Save routines
+                  </button>
+                </div>
+              </form>
+            </section>
 
             {allocation.metrics.notScheduled.length > 0 && (
               <section className="card border-amber-300/40">
                 <h2 className="text-sm font-semibold">Not scheduled this week</h2>
                 <p className="text-xs text-ink-400">
                   With strict mode on, these goals didn&apos;t fit. Either soften their floors or
-                  switch to proportional in Constraints.
+                  switch to proportional under{" "}
+                  <Link className="underline" href="/dashboard/energy#scheduling-constraints">
+                    Scheduling rules
+                  </Link>{" "}
+                  on Planning.
                 </p>
                 <ul className="mt-2 list-disc pl-5 text-sm">
                   {allocation.metrics.notScheduled.map((n) => (
@@ -327,6 +503,46 @@ function CalendarPreview({
       proposed={proposed}
       compact={compact}
     />
+  );
+}
+
+function CatchUpBanner({
+  adjustments,
+  goals,
+  mode
+}: {
+  adjustments: Record<string, number>;
+  goals: WeeklyPlan["goals"];
+  mode: "automated" | "manual";
+}) {
+  const titleById = new Map(goals.map((g) => [g.id, g.title] as const));
+  const entries = Object.entries(adjustments).filter(([, mins]) => mins !== 0);
+  const summary = entries
+    .map(([id, mins]) => {
+      const title = titleById.get(id) ?? id;
+      const sign = mins > 0 ? "+" : "";
+      return `${title} ${sign}${mins}m`;
+    })
+    .join(", ");
+  const secondaryHref =
+    mode === "automated" ? "/dashboard/energy#scheduling-constraints" : "/dashboard/week-review";
+  const secondaryLabel = mode === "automated" ? "Catch-up settings" : "Adjust catch-up";
+  const blurb =
+    mode === "automated"
+      ? `Based on your day sheet vs baseline targets, extra weekly floors are applied for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`
+      : `Allocator is reserving extra time for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`;
+  return (
+    <section className="card border-amber-300/40 bg-amber-50/30 dark:bg-amber-900/10">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold">Catch-up active</div>
+          <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">{blurb}</p>
+        </div>
+        <Link href={secondaryHref} className="btn-secondary text-xs">
+          {secondaryLabel}
+        </Link>
+      </div>
+    </section>
   );
 }
 

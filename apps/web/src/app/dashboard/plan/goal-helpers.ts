@@ -8,12 +8,15 @@
  */
 
 import type {
+  AttentionMode,
   EnergyMode,
+  EnergyPolarity,
   PpfPillarKey,
   SpecialGoalType,
-  WeeklyGoal
+  WeeklyGoal,
+  WorkLayer
 } from "@calendar-automations/schema";
-import { normaliseGoalTime } from "@calendar-automations/schema";
+import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
 
 export type ChipKind =
   | "min-week"
@@ -22,7 +25,12 @@ export type ChipKind =
   | "max-day"
   | "frequency"
   | "day"
+  | "nice-weather"
+  | "share"
   | "energy"
+  | "polarity"
+  | "attention"
+  | "layer"
   | "wheel"
   | "ppf"
   | "special";
@@ -34,10 +42,43 @@ export interface Chip {
   label: string;
 }
 
+/** Shown on collapsed goal rows; energy / attention / wheel / PPF stay in expand. */
+const SUMMARY_ROW_CHIP_KEYS = new Set<ChipKind>([
+  "special",
+  "min-week",
+  "max-week",
+  "min-day",
+  "max-day",
+  "frequency",
+  "day",
+  "nice-weather",
+  "share"
+]);
+
 const ENERGY_LABELS: Record<EnergyMode, string> = {
   hyperfocus: "Deep focus",
   neutral: "Neutral",
   hyperaware: "Scanning"
+};
+
+export const ENERGY_POLARITY_LABELS: Record<EnergyPolarity, string> = {
+  energise: "Energises",
+  drain: "Drains",
+  neutral: "Neutral energy"
+};
+
+export const ATTENTION_MODE_LABELS: Record<AttentionMode, string> = {
+  hyperfocus: "Hyper focus",
+  hyperaware: "Hyper awareness",
+  unspecified: "Attention: any"
+};
+
+export const WORK_LAYER_LABELS: Record<WorkLayer, string> = {
+  "needle-mover": "Needle mover",
+  execution: "Execution",
+  ops: "Ops / future",
+  play: "Play",
+  unspecified: "Layer: any"
 };
 
 const DAY_LABELS: Record<string, string> = {
@@ -60,7 +101,8 @@ const SPECIAL_GOAL_LABELS: Record<SpecialGoalType, string> = {
   "morning-routine": "Morning routine",
   "shutdown-routine": "Shutdown routine",
   gym: "Gym",
-  errands: "Errands"
+  errands: "Errands",
+  "inverted-timemap": "Calendar time map"
 };
 
 /**
@@ -102,6 +144,12 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   if (goal.maxMinutesPerDay !== undefined) {
     chips.push({ key: "max-day", label: `≤ ${formatMinutes(goal.maxMinutesPerDay)}/day` });
   }
+  if (goal.allocationSharePercent !== undefined) {
+    chips.push({
+      key: "share",
+      label: `${goal.allocationSharePercent}% of remainder`
+    });
+  }
   if (goal.frequencyPerWeek !== undefined) {
     chips.push({ key: "frequency", label: `${goal.frequencyPerWeek}×/wk` });
   }
@@ -114,8 +162,26 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
     const dayLabel = pinnedDays.map((d) => DAY_LABELS[d] ?? d).join(" ");
     chips.push({ key: "day", label: dayLabel });
   }
+  if (goal.scheduleInNiceWeather === true) {
+    chips.push({ key: "nice-weather", label: "Nice weather" });
+  }
   if (goal.energyMode && goal.energyMode !== "neutral") {
     chips.push({ key: "energy", label: ENERGY_LABELS[goal.energyMode] });
+  }
+  if (goal.energyPolarity && goal.energyPolarity !== "neutral") {
+    chips.push({
+      key: "polarity",
+      label: ENERGY_POLARITY_LABELS[goal.energyPolarity]
+    });
+  }
+  if (goal.attentionMode && goal.attentionMode !== "unspecified") {
+    chips.push({
+      key: "attention",
+      label: ATTENTION_MODE_LABELS[goal.attentionMode]
+    });
+  }
+  if (goal.workLayer && goal.workLayer !== "unspecified") {
+    chips.push({ key: "layer", label: WORK_LAYER_LABELS[goal.workLayer] });
   }
   if (goal.wheelAreaId) {
     const label = wheelLabel?.(goal.wheelAreaId) ?? goal.wheelAreaId;
@@ -125,6 +191,11 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
     chips.push({ key: "ppf", label: PPF_LABELS[goal.ppfPillar] });
   }
   return chips;
+}
+
+/** Collapsed list row: time and cadence only (framework matrix tags live under expand). */
+export function summaryChipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => string): Chip[] {
+  return chipsForGoal(goal, wheelLabel).filter((c) => SUMMARY_ROW_CHIP_KEYS.has(c.key));
 }
 
 export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
@@ -171,10 +242,13 @@ export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
  * - `freeMinutes`: total free time across the week (server-computed).
  * - `allocationMode` (default `"even"`):
  *   - `"even"`: goals with a `min` reserve their floor first; remaining minutes
- *     split equally across goals that aren't already capped.
+ *     split fairly across goals that aren't already capped (weekly targets).
+ *     The server allocator also spaces blocks within tight free windows.
  *   - `"finish-early"`: goals are filled in user/priority order up to their
  *     cap. Unbounded goals stay at their floor; leftover free time is shown as
  *     "free time at end".
+ *   - `allocationSharePercent` on a goal weights that goal's slice of the
+ *     post-floor remainder in `"even"` mode only (see allocator).
  */
 export function summariseAllocation(
   goals: readonly WeeklyGoal[],
@@ -189,11 +263,15 @@ export function summariseAllocation(
   perEqualShareMinutes: number;
   allocationMode: "even" | "finish-early";
   finishEarlyLeftoverMinutes: number;
+  /** True when some scheduling goal sets `allocationSharePercent`. */
+  hasWeightedShare: boolean;
 } {
+  const schedulingGoals = filterSchedulingGoals(goals);
+  const hasWeightedShare = schedulingGoals.some((g) => g.allocationSharePercent !== undefined);
   let reserved = 0;
   let equalShareCount = 0;
   let plannedFromCaps = 0;
-  for (const g of goals) {
+  for (const g of schedulingGoals) {
     const norm = normaliseGoalTime(g);
     const floor = norm.minMinutesPerWeek ?? 0;
     reserved += floor;
@@ -211,13 +289,14 @@ export function summariseAllocation(
     allocationMode === "finish-early" ? Math.max(0, remaining - plannedFromCaps) : 0;
   return {
     freeMinutes,
-    goalCount: goals.length,
+    goalCount: schedulingGoals.length,
     reservedMinutes: reserved,
     remainingMinutes: remaining,
     equalShareGoals: equalShareCount,
     perEqualShareMinutes: perEqual,
     allocationMode,
-    finishEarlyLeftoverMinutes: finishEarlyLeftover
+    finishEarlyLeftoverMinutes: finishEarlyLeftover,
+    hasWeightedShare
   };
 }
 

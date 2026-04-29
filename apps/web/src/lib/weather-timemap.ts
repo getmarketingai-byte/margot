@@ -1,4 +1,5 @@
-import type { GeneratedEvent, WeatherSettings } from "@calendar-automations/schema";
+import type { GeneratedEvent, GeocodeCacheEntry, WeatherSettings } from "@calendar-automations/schema";
+import { parseLatLngFromAddress } from "./geocode-address";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -128,6 +129,25 @@ function parseOpenMeteoLocalHour(timeIsoLocal: string, timezone: string): number
   return utcMsForLocalDateAtHour(year, month, day, hour, minute, timezone);
 }
 
+function effectiveForecastCoordinates(
+  weather: WeatherSettings,
+  homeAddress: string | undefined,
+  geocodes: Readonly<Record<string, GeocodeCacheEntry>> | undefined
+): { latitude: number; longitude: number } {
+  const home = homeAddress?.trim();
+  if (!home) {
+    return { latitude: weather.latitude, longitude: weather.longitude };
+  }
+  const parsed = parseLatLngFromAddress(home);
+  if (parsed) return { latitude: parsed.lat, longitude: parsed.lng };
+  const key = home.toLowerCase();
+  const cached = geocodes?.[key];
+  if (cached && typeof cached.lat === "number" && typeof cached.lng === "number") {
+    return { latitude: cached.lat, longitude: cached.lng };
+  }
+  return { latitude: weather.latitude, longitude: weather.longitude };
+}
+
 async function fetchWeather(weather: WeatherSettings): Promise<OpenMeteoResponse> {
   const params = new URLSearchParams({
     latitude: String(weather.latitude),
@@ -178,6 +198,59 @@ function mergeIntervals(intervals: readonly Interval[]): Interval[] {
     }
   }
   return out;
+}
+
+/** Merges overlapping/adjacent ms ranges (no provenance). */
+function mergeMsRanges(ranges: readonly { startMs: number; endMs: number }[]): { startMs: number; endMs: number }[] {
+  if (ranges.length === 0) return [];
+  const sorted = [...ranges]
+    .filter((r) => r.endMs > r.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+  if (sorted.length === 0) return [];
+  const out: { startMs: number; endMs: number }[] = [{ ...sorted[0]! }];
+  for (let i = 1; i < sorted.length; i++) {
+    const cur = sorted[i]!;
+    const last = out[out.length - 1]!;
+    if (cur.startMs <= last.endMs) {
+      if (cur.endMs > last.endMs) last.endMs = cur.endMs;
+    } else {
+      out.push({ ...cur });
+    }
+  }
+  return out;
+}
+
+/** Returns sub-ranges of [sMs, eMs) with merged busy blocks removed. */
+function clipMsRangeAgainstBlocks(
+  sMs: number,
+  eMs: number,
+  blocksMerged: readonly { startMs: number; endMs: number }[]
+): { startMs: number; endMs: number }[] {
+  if (eMs <= sMs) return [];
+  if (blocksMerged.length === 0) return [{ startMs: sMs, endMs: eMs }];
+  const out: { startMs: number; endMs: number }[] = [];
+  let cur = sMs;
+  for (const b of blocksMerged) {
+    if (b.endMs <= cur) continue;
+    if (b.startMs >= eMs) break;
+    if (b.startMs > cur) out.push({ startMs: cur, endMs: Math.min(b.startMs, eMs) });
+    cur = Math.max(cur, b.endMs);
+    if (cur >= eMs) return out;
+  }
+  if (cur < eMs) out.push({ startMs: cur, endMs: eMs });
+  return out;
+}
+
+function subtractSleepFromIntervals(intervals: readonly Interval[], blocks: { startMs: number; endMs: number }[]): Interval[] {
+  if (blocks.length === 0) return [...intervals];
+  const pieces: Interval[] = [];
+  for (const iv of intervals) {
+    for (const f of clipMsRangeAgainstBlocks(iv.startMs, iv.endMs, blocks)) {
+      if (f.endMs <= f.startMs) continue;
+      pieces.push({ startMs: f.startMs, endMs: f.endMs, source: iv.source });
+    }
+  }
+  return mergeIntervals(pieces);
 }
 
 function invertIntervals(
@@ -233,14 +306,28 @@ export async function buildWeatherTimemapEvents(params: {
   windowEndMs: number;
   weather: WeatherSettings;
   stableUid: (parts: readonly (string | number)[]) => string;
+  /** When set, Open-Meteo / sunrise use coords from this string (see Travel home address). */
+  homeAddress?: string;
+  /** Canonical geocode cache (same keys as travel routing); optional read-only slice. */
+  geocodes?: Readonly<Record<string, GeocodeCacheEntry>>;
+  /** When set (e.g. computed sleep blocks), clips [Outside]/[Inside] so they do not overlap sleep. */
+  sleepBlockMs?: readonly { startMs: number; endMs: number }[];
 }): Promise<GeneratedEvent[]> {
-  const { userId, windowStartMs, windowEndMs, weather, stableUid } = params;
+  const { userId, windowStartMs, windowEndMs, weather, stableUid, sleepBlockMs, homeAddress, geocodes } =
+    params;
   if (!weather.enabled) return [];
   if (windowEndMs <= windowStartMs) return [];
 
+  const coords = effectiveForecastCoordinates(weather, homeAddress, geocodes);
+  const weatherAtHome: WeatherSettings = {
+    ...weather,
+    latitude: coords.latitude,
+    longitude: coords.longitude
+  };
+
   const outside: Interval[] = [];
   try {
-    const raw = await fetchWeather(weather);
+    const raw = await fetchWeather(weatherAtHome);
     const hourly = raw.hourly;
     if (!hourly || hourly.time.length === 0) return [];
     let inNice = false;
@@ -248,7 +335,7 @@ export async function buildWeatherTimemapEvents(params: {
     let lastForecastStopMs = 0;
 
     for (let i = 0; i < hourly.time.length; i++) {
-      const timeMs = parseOpenMeteoLocalHour(hourly.time[i]!, weather.timezone);
+      const timeMs = parseOpenMeteoLocalHour(hourly.time[i]!, weatherAtHome.timezone);
       if (!Number.isFinite(timeMs)) continue;
       const hourlyPoint = {
         precipitation_probability: hourly.precipitation_probability[i] ?? 100,
@@ -257,7 +344,7 @@ export async function buildWeatherTimemapEvents(params: {
         uv_index: hourly.uv_index[i] ?? 999,
         is_day: hourly.is_day[i] ?? 0
       };
-      const nice = isNiceWeather(hourlyPoint, weather);
+      const nice = isNiceWeather(hourlyPoint, weatherAtHome);
       if (timeMs >= windowStartMs - HOUR_MS && timeMs <= windowEndMs) {
         if (nice && !inNice) {
           inNice = true;
@@ -287,20 +374,25 @@ export async function buildWeatherTimemapEvents(params: {
     }
 
     const shouldUseSun =
-      weather.useSunriseSunsetBeyondForecast || weather.extendInsideOutsideBeyondForecast;
+      weatherAtHome.useSunriseSunsetBeyondForecast || weatherAtHome.extendInsideOutsideBeyondForecast;
     if (shouldUseSun && outside.length > 0) {
       const lastStop = Math.max(...outside.map((i) => i.endMs));
-      const firstSunDayParts = toDateParts(lastStop + DAY_MS, weather.timezone);
+      const firstSunDayParts = toDateParts(lastStop + DAY_MS, weatherAtHome.timezone);
       let dayCursor = utcMsForLocalDateAtHour(
         firstSunDayParts.year,
         firstSunDayParts.month,
         firstSunDayParts.day,
         6,
         0,
-        weather.timezone
+        weatherAtHome.timezone
       );
       while (dayCursor <= windowEndMs) {
-        const sun = await fetchSunriseSunset(weather.latitude, weather.longitude, dayCursor, weather.timezone);
+        const sun = await fetchSunriseSunset(
+          weatherAtHome.latitude,
+          weatherAtHome.longitude,
+          dayCursor,
+          weatherAtHome.timezone
+        );
         if (sun) {
           const s = Math.max(sun.sunriseMs, windowStartMs);
           const e = Math.min(sun.sunsetMs, windowEndMs);
@@ -314,7 +406,7 @@ export async function buildWeatherTimemapEvents(params: {
     return [];
   }
 
-  const mergedOutside = mergeIntervals(
+  let mergedOutside = mergeIntervals(
     outside
       .map((i) => ({
         startMs: Math.max(windowStartMs, i.startMs),
@@ -324,8 +416,11 @@ export async function buildWeatherTimemapEvents(params: {
       .filter((i) => i.endMs > i.startMs)
   );
 
-  const inside = invertIntervals(windowStartMs, windowEndMs, mergedOutside, true, weather.timezone);
-  if (weather.extendInsideOutsideBeyondForecast) {
+  const sleepMerged = mergeMsRanges(sleepBlockMs ?? []);
+  mergedOutside = subtractSleepFromIntervals(mergedOutside, sleepMerged);
+
+  const inside = invertIntervals(windowStartMs, windowEndMs, mergedOutside, true, weatherAtHome.timezone);
+  if (weatherAtHome.extendInsideOutsideBeyondForecast) {
     for (const out of mergedOutside) {
       if (out.source === "sun") inside.push({ startMs: out.startMs, endMs: out.endMs });
     }
@@ -336,6 +431,12 @@ export async function buildWeatherTimemapEvents(params: {
     if (i.endMs <= i.startMs) continue;
     dedupInside.set(`${i.startMs}_${i.endMs}`, i);
   }
+
+  const insideAfterSleep: { startMs: number; endMs: number }[] = [];
+  for (const i of dedupInside.values()) {
+    insideAfterSleep.push(...clipMsRangeAgainstBlocks(i.startMs, i.endMs, sleepMerged));
+  }
+  const mergedInsideDisplay = mergeMsRanges(insideAfterSleep);
 
   const events: GeneratedEvent[] = [];
   for (const out of mergedOutside) {
@@ -349,7 +450,7 @@ export async function buildWeatherTimemapEvents(params: {
       tags: ["weather", "outside"]
     });
   }
-  for (const i of dedupInside.values()) {
+  for (const i of mergedInsideDisplay) {
     events.push({
       uid: stableUid([userId, "weather", "inside", i.startMs, i.endMs]),
       kind: "timemap",

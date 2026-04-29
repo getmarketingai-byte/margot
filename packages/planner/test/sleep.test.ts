@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SleepSettings } from "@calendar-automations/schema";
-import { placeSleepBlock } from "../src/sleep";
+import { formatSleepBlockTitle, placeSleepBlock } from "../src/sleep";
 import type { BusyEvent } from "../src/types";
 
 // Helper: night runs 20:00 day 0 → 12:00 day 1 in epoch ms anchored at 0.
@@ -27,6 +27,23 @@ function ev(startMs: number, endMs: number, title = "Conflict"): BusyEvent {
   return { sourceId: title, title, startMs, endMs, busy: true, source: "google" };
 }
 
+describe("formatSleepBlockTitle", () => {
+  it("adds conflict context when sleep moved out of the ideal target window", () => {
+    const p = {
+      startMs: 0,
+      endMs: 6 * HOUR,
+      split: false,
+      underMinimum: true,
+      placement: "largest-gap" as const,
+      targetHadOverlap: true,
+      targetOverlapTitle: "Neutrino Growth"
+    };
+    expect(formatSleepBlockTitle(p, 8)).toBe(
+      "Sleep (less than ideal sleep 6h, conflicts: Neutrino Growth)"
+    );
+  });
+});
+
 describe("placeSleepBlock", () => {
   it("places sleep ending at the target wake when no conflicts exist", () => {
     const result = placeSleepBlock(NIGHT_START, NIGHT_END, [], baseSleep, {
@@ -37,7 +54,10 @@ describe("placeSleepBlock", () => {
         startMs: IDEAL_WAKE - 8 * HOUR, // 23:00 day 0
         endMs: IDEAL_WAKE,
         split: false,
-        underMinimum: false
+        underMinimum: false,
+        placement: "target",
+        targetHadOverlap: false,
+        targetOverlapTitle: null
       }
     ]);
   });
@@ -51,7 +71,10 @@ describe("placeSleepBlock", () => {
       startMs: earlierWake - 8 * HOUR, // 21:00 day 0
       endMs: earlierWake,
       split: false,
-      underMinimum: false
+      underMinimum: false,
+      placement: "target",
+      targetHadOverlap: false,
+      targetOverlapTitle: null
     });
   });
 
@@ -70,6 +93,8 @@ describe("placeSleepBlock", () => {
     // Should place sleep AFTER the late shift — gap-search picks the latest fit.
     expect(block.startMs).toBeGreaterThanOrEqual(lateEvent.endMs);
     expect(block.endMs - block.startMs).toBe(8 * HOUR);
+    expect(block.placement).toBe("gap");
+    expect(block.targetHadOverlap).toBe(true);
   });
 
   it("splits across two large gaps when no single gap fits", () => {
@@ -111,6 +136,7 @@ describe("placeSleepBlock", () => {
     expect(result[0]!.endMs).toBe(24 * HOUR + 3 * HOUR);
     // 7h block — under the 8h ideal but still flagged.
     expect(result[0]!.underMinimum).toBe(true);
+    expect(result[0]!.placement).toBe("target");
   });
 
   it("falls back to windowEnd when no target is provided", () => {
@@ -118,6 +144,7 @@ describe("placeSleepBlock", () => {
     // No target → defaults to windowEndMs (12:00 day 1).
     expect(result[0]!.endMs).toBe(NIGHT_END);
     expect(result[0]!.startMs).toBe(NIGHT_END - 8 * HOUR);
+    expect(result[0]!.placement).toBe("target");
   });
 
   it("returns a drag override verbatim, ignoring busy and target", () => {
@@ -134,7 +161,10 @@ describe("placeSleepBlock", () => {
         startMs: override.startMs,
         endMs: override.endMs,
         split: false,
-        underMinimum: false
+        underMinimum: false,
+        placement: "override",
+        targetHadOverlap: false,
+        targetOverlapTitle: null
       }
     ]);
   });
@@ -143,6 +173,7 @@ describe("placeSleepBlock", () => {
     const override = { startMs: 23 * HOUR, endMs: 24 * HOUR + 4 * HOUR }; // 5h
     const result = placeSleepBlock(NIGHT_START, NIGHT_END, [], baseSleep, { override });
     expect(result[0]!.underMinimum).toBe(true);
+    expect(result[0]!.placement).toBe("override");
   });
 
   it("ignores an empty override and falls through to the target search", () => {
@@ -152,5 +183,6 @@ describe("placeSleepBlock", () => {
       override
     });
     expect(result[0]!.endMs).toBe(IDEAL_WAKE);
+    expect(result[0]!.placement).toBe("target");
   });
 });

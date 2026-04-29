@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { getStripe, hasActiveSubscription } from "@/lib/stripe";
 
@@ -26,7 +26,7 @@ function resolvePriceId(plan: Plan): string | null {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id || !session.user.email) {
     return new NextResponse("Unauthorized", { status: 401 });
   }

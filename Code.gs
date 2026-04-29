@@ -106,6 +106,7 @@ async function Update_InsideOutsideTimemap() //rolls daylight and nice weather i
       desiredOutside.push({ title: "[Outside]", start: s, end: e, key: String(s.getTime()) });
     }
   }
+  desiredOutside = _timeMapSubtractSleepFromDesired(desiredOutside, startDate, endDate);
   _syncCalendarEvents(timemap_cal, "[Outside]", startDate, endDate, desiredOutside, {
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });
@@ -900,6 +901,74 @@ function get_WeatherData() {
   return _processWeatherRawToNewData(data);
 }
 
+/**
+ * Non-all-day [SLEEP] events on SLEEP_CALENDAR_ID, merged (uses _timeMapMergeIntervals in TimeMapBlocks.gs).
+ */
+function _timeMapCollectSleepBlockingIntervalsMs(rangeStart, rangeEnd) {
+  var out = [];
+  if (typeof SLEEP_CALENDAR_ID === "undefined" || typeof SLEEP_EVENT_TAG === "undefined") return out;
+  var cal = CalendarApp.getCalendarById(SLEEP_CALENDAR_ID);
+  if (!cal) return out;
+  var evs = cal.getEvents(rangeStart, rangeEnd, { search: SLEEP_EVENT_TAG });
+  for (var i = 0; i < evs.length; i++) {
+    var ev = evs[i];
+    if (ev.isAllDayEvent()) continue;
+    var s = ev.getStartTime().getTime();
+    var e = ev.getEndTime().getTime();
+    if (e > s) out.push({ startMs: s, endMs: e });
+  }
+  return _timeMapMergeIntervals(out);
+}
+
+/**
+ * Returns sub-intervals of [sMs, eMs) with merged busy blocks removed.
+ */
+function _timeMapClipOneIntervalMs(sMs, eMs, blocksMerged) {
+  if (eMs <= sMs) return [];
+  if (!blocksMerged || blocksMerged.length === 0) return [{ startMs: sMs, endMs: eMs }];
+  var out = [];
+  var cur = sMs;
+  for (var i = 0; i < blocksMerged.length; i++) {
+    var b = blocksMerged[i];
+    if (b.endMs <= cur) continue;
+    if (b.startMs >= eMs) break;
+    if (b.startMs > cur) out.push({ startMs: cur, endMs: Math.min(b.startMs, eMs) });
+    cur = Math.max(cur, b.endMs);
+    if (cur >= eMs) return out;
+  }
+  if (cur < eMs) out.push({ startMs: cur, endMs: eMs });
+  return out;
+}
+
+/**
+ * Clips timemap desired segments so they do not overlap sleep (weather [Outside], inverted maps like [Inside] / [Not@work]).
+ * Re-keys by clipped start ms for stable sync with _syncCalendarEvents.
+ */
+function _timeMapSubtractSleepFromDesired(desiredArr, rangeStart, rangeEnd) {
+  if (!desiredArr || desiredArr.length === 0) return desiredArr || [];
+  var blocks = _timeMapCollectSleepBlockingIntervalsMs(rangeStart, rangeEnd);
+  if (!blocks || blocks.length === 0) return desiredArr;
+  var result = [];
+  for (var i = 0; i < desiredArr.length; i++) {
+    var d = desiredArr[i];
+    var sMs = d.start.getTime();
+    var eMs = d.end.getTime();
+    if (eMs <= sMs) continue;
+    var clipped = _timeMapClipOneIntervalMs(sMs, eMs, blocks);
+    for (var j = 0; j < clipped.length; j++) {
+      var c = clipped[j];
+      if (c.endMs <= c.startMs) continue;
+      result.push({
+        title: d.title,
+        start: new Date(c.startMs),
+        end: new Date(c.endMs),
+        key: String(c.startMs)
+      });
+    }
+  }
+  return result;
+}
+
 function _Update_NonWorkTimemap(timemap_cal, startDate, endDate) {
   return _Update_InvertedTimemap(timemap_cal, startDate, endDate, '[Work_Office]', '[Not@work]', WORK_NONWORK_BUFFER_MINUTES);
 }
@@ -959,6 +1028,7 @@ async function _Update_InvertedTimemap(timemap_cal, startDate, endDate, OrigTime
     i++;
   } while (i <= Main_events.length);
 
+  desiredInside = _timeMapSubtractSleepFromDesired(desiredInside, startDate, endDate);
   _syncCalendarEvents(timemap_cal, InvertedTimemap, startDate, endDate, desiredInside, {
     keyFromExisting: function (ev) { return String(ev.getStartTime().getTime()); }
   });

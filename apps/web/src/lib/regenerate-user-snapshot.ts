@@ -8,12 +8,14 @@ import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
 import { fetchGoogleBusy } from "./google-calendar";
+import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
 import { loadSettings } from "./settings-store";
 import { saveSnapshot } from "./snapshots";
+import { outsideNiceWeatherIntervalsInRange } from "./nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "./weather-timemap";
 import { buildSystemBlocks, overridesFromPlan } from "./system-blocks-server";
-import { localMondayMidnightMs } from "./week";
-import type { SystemBlock } from "./week-blocks";
+import { isoCalendarDay, localMondayMidnightMs } from "./week";
+import { gymGoalTravelBlocksFromProposed, type SystemBlock } from "./week-blocks";
 
 /** Minimum age of the latest snapshot before a feed request triggers Google + replan. */
 export const FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS = 3 * 60 * 1000;
@@ -101,27 +103,49 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     overrides: overridesFromPlan(plan ?? undefined),
     nowMs: now
   });
-  const systemEvents = systemBlocks.map((b) => toGeneratedSystemEvent(userId, b));
-
-  const events =
-    plan
-      ? allocateWeek({
-          plan,
-          busy: [...busy, ...systemBlocks],
-          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-          settings,
-          weekStartMs,
-          weekEndMs
-        }).blocks.map((b) => toGeneratedEvent(userId, plan, b))
-      : [];
-
+  const sleepBlockMs = systemBlocks
+    .filter((b) => b.system === "sleep")
+    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
   const weatherTimemapEvents = await buildWeatherTimemapEvents({
     userId,
     windowStartMs: window.startMs,
     windowEndMs: window.endMs,
     weather: settings.weather,
-    stableUid: buildStableUid
+    homeAddress: settings.travel.homeAddress,
+    geocodes: settings.travelCache?.geocodes,
+    stableUid: buildStableUid,
+    sleepBlockMs
   });
+  const niceWeatherWindows = outsideNiceWeatherIntervalsInRange(
+    weatherTimemapEvents,
+    weekStartMs,
+    weekEndMs
+  );
+  const proposedBlocks =
+    plan != null
+      ? filterInvertedTimemapFromProposedBlocks(
+          allocateWeek({
+            plan,
+            busy: [...busy, ...systemBlocks],
+            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+            niceWeatherWindows,
+            settings,
+            weekStartMs,
+            weekEndMs,
+            weekAnchorDate: isoCalendarDay(weekStartMs, settings.timezone)
+          }).blocks,
+          plan,
+          settings.calendars.sources
+        )
+      : [];
+  const events = plan ? proposedBlocks.map((b) => toGeneratedEvent(userId, plan, b)) : [];
+  const gymTravelBlocks = plan
+    ? gymGoalTravelBlocksFromProposed(proposedBlocks, plan.goals, settings.travel, settings.gym)
+    : [];
+  const systemEvents = [
+    ...systemBlocks.map((b) => toGeneratedSystemEvent(userId, b)),
+    ...gymTravelBlocks.map((b) => toGeneratedSystemEvent(userId, b))
+  ];
 
   const mergedEvents = [...events, ...systemEvents, ...weatherTimemapEvents].sort(
     (a, b) => a.startMs - b.startMs

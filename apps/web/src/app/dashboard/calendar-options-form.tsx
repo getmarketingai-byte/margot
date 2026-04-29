@@ -10,7 +10,7 @@ interface CalendarOptionsFormProps {
   displayName: string;
   defaultColor: string;
   defaultBusyMode: BusyHandlingMode;
-  defaultInvertedGoalTitle: string;
+  defaultInvertedTimemapLabel: string;
 }
 
 export function CalendarOptionsForm({
@@ -19,10 +19,10 @@ export function CalendarOptionsForm({
   displayName,
   defaultColor,
   defaultBusyMode,
-  defaultInvertedGoalTitle
+  defaultInvertedTimemapLabel
 }: CalendarOptionsFormProps) {
   const [busyMode, setBusyMode] = useState<BusyHandlingMode>(defaultBusyMode);
-  const [goalTitle, setGoalTitle] = useState(defaultInvertedGoalTitle);
+  const [timemapLabel, setTimemapLabel] = useState(defaultInvertedTimemapLabel);
   const isInverted = busyMode === "invert-free-busy";
 
   return (
@@ -49,19 +49,19 @@ export function CalendarOptionsForm({
           <option value="busy-only">Only events marked busy block time</option>
           <option value="all-events">All events block time</option>
           <option value="invert-free-busy">
-            Inverted free/busy (goal must fit this calendar&apos;s free time)
+            Invert free/busy — time map of when this calendar is free (like weather)
           </option>
           <option value="ignore">Ignore this calendar for planning</option>
         </select>
       </label>
       {isInverted ? (
         <label className="flex min-w-64 flex-col gap-1 text-xs text-ink-500">
-          Inverted goal name
+          Label on your time map
           <input
-            name="invertedGoalTitle"
-            value={goalTitle}
-            onChange={(event) => setGoalTitle(event.target.value)}
-            placeholder="e.g. Catch up with Sarah"
+            name="invertedTimemapLabel"
+            value={timemapLabel}
+            onChange={(event) => setTimemapLabel(event.target.value)}
+            placeholder="e.g. Sarah available"
             className="h-9 rounded border border-ink-200 bg-white px-2 text-sm text-ink-900 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100"
             required
           />
@@ -72,7 +72,9 @@ export function CalendarOptionsForm({
       </button>
       {isInverted ? (
         <p className="w-full text-[11px] text-ink-400">
-          This creates a goal if it does not already exist.
+          Busy times on this calendar become &quot;outside&quot;; free gaps are written into your
+          plan under this label so scheduling can read them as data (same idea as a weather
+          time map).
         </p>
       ) : null}
     </form>

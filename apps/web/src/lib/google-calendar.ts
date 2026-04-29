@@ -118,6 +118,9 @@ export async function fetchGoogleBusy(
           const goalId = normalized.availabilityGoalId;
           if (!goalId || !eventIsBusy) continue;
           (blockedByGoal[goalId] ??= []).push({ startMs, endMs });
+          // Do not push into `busyEvents`: this calendar is a time-map readout
+          // (free vs busy on their calendar), not something that should block the
+          // user's own scheduling or appear in the "Existing" layer.
           continue;
         }
         busyEvents.push({

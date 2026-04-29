@@ -151,3 +151,37 @@ export const jobLocks = pgTable("job_lock", {
   acquiredAt: timestamp("acquiredAt", { mode: "date" }).defaultNow().notNull(),
   expiresAt: timestamp("expiresAt", { mode: "date" }).notNull()
 });
+
+export const dailyReviews = pgTable(
+  "daily_review",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    timezone: text("timezone").notNull(),
+    data: jsonb("data").notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow().notNull()
+  },
+  (table) => ({
+    perUserDate: uniqueIndex("daily_review_user_date").on(table.userId, table.date)
+  })
+);
+
+export const weeklyReviews = pgTable(
+  "weekly_review",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    weekStart: text("weekStart").notNull(),
+    timezone: text("timezone").notNull(),
+    data: jsonb("data").notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow().notNull()
+  },
+  (table) => ({
+    perUserWeek: uniqueIndex("weekly_review_user_week").on(table.userId, table.weekStart)
+  })
+);

@@ -207,6 +207,52 @@ ALTER TABLE "job_lock" ALTER COLUMN "userId" SET NOT NULL;
 ALTER TABLE "job_lock" ALTER COLUMN "acquiredAt" SET NOT NULL;
 ALTER TABLE "job_lock" ALTER COLUMN "expiresAt" SET NOT NULL;
 
+CREATE TABLE IF NOT EXISTS "daily_review" (
+  "id" text PRIMARY KEY NOT NULL,
+  "userId" text NOT NULL,
+  "date" text NOT NULL,
+  "timezone" text NOT NULL,
+  "data" jsonb NOT NULL,
+  "updatedAt" timestamp DEFAULT now() NOT NULL
+);
+
+ALTER TABLE "daily_review" ADD COLUMN IF NOT EXISTS "id" text;
+ALTER TABLE "daily_review" ADD COLUMN IF NOT EXISTS "userId" text;
+ALTER TABLE "daily_review" ADD COLUMN IF NOT EXISTS "date" text;
+ALTER TABLE "daily_review" ADD COLUMN IF NOT EXISTS "timezone" text;
+ALTER TABLE "daily_review" ADD COLUMN IF NOT EXISTS "data" jsonb;
+ALTER TABLE "daily_review" ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now();
+ALTER TABLE "daily_review" ALTER COLUMN "userId" SET NOT NULL;
+ALTER TABLE "daily_review" ALTER COLUMN "date" SET NOT NULL;
+ALTER TABLE "daily_review" ALTER COLUMN "timezone" SET NOT NULL;
+ALTER TABLE "daily_review" ALTER COLUMN "data" SET NOT NULL;
+ALTER TABLE "daily_review" ALTER COLUMN "updatedAt" SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "daily_review_user_date" ON "daily_review" ("userId", "date");
+
+CREATE TABLE IF NOT EXISTS "weekly_review" (
+  "id" text PRIMARY KEY NOT NULL,
+  "userId" text NOT NULL,
+  "weekStart" text NOT NULL,
+  "timezone" text NOT NULL,
+  "data" jsonb NOT NULL,
+  "updatedAt" timestamp DEFAULT now() NOT NULL
+);
+
+ALTER TABLE "weekly_review" ADD COLUMN IF NOT EXISTS "id" text;
+ALTER TABLE "weekly_review" ADD COLUMN IF NOT EXISTS "userId" text;
+ALTER TABLE "weekly_review" ADD COLUMN IF NOT EXISTS "weekStart" text;
+ALTER TABLE "weekly_review" ADD COLUMN IF NOT EXISTS "timezone" text;
+ALTER TABLE "weekly_review" ADD COLUMN IF NOT EXISTS "data" jsonb;
+ALTER TABLE "weekly_review" ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now();
+ALTER TABLE "weekly_review" ALTER COLUMN "userId" SET NOT NULL;
+ALTER TABLE "weekly_review" ALTER COLUMN "weekStart" SET NOT NULL;
+ALTER TABLE "weekly_review" ALTER COLUMN "timezone" SET NOT NULL;
+ALTER TABLE "weekly_review" ALTER COLUMN "data" SET NOT NULL;
+ALTER TABLE "weekly_review" ALTER COLUMN "updatedAt" SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "weekly_review_user_week" ON "weekly_review" ("userId", "weekStart");
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -274,6 +320,30 @@ BEGIN
   ) THEN
     ALTER TABLE "feed_token"
       ADD CONSTRAINT "feed_token_userId_user_id_fk"
+      FOREIGN KEY ("userId") REFERENCES "public"."user"("id")
+      ON DELETE cascade ON UPDATE no action;
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'daily_review_userId_user_id_fk'
+  ) THEN
+    ALTER TABLE "daily_review"
+      ADD CONSTRAINT "daily_review_userId_user_id_fk"
+      FOREIGN KEY ("userId") REFERENCES "public"."user"("id")
+      ON DELETE cascade ON UPDATE no action;
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'weekly_review_userId_user_id_fk'
+  ) THEN
+    ALTER TABLE "weekly_review"
+      ADD CONSTRAINT "weekly_review_userId_user_id_fk"
       FOREIGN KEY ("userId") REFERENCES "public"."user"("id")
       ON DELETE cascade ON UPDATE no action;
   END IF;

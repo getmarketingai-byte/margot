@@ -13,6 +13,7 @@ import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
 import type { SystemBlock } from "@/lib/week-blocks";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
+import { DraggableProposedGoalBlock } from "./draggable-proposed-goal-block";
 import { DraggableSystemBlock } from "./draggable-system-block";
 
 interface WeekCalendarProps {
@@ -47,6 +48,28 @@ interface WeekCalendarProps {
 }
 
 const PX_PER_HOUR = 30;
+
+function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/** Sleep, routines, calendar busy, and travel — goal drags must not land on top. */
+function buildReservedIntervalsForGoalDrag(
+  busy: readonly BusyEvent[],
+  system: readonly SystemBlock[]
+): { startMs: number; endMs: number }[] {
+  const out: { startMs: number; endMs: number }[] = [];
+  for (const b of busy) {
+    if (b.busy === false) continue;
+    out.push({ startMs: b.startMs, endMs: b.endMs });
+  }
+  for (const s of system) {
+    if (s.system === "sleep" || s.system === "routine" || s.system === "travel") {
+      out.push({ startMs: s.startMs, endMs: s.endMs });
+    }
+  }
+  return out;
+}
 
 interface PositionedBlock {
   dayIndex: number; // 0=Mon ... 6=Sun, can extend beyond 6 for rolling views.
@@ -161,6 +184,79 @@ function position(
 }
 
 /**
+ * True when some portion of `[startMs, endMs)` falls on calendar day
+ * `targetDayIdx` (relative to `weekStartMs`) and that portion lies entirely
+ * before `startHour` — so `position(..., startHour, endHour)` renders nothing
+ * for that day even though sleep exists (common after conflict-driven
+ * placement into the small hours).
+ */
+function sleepSegmentFullyBeforeVisibleStart(
+  startMs: number,
+  endMs: number,
+  weekStartMs: number,
+  timezone: string,
+  targetDayIdx: number,
+  startHour: number
+): boolean {
+  const startParts = partsInTimezone(startMs, timezone);
+  const weekParts = partsInTimezone(weekStartMs, timezone);
+  const startDayIndex = daysBetween(weekParts, startParts);
+  const startMinuteOfDay = startParts.hour * 60 + startParts.minute;
+  const durationMin = Math.max(15, Math.floor((endMs - startMs) / 60_000));
+  const endMinuteAbs = startMinuteOfDay + durationMin;
+  const windowStart = startHour * 60;
+
+  let cursor = startMinuteOfDay;
+  let dayIndex = startDayIndex;
+  while (cursor < endMinuteAbs && dayIndex >= 0) {
+    const dayBoundary = dayIndex === startDayIndex ? 1440 : (dayIndex - startDayIndex + 1) * 1440;
+    const nextBoundary = Math.min(endMinuteAbs, dayBoundary);
+    const thisDayBase = (dayIndex - startDayIndex) * 1440;
+    const localStart = cursor - thisDayBase;
+    const localEnd = nextBoundary - thisDayBase;
+
+    if (
+      dayIndex === targetDayIdx &&
+      localEnd > localStart &&
+      localStart < windowStart &&
+      localEnd <= windowStart
+    ) {
+      return true;
+    }
+
+    cursor = nextBoundary;
+    dayIndex++;
+  }
+  return false;
+}
+
+function preWindowSleepTitlesForDay(
+  system: readonly SystemBlock[],
+  weekStartMs: number,
+  timezone: string,
+  targetDayIdx: number,
+  startHour: number
+): string[] {
+  const titles: string[] = [];
+  for (const b of system) {
+    if (b.system !== "sleep") continue;
+    if (
+      sleepSegmentFullyBeforeVisibleStart(
+        b.startMs,
+        b.endMs,
+        weekStartMs,
+        timezone,
+        targetDayIdx,
+        startHour
+      )
+    ) {
+      titles.push(b.title);
+    }
+  }
+  return titles;
+}
+
+/**
  * Whole-day delta between two timezone-aware date components. Day index 0
  * corresponds to `from` itself.
  */
@@ -171,6 +267,69 @@ function daysBetween(
   const a = Date.UTC(from.year, from.month - 1, from.day);
   const b = Date.UTC(to.year, to.month - 1, to.day);
   return Math.round((b - a) / (24 * 60 * 60 * 1000));
+}
+
+type GoalCalendarSlice = {
+  dragKey: string;
+  startMs: number;
+  endMs: number;
+  dragOverrideSaved?: boolean;
+};
+
+type ProposedPositioned = PositionedBlock & {
+  isSegment: boolean;
+  color: string;
+  goalId?: string;
+  /** Present when the allocator attached drag keys (merged bars concatenate slices). */
+  goalSlices?: GoalCalendarSlice[];
+};
+
+/**
+ * The allocator may emit several back-to-back blocks for one goal on the same
+ * day. After `position()` they become vertically adjacent rectangles; merge
+ * them so the week grid shows a single continuous bar (same UX as one slot).
+ */
+function mergeAdjacentProposedSameGoal(blocks: ProposedPositioned[]): ProposedPositioned[] {
+  if (blocks.length <= 1) return blocks;
+  const byDay = new Map<number, ProposedPositioned[]>();
+  for (const b of blocks) {
+    const list = byDay.get(b.dayIndex);
+    if (list) list.push(b);
+    else byDay.set(b.dayIndex, [b]);
+  }
+  const out: ProposedPositioned[] = [];
+  /** Sub-pixel tolerance only; real time gaps stay separate. */
+  const edgeEpsPx = 1;
+  for (const dayBlocks of byDay.values()) {
+    dayBlocks.sort((a, b) => a.topPx - b.topPx || a.heightPx - b.heightPx);
+    let cur = dayBlocks[0]!;
+    for (let i = 1; i < dayBlocks.length; i++) {
+      const next = dayBlocks[i]!;
+      const sameGoal =
+        Boolean(cur.goalId) &&
+        cur.goalId === next.goalId &&
+        cur.color === next.color &&
+        Math.abs(cur.topPx + cur.heightPx - next.topPx) <= edgeEpsPx;
+      if (sameGoal) {
+        const mergedSlices =
+          cur.goalSlices || next.goalSlices
+            ? [...(cur.goalSlices ?? []), ...(next.goalSlices ?? [])]
+            : undefined;
+        cur = {
+          ...cur,
+          heightPx: next.topPx + next.heightPx - cur.topPx,
+          clippedBottom: next.clippedBottom,
+          isSegment: cur.isSegment || next.isSegment,
+          goalSlices: mergedSlices
+        };
+      } else {
+        out.push(cur);
+        cur = next;
+      }
+    }
+    out.push(cur);
+  }
+  return out;
 }
 
 export function WeekCalendar({
@@ -232,25 +391,42 @@ export function WeekCalendar({
     }
   }
 
-  const proposedPositions: Array<
-    PositionedBlock & { isSegment: boolean; color: string; goalId?: string }
-  > = [];
+  const proposedPositionsRaw: ProposedPositioned[] = [];
   for (const b of proposed) {
     const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+    const gid = b.goalId;
+    const canDragSlices =
+      Boolean(b.dragKey) &&
+      !b.segment &&
+      Boolean(gid) &&
+      !String(gid).startsWith("segment:");
     for (const s of slices) {
-      proposedPositions.push({
+      proposedPositionsRaw.push({
         ...s,
         isSegment: Boolean(b.segment),
-        color: goalColorFromKey(b.goalId || b.title),
-        goalId: b.goalId
+        color: goalColorFromKey(gid || b.title),
+        goalId: gid,
+        goalSlices:
+          canDragSlices && b.dragKey
+            ? [
+                {
+                  dragKey: b.dragKey,
+                  startMs: b.startMs,
+                  endMs: b.endMs,
+                  dragOverrideSaved: b.dragOverrideSaved
+                }
+              ]
+            : undefined
       });
     }
   }
+  const proposedPositions = mergeAdjacentProposedSameGoal(proposedPositionsRaw);
 
   const hasSleep = systemPositions.some((p) => p.kind === "sleep");
   const hasTravel = systemPositions.some((p) => p.kind === "travel");
   const hasRoutine = systemPositions.some((p) => p.kind === "routine");
   const hasWeather = systemPositions.some((p) => p.kind === "weather");
+  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system);
 
   return (
     <div className="card p-3">
@@ -272,13 +448,32 @@ export function WeekCalendar({
 
           <HourColumn startHour={startHour} endHour={endHour} />
 
-          {days.map((dayIdx) => (
+          {days.map((dayIdx) => {
+            const earlySleepTitles = preWindowSleepTitlesForDay(
+              system,
+              weekStartMs,
+              timezone,
+              dayIdx,
+              startHour
+            );
+            return (
             <div
               key={dayIdx}
+              data-week-day-index={dayIdx}
               className="relative rounded border border-ink-200 dark:border-ink-600"
               style={{ height: gridHeight }}
             >
               <HourGridLines startHour={startHour} endHour={endHour} />
+              {earlySleepTitles.length > 0 ? (
+                <div
+                  className="pointer-events-none absolute left-0.5 right-0.5 top-0 z-[26] flex justify-center"
+                  title={earlySleepTitles.join(" · ")}
+                >
+                  <span className="max-w-[95%] truncate rounded-b border border-indigo-300/80 bg-indigo-100/95 px-1 py-0.5 text-[9px] font-medium leading-none text-indigo-950 shadow-sm dark:border-indigo-400/50 dark:bg-indigo-950/90 dark:text-indigo-100">
+                    Sleep before {formatHour(startHour)}
+                  </span>
+                </div>
+              ) : null}
               {dayIdx < todayOffset ? (
                 <div
                   aria-hidden
@@ -304,10 +499,16 @@ export function WeekCalendar({
               {proposedPositions
                 .filter((p) => p.dayIndex === dayIdx)
                 .map((p, i) => (
-                  <ProposedBlock key={`p${i}`} block={p} />
+                  <ProposedBlock
+                    key={`p${i}`}
+                    block={p}
+                    pxPerHour={PX_PER_HOUR}
+                    reservedForGoalDrag={reservedForGoalDrag}
+                  />
                 ))}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -514,12 +715,42 @@ function SystemBlockSlice({
 }
 
 function ProposedBlock({
-  block
+  block,
+  pxPerHour,
+  reservedForGoalDrag
 }: {
-  block: PositionedBlock & { isSegment: boolean; color: string; goalId?: string };
+  block: PositionedBlock & {
+    isSegment: boolean;
+    color: string;
+    goalId?: string;
+    goalSlices?: GoalCalendarSlice[];
+  };
+  pxPerHour: number;
+  reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
+  const slices = block.goalSlices;
+  const draggable =
+    Boolean(selectable && goalId && slices && slices.length > 0 && !block.isSegment && !goalId.startsWith("segment:"));
+
+  if (draggable && goalId && slices) {
+    return (
+      <DraggableProposedGoalBlock
+        topPx={block.topPx}
+        heightPx={block.heightPx}
+        pxPerHour={pxPerHour}
+        title={block.title}
+        backgroundColor={block.color}
+        opacity={block.isSegment ? 0.72 : 1}
+        goalId={goalId}
+        slices={slices}
+        dayIndex={block.dayIndex}
+        reservedForGoalDrag={reservedForGoalDrag}
+      />
+    );
+  }
+
   return (
     <div
       title={`${block.title} (proposed)`}

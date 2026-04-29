@@ -7,8 +7,7 @@ import {
   useRef,
   useState,
   useTransition,
-  type FormEvent,
-  type KeyboardEvent
+  type FormEvent
 } from "react";
 import type {
   DayOfWeek,
@@ -21,6 +20,7 @@ import {
   SPECIAL_GOAL_PRESETS,
   STARTER_GOALS,
   chipsForGoal,
+  summaryChipsForGoal,
   formatMinutes,
   summariseAllocation
 } from "./goal-helpers";
@@ -36,6 +36,14 @@ interface WheelOption {
   label: string;
 }
 
+type PaceStatus = "ahead" | "on-track" | "behind" | "no-data";
+
+interface GoalPaceInfo {
+  status: PaceStatus;
+  deltaMinutes: number;
+  actualMinutes: number;
+}
+
 interface PlanClientProps {
   initialGoals: WeeklyGoal[];
   freeMinutesThisWeek: number;
@@ -43,6 +51,11 @@ interface PlanClientProps {
   scheduledByGoal: Record<string, number>;
   effectiveTargetByGoal: Record<string, number>;
   allocationMode: "even" | "finish-early";
+  /**
+   * Per-goal pace info derived from this week's daily reviews. When omitted
+   * (or a goal isn't present), no pace pill is shown next to the goal.
+   */
+  paceByGoal?: Record<string, GoalPaceInfo>;
 }
 
 const DAY_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
@@ -58,7 +71,11 @@ const DAY_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
 function emptyDraft(): GoalDraft {
   return {
     energyMode: "neutral",
-    ppfHorizon: "unspecified"
+    energyPolarity: "neutral",
+    attentionMode: "unspecified",
+    workLayer: "unspecified",
+    ppfHorizon: "unspecified",
+    commitmentLevel: "committed"
   };
 }
 
@@ -66,7 +83,11 @@ function ensureGoalShape(input: GoalInput): GoalInput {
   return {
     ...input,
     energyMode: input.energyMode ?? "neutral",
-    ppfHorizon: input.ppfHorizon ?? "unspecified"
+    energyPolarity: input.energyPolarity ?? "neutral",
+    attentionMode: input.attentionMode ?? "unspecified",
+    workLayer: input.workLayer ?? "unspecified",
+    ppfHorizon: input.ppfHorizon ?? "unspecified",
+    commitmentLevel: input.commitmentLevel ?? "committed"
   };
 }
 
@@ -93,7 +114,8 @@ export function PlanClient({
   wheelAreas,
   scheduledByGoal,
   effectiveTargetByGoal,
-  allocationMode
+  allocationMode,
+  paceByGoal
 }: PlanClientProps) {
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
@@ -138,7 +160,11 @@ export function PlanClient({
       title,
       ...draft,
       energyMode: draft.energyMode ?? "neutral",
-      ppfHorizon: draft.ppfHorizon ?? "unspecified"
+      energyPolarity: draft.energyPolarity ?? "neutral",
+      attentionMode: draft.attentionMode ?? "unspecified",
+      workLayer: draft.workLayer ?? "unspecified",
+      ppfHorizon: draft.ppfHorizon ?? "unspecified",
+      commitmentLevel: draft.commitmentLevel ?? "committed"
     };
     setGoals((prev) => [...prev, optimistic]);
     const payload = ensureGoalShape({ title, ...draft });
@@ -198,8 +224,6 @@ export function PlanClient({
     <div className="flex flex-col gap-5">
       <BudgetChip summary={summary} />
 
-      <QuickAdd wheelAreas={wheelAreas} onAdd={handleAdd} />
-
       {goals.length === 0 ? (
         <EmptyState onAdd={handleAdd} />
       ) : (
@@ -212,17 +236,22 @@ export function PlanClient({
               total={goals.length}
               wheelAreas={wheelAreas}
               wheelLabel={wheelLabel}
+              allocationMode={allocationMode}
               scheduledMinutes={scheduledByGoal[goal.id]}
               effectiveTarget={effectiveTargetByGoal[goal.id]}
+              pace={paceByGoal?.[goal.id]}
               onUpdate={(next) => handleUpdate(goal.id, next)}
               onDelete={() => handleDelete(goal.id)}
               onMoveUp={() => handleReorder(idx, Math.max(0, idx - 1))}
               onMoveDown={() => handleReorder(idx, Math.min(goals.length - 1, idx + 1))}
-              onDropAt={(toIdx) => handleReorder(idx, toIdx)}
+              onDropAt={(fromIdx, toIdx) => handleReorder(fromIdx, toIdx)}
               focusedGoalId={focusRequest?.goalId}
               focusNonce={focusRequest?.nonce}
             />
           ))}
+          <li className="list-none">
+            <AddGoalTitle onAdd={handleAdd} />
+          </li>
         </ul>
       )}
     </div>
@@ -266,11 +295,19 @@ function BudgetChip({
       <Stat label="Free time" value={formatMinutes(summary.freeMinutes)} />
       <Stat label="Goals" value={String(summary.goalCount)} />
       <Stat
-        label={summary.equalShareGoals > 0 ? "Each unconstrained goal" : "All goals fixed"}
+        label={
+          summary.allocationMode === "even" && summary.hasWeightedShare
+            ? "Even-mode split"
+            : summary.equalShareGoals > 0
+              ? "Each unconstrained goal"
+              : "All goals fixed"
+        }
         value={
-          summary.equalShareGoals > 0
-            ? `~${formatMinutes(summary.perEqualShareMinutes)}/wk`
-            : `${formatMinutes(summary.reservedMinutes)} reserved`
+          summary.allocationMode === "even" && summary.hasWeightedShare
+            ? "Weighted (% share)"
+            : summary.equalShareGoals > 0
+              ? `~${formatMinutes(summary.perEqualShareMinutes)}/wk`
+              : `${formatMinutes(summary.reservedMinutes)} reserved`
         }
       />
     </div>
@@ -286,109 +323,75 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* ─────────────────────────── Quick add row ───────────────────────────────── */
-
-function QuickAdd({
-  wheelAreas,
-  onAdd
-}: {
-  wheelAreas: WheelOption[];
-  onAdd: (title: string, draft: GoalDraft) => void;
-}) {
+/** Title-only add row; special types and other constraints live under each goal’s scheduling options. */
+function AddGoalTitle({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => void }) {
   const [title, setTitle] = useState("");
-  const [draft, setDraft] = useState<GoalDraft>(emptyDraft);
-  const [open, setOpen] = useState(false);
-  const [specialType, setSpecialType] = useState<SpecialGoalType | "">("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const trimmed = title.trim();
     if (!trimmed) return;
-    onAdd(trimmed, draft);
+    onAdd(trimmed, emptyDraft());
     setTitle("");
-    setDraft(emptyDraft());
-    setSpecialType("");
-    setOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "/" && !title) {
-      event.preventDefault();
-      setOpen(true);
-    }
-  };
-
-  const chips = chipsForGoal({ id: "draft", title: title || "draft", ...draft }, (id) =>
-    wheelAreas.find((a) => a.id === id)?.label ?? id
-  );
-
   return (
-    <form onSubmit={submit} className="card flex flex-col gap-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div className="flex flex-1 flex-wrap items-center gap-2">
-          <select
-            value={specialType}
-            onChange={(e) => {
-              const nextType = (e.target.value || "") as SpecialGoalType | "";
-              setSpecialType(nextType);
-              if (nextType) {
-                const preset = SPECIAL_GOAL_PRESETS.find((p) => p.type === nextType);
-                if (preset && !title.trim()) setTitle(preset.title);
-              }
-              setDraft((prev) => applySpecialGoalPreset(prev, nextType || undefined));
-            }}
-            className="field w-full sm:w-auto"
-            aria-label="Special goal type"
-          >
-            <option value="">Special goal type</option>
-            {SPECIAL_GOAL_PRESETS.map((preset) => (
-              <option key={preset.type} value={preset.type}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <input
-            ref={inputRef}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Add a goal and press Enter"
-            className="field flex-1"
-            aria-label="Goal title"
-          />
-          {chips.map((chip) => (
-            <span
-              key={chip.key}
-              className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
-            >
-              {chip.label}
-            </span>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            className="btn-secondary text-xs"
-          >
-            {open ? "Hide options" : "+ Options"}
-          </button>
-          <button type="submit" className="btn-primary text-xs">
-            Add
-          </button>
-        </div>
-      </div>
-      {open && (
-        <OptionsEditor
-          draft={draft}
-          onChange={setDraft}
-          wheelAreas={wheelAreas}
-        />
-      )}
+    <form
+      onSubmit={submit}
+      className="card flex flex-col gap-2 border-dashed border-ink-200 sm:flex-row sm:items-center dark:border-ink-600"
+    >
+      <input
+        ref={inputRef}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Add another goal and press Enter"
+        className="field min-w-0 flex-1"
+        aria-label="New goal title"
+      />
+      <button type="submit" className="btn-primary shrink-0 text-xs">
+        Add
+      </button>
     </form>
+  );
+}
+
+/* ─────────────────────────── Pace pill ───────────────────────────────────── */
+
+const PACE_BG: Record<PaceStatus, string> = {
+  ahead:
+    "bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100",
+  "on-track":
+    "bg-ink-100 text-ink-600 dark:bg-ink-900/40 dark:text-ink-200",
+  behind:
+    "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100",
+  "no-data":
+    "bg-ink-100 text-ink-400 dark:bg-ink-900/40 dark:text-ink-400"
+};
+
+function PacePill({ pace }: { pace: GoalPaceInfo }) {
+  let label: string;
+  switch (pace.status) {
+    case "ahead":
+      label = `Ahead ${formatMinutes(pace.deltaMinutes)}`;
+      break;
+    case "behind":
+      label = `Behind ${formatMinutes(-pace.deltaMinutes)}`;
+      break;
+    case "on-track":
+      label = "On track";
+      break;
+    default:
+      label = "No data";
+  }
+  return (
+    <span
+      title={`Logged ${formatMinutes(pace.actualMinutes)} this week`}
+      className={`rounded-full px-2 py-0.5 text-[11px] ${PACE_BG[pace.status]}`}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -400,8 +403,10 @@ function GoalRow({
   total,
   wheelAreas,
   wheelLabel,
+  allocationMode,
   scheduledMinutes,
   effectiveTarget,
+  pace,
   onUpdate,
   onDelete,
   onMoveUp,
@@ -415,13 +420,15 @@ function GoalRow({
   total: number;
   wheelAreas: WheelOption[];
   wheelLabel: (id: string) => string;
+  allocationMode: "even" | "finish-early";
   scheduledMinutes?: number;
   effectiveTarget?: number;
+  pace?: GoalPaceInfo;
   onUpdate: (next: GoalInput) => void;
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  onDropAt: (toIdx: number) => void;
+  onDropAt: (fromIdx: number, toIdx: number) => void;
   focusedGoalId?: string;
   focusNonce?: number;
 }) {
@@ -440,7 +447,11 @@ function GoalRow({
     rowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focusNonce, focusedGoalId, goal.id]);
 
-  const chips = chipsForGoal(goal, wheelLabel);
+  const allChips = chipsForGoal(goal, wheelLabel);
+  const rowChips = summaryChipsForGoal(goal, wheelLabel);
+  const rowKeySet = new Set(rowChips.map((c) => c.key));
+  const hiddenChips = allChips.filter((c) => !rowKeySet.has(c.key));
+  const hiddenChipSummary = hiddenChips.map((c) => c.label).join(" · ");
 
   const draft: GoalDraft = draftDirty ?? extractDraft(goal);
 
@@ -476,7 +487,7 @@ function GoalRow({
     if (fromIdx === index || fromIdx === index + 1) return;
     // Adjust target index when dragging downward over the same item.
     const adjusted = fromIdx < toIdx ? toIdx - 1 : toIdx;
-    onDropAt(adjusted);
+    onDropAt(fromIdx, adjusted);
   };
 
   return (
@@ -516,7 +527,10 @@ function GoalRow({
             <span className="text-sm font-medium" style={{ color: goalColor }}>
               {goal.title}
             </span>
-            {chips.length === 0 ? (
+            {pace && pace.status !== "no-data" && (
+              <PacePill pace={pace} />
+            )}
+            {rowChips.length === 0 && hiddenChips.length === 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
                 Equal share
                 {effectiveTarget && effectiveTarget > 0
@@ -524,14 +538,24 @@ function GoalRow({
                   : ""}
               </span>
             ) : (
-              chips.map((chip) => (
-                <span
-                  key={chip.key}
-                  className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
-                >
-                  {chip.label}
-                </span>
-              ))
+              <>
+                {rowChips.map((chip) => (
+                  <span
+                    key={chip.key}
+                    className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
+                  >
+                    {chip.label}
+                  </span>
+                ))}
+                {hiddenChips.length > 0 ? (
+                  <span
+                    title={hiddenChipSummary}
+                    className="inline-flex shrink-0 items-center rounded-full border border-dashed border-ink-200 px-1.5 py-0.5 text-[11px] tabular-nums text-ink-500 dark:border-ink-600 dark:text-ink-300"
+                  >
+                    +{hiddenChips.length}
+                  </span>
+                ) : null}
+              </>
             )}
             {scheduledMinutes !== undefined && effectiveTarget !== undefined && effectiveTarget > 0 && (
               <span className="ml-auto text-xs text-ink-400">
@@ -573,6 +597,7 @@ function GoalRow({
               draft={draft}
               onChange={commitDraft}
               wheelAreas={wheelAreas}
+              allocationMode={allocationMode}
             />
           </div>
         </div>
@@ -609,7 +634,11 @@ function IconButton({
 function extractDraft(goal: WeeklyGoal): GoalDraft {
   const draft: GoalDraft = {
     energyMode: goal.energyMode ?? "neutral",
-    ppfHorizon: goal.ppfHorizon ?? "unspecified"
+    energyPolarity: goal.energyPolarity ?? "neutral",
+    attentionMode: goal.attentionMode ?? "unspecified",
+    workLayer: goal.workLayer ?? "unspecified",
+    ppfHorizon: goal.ppfHorizon ?? "unspecified",
+    commitmentLevel: goal.commitmentLevel ?? "committed"
   };
   if (goal.minMinutesPerWeek !== undefined) draft.minMinutesPerWeek = goal.minMinutesPerWeek;
   if (goal.maxMinutesPerWeek !== undefined) draft.maxMinutesPerWeek = goal.maxMinutesPerWeek;
@@ -624,6 +653,8 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.latestHour !== undefined) draft.latestHour = goal.latestHour;
   if (goal.anchor !== undefined) draft.anchor = goal.anchor;
   if (goal.specialGoalType !== undefined) draft.specialGoalType = goal.specialGoalType;
+  if (goal.allocationSharePercent !== undefined) draft.allocationSharePercent = goal.allocationSharePercent;
+  if (goal.scheduleInNiceWeather === true) draft.scheduleInNiceWeather = true;
   return draft;
 }
 
@@ -641,8 +672,10 @@ type ConstraintId =
   | "min-day"
   | "max-week"
   | "max-day"
+  | "share-remainder"
   | "frequency"
   | "days"
+  | "nice-weather"
   | "energy"
   | "special"
   | "wheel"
@@ -663,11 +696,13 @@ function isDaySet(d: GoalDraft): boolean {
 function OptionsEditor({
   draft,
   onChange,
-  wheelAreas
+  wheelAreas,
+  allocationMode
 }: {
   draft: GoalDraft;
   onChange: (draft: GoalDraft) => void;
   wheelAreas: WheelOption[];
+  allocationMode: "even" | "finish-early";
 }) {
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
 
@@ -704,6 +739,13 @@ function OptionsEditor({
       clear: () => ({ maxMinutesPerDay: undefined })
     },
     {
+      id: "share-remainder",
+      label: "Share of remainder",
+      isSet: (d) => d.allocationSharePercent !== undefined,
+      initialise: () => ({ allocationSharePercent: 40 }),
+      clear: () => ({ allocationSharePercent: undefined })
+    },
+    {
       id: "frequency",
       label: "Times per week",
       isSet: (d) => d.frequencyPerWeek !== undefined,
@@ -716,6 +758,13 @@ function OptionsEditor({
       isSet: isDaySet,
       initialise: () => ({ daysOfWeek: ["monday"], dayOfWeek: undefined }),
       clear: () => ({ daysOfWeek: undefined, dayOfWeek: undefined })
+    },
+    {
+      id: "nice-weather",
+      label: "Nice weather slots",
+      isSet: (d) => d.scheduleInNiceWeather === true,
+      initialise: () => ({ scheduleInNiceWeather: true }),
+      clear: () => ({ scheduleInNiceWeather: undefined })
     },
     {
       id: "energy",
@@ -774,6 +823,7 @@ function OptionsEditor({
                 draft={draft}
                 update={update}
                 wheelAreas={wheelAreas}
+                allocationMode={allocationMode}
               />
             </ConstraintRow>
           ))}
@@ -833,12 +883,14 @@ function ConstraintBody({
   id,
   draft,
   update,
-  wheelAreas
+  wheelAreas,
+  allocationMode
 }: {
   id: ConstraintId;
   draft: GoalDraft;
   update: (changes: Partial<GoalDraft>) => void;
   wheelAreas: WheelOption[];
+  allocationMode: "even" | "finish-early";
 }) {
   switch (id) {
     case "min-week":
@@ -849,6 +901,33 @@ function ConstraintBody({
       return <DurationField value={draft.maxMinutesPerWeek} onChange={(v) => update({ maxMinutesPerWeek: v === undefined ? undefined : Math.max(1, v) })} hint="Weekly ceiling." />;
     case "max-day":
       return <DurationField value={draft.maxMinutesPerDay} onChange={(v) => update({ maxMinutesPerDay: v === undefined ? undefined : Math.max(1, v) })} hint="Daily cap so this doesn't dominate a day." />;
+    case "share-remainder":
+      return (
+        <label className="flex flex-col gap-1 text-xs">
+          <span>Percent (1–100)</span>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={draft.allocationSharePercent ?? ""}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                update({ allocationSharePercent: undefined });
+                return;
+              }
+              const n = Number(e.target.value);
+              if (!Number.isFinite(n)) return;
+              update({ allocationSharePercent: Math.min(100, Math.max(1, Math.round(n))) });
+            }}
+            placeholder="40"
+            className="field"
+          />
+          <span className="text-ink-400">
+            Share of time left after weekly mins are reserved (Even allocation only).
+            {allocationMode === "finish-early" ? " Finish-early mode ignores this field." : ""}
+          </span>
+        </label>
+      );
     case "frequency":
       return (
         <input
@@ -864,6 +943,14 @@ function ConstraintBody({
           placeholder="3"
           className="field"
         />
+      );
+    case "nice-weather":
+      return (
+        <p className="text-xs leading-relaxed text-ink-500 dark:text-ink-300">
+          Only schedule during timemap &quot;outside&quot; windows from your weather settings (same
+          layer as the green preview on the calendar). If weather is disabled or no forecast
+          overlaps your free time, this is ignored so the goal can still land.
+        </p>
       );
     case "days": {
       const pinnedDays = draft.daysOfWeek?.length
@@ -1079,7 +1166,11 @@ function EmptyState({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => voi
             onClick={() =>
               onAdd(s.title, {
                 energyMode: s.energy ?? "neutral",
-                ppfHorizon: "unspecified"
+                energyPolarity: "neutral",
+                attentionMode: "unspecified",
+                workLayer: "unspecified",
+                ppfHorizon: "unspecified",
+                commitmentLevel: "committed"
               })
             }
             className="btn-secondary text-xs"

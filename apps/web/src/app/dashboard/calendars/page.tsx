@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { generateFeedToken } from "@/lib/feed-token";
 import { ensureFeedToken, type FeedKind } from "@/lib/feeds";
@@ -7,6 +7,7 @@ import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
   calendarBusyModeForSource,
   normaliseCalendarSource,
+  weeklyIntentSchema,
   type CalendarSource,
   type WeeklyPlan
 } from "@calendar-automations/schema";
@@ -50,7 +51,7 @@ async function loadGoalOptions(userId: string): Promise<GoalOption[]> {
 
 async function toggleCalendar(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const externalId = String(formData.get("externalId") ?? "");
@@ -78,14 +79,14 @@ async function toggleCalendar(formData: FormData): Promise<void> {
 
 async function updateCalendarOptions(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const externalId = String(formData.get("externalId") ?? "");
   const displayName = String(formData.get("displayName") ?? "").trim();
   const color = String(formData.get("color") ?? "");
   const busyMode = String(formData.get("busyMode") ?? "busy-only") as BusyHandlingMode;
-  const invertedGoalTitleRaw = String(formData.get("invertedGoalTitle") ?? "").trim();
+  const invertedTimemapLabelRaw = String(formData.get("invertedTimemapLabel") ?? "").trim();
   if (!externalId) return;
 
   const settings = await loadSettings(userId);
@@ -99,10 +100,10 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   let availabilityGoalId = source.availabilityGoalId;
   if (busyMode === "invert-free-busy") {
     const fallbackTitle = displayName ? `${displayName} available` : "";
-    availabilityGoalId = await ensureInvertedGoal({
+    availabilityGoalId = await ensureInvertedTimemapPlanEntry({
       userId,
       timezone: settings.timezone,
-      title: invertedGoalTitleRaw || fallbackTitle,
+      title: invertedTimemapLabelRaw || fallbackTitle,
       existingGoalId: source.availabilityGoalId
     });
   } else {
@@ -126,7 +127,7 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   revalidatePath("/dashboard/calendars");
 }
 
-interface EnsureInvertedGoalArgs {
+interface EnsureInvertedTimemapPlanEntryArgs {
   userId: string;
   timezone: string;
   title: string;
@@ -140,7 +141,9 @@ function thisMondayIso(): string {
   return mon.toISOString().slice(0, 10);
 }
 
-async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string | undefined> {
+async function ensureInvertedTimemapPlanEntry(
+  args: EnsureInvertedTimemapPlanEntryArgs
+): Promise<string | undefined> {
   if (!db) return args.existingGoalId;
   const title = args.title.trim();
   if (!title) return args.existingGoalId;
@@ -152,15 +155,26 @@ async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string 
     .limit(1);
   const row = rows[0];
   const weekStart = thisMondayIso();
+  const blank = weeklyIntentSchema.parse({});
   const base: WeeklyPlan = row
     ? ({
         ...(row.data as WeeklyPlan),
         id: row.id,
         weekStart,
         timezone: args.timezone,
-        overrides: (row.data as WeeklyPlan).overrides ?? []
+        overrides: (row.data as WeeklyPlan).overrides ?? [],
+        weeklyIntent: weeklyIntentSchema.parse(
+          (row.data as Partial<WeeklyPlan>).weeklyIntent ?? {}
+        )
       } as WeeklyPlan)
-    : { id: crypto.randomUUID(), weekStart, timezone: args.timezone, goals: [], overrides: [] };
+    : {
+        id: crypto.randomUUID(),
+        weekStart,
+        timezone: args.timezone,
+        goals: [],
+        overrides: [],
+        weeklyIntent: blank
+      };
 
   const existing = base.goals.find((goal) => goal.title.trim().toLowerCase() === title.toLowerCase());
   if (existing) return existing.id;
@@ -168,8 +182,13 @@ async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string 
   const goal = {
     id: crypto.randomUUID(),
     title,
+    specialGoalType: "inverted-timemap" as const,
     energyMode: "neutral" as const,
-    ppfHorizon: "unspecified" as const
+    energyPolarity: "neutral" as const,
+    attentionMode: "unspecified" as const,
+    workLayer: "unspecified" as const,
+    ppfHorizon: "unspecified" as const,
+    commitmentLevel: "committed" as const
   };
   const next: WeeklyPlan = { ...base, goals: [...base.goals, goal] };
   if (row) {
@@ -191,7 +210,7 @@ async function ensureInvertedGoal(args: EnsureInvertedGoalArgs): Promise<string 
 
 async function rotateFeed(formData: FormData): Promise<void> {
   "use server";
-  const session = await auth();
+  const session = await authOrPreview();
   if (!session?.user?.id) return;
   const kind = String(formData.get("kind") ?? "all") as FeedKind;
   const name = String(formData.get("name") ?? "feed");
@@ -209,7 +228,7 @@ async function feedUrl(userId: string, kind: FeedKind, name: string): Promise<st
 }
 
 export default async function CalendarsPage() {
-  const session = await auth();
+  const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const goalOptions = await loadGoalOptions(userId);
@@ -294,7 +313,7 @@ export default async function CalendarsPage() {
                     displayName={c.summary}
                     defaultColor={colorValue}
                     defaultBusyMode={busyMode}
-                    defaultInvertedGoalTitle={linkedGoalTitle}
+                    defaultInvertedTimemapLabel={linkedGoalTitle}
                   />
                 ) : null}
               </li>
