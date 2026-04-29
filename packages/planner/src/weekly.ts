@@ -21,7 +21,9 @@
  *   5. Goals with `specialGoalType: "gym"` reserve an extra quantised band of
  *      `settings.gym.driveMinutes` on each side of the workout block (same
  *      default one-way drive as calendar gym legs) so nothing else stacks in
- *      the commute window.
+ *      the commute window. Gym goals are scheduled **before** other goals at
+ *      the same commitment/floor tier so earlier list order cannot occupy
+ *      those drive windows first.
  *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
@@ -244,8 +246,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   // per-day caps. Order matters when free time is scarce, so we sort:
   //   1. commitment tier (non-negotiable → committed → nice-to-have),
   //   2. floor-bearing goals first (so their minimums actually land),
-  //   3. then by user-provided list order,
-  //   4. then by remaining minutes desc as a final tie-breaker.
+  //   3. gym goals next (they consume drive pads — must run before fillers),
+  //   4. then by user-provided list order,
+  //   5. then by remaining minutes desc as a final tie-breaker.
   prepared.sort((a, b) => {
     if (fw.commitment) {
       const aTier = commitmentRank(a.goal.commitmentLevel);
@@ -255,6 +258,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     const aHasFloor = (a.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
     const bHasFloor = (b.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
     if (aHasFloor !== bHasFloor) return aHasFloor - bHasFloor;
+    const aGym = a.goal.specialGoalType === "gym" ? 0 : 1;
+    const bGym = b.goal.specialGoalType === "gym" ? 0 : 1;
+    if (aGym !== bGym) return aGym - bGym;
     if (a.index !== b.index) return a.index - b.index;
     return b.effectiveMinutes - a.effectiveMinutes;
   });
@@ -834,6 +840,8 @@ function allocateGoal(
   const perDayBudget = Math.max(perDay, minPerDay);
 
   let slotIndex = 0;
+  /** Drag overrides that failed `tryPinGoalBlock` — treat as unpinned so we do not auto-place duplicates on later passes. */
+  const ignoredGoalPinKeys = new Set<string>();
 
   // We may need to walk the days more than once when frequencyPerWeek limits
   // us to N days but our first pass couldn't place the full budget. Two rounds
@@ -865,7 +873,9 @@ function allocateGoal(
       if (dayHeadroom < QUANTUM) continue;
 
       const dragKey = buildGoalDragKey(goal.id, weekAnchorDate, slotIndex);
-      const pinned = goalOverrides.get(dragKey);
+      const pinnedFromMap = goalOverrides.get(dragKey);
+      const pinned =
+        pinnedFromMap !== undefined && !ignoredGoalPinKeys.has(dragKey) ? pinnedFromMap : undefined;
       if (pinned !== undefined) {
         const ovDay = dayIndexForMsInWeek(pinned.startMs, weekStartMs, tz);
         if (ovDay >= 0 && ovDay !== dayIdx) continue;
@@ -891,6 +901,9 @@ function allocateGoal(
             daysScheduledThisPass++;
             continue;
           }
+          ignoredGoalPinKeys.add(dragKey);
+        } else if (ovDay < 0) {
+          ignoredGoalPinKeys.add(dragKey);
         }
       }
 

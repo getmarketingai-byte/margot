@@ -49,6 +49,28 @@ interface WeekCalendarProps {
 
 const PX_PER_HOUR = 30;
 
+function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/** Sleep, routines, calendar busy, and travel — goal drags must not land on top. */
+function buildReservedIntervalsForGoalDrag(
+  busy: readonly BusyEvent[],
+  system: readonly SystemBlock[]
+): { startMs: number; endMs: number }[] {
+  const out: { startMs: number; endMs: number }[] = [];
+  for (const b of busy) {
+    if (b.busy === false) continue;
+    out.push({ startMs: b.startMs, endMs: b.endMs });
+  }
+  for (const s of system) {
+    if (s.system === "sleep" || s.system === "routine" || s.system === "travel") {
+      out.push({ startMs: s.startMs, endMs: s.endMs });
+    }
+  }
+  return out;
+}
+
 interface PositionedBlock {
   dayIndex: number; // 0=Mon ... 6=Sun, can extend beyond 6 for rolling views.
   topPx: number;
@@ -404,6 +426,7 @@ export function WeekCalendar({
   const hasTravel = systemPositions.some((p) => p.kind === "travel");
   const hasRoutine = systemPositions.some((p) => p.kind === "routine");
   const hasWeather = systemPositions.some((p) => p.kind === "weather");
+  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system);
 
   return (
     <div className="card p-3">
@@ -476,7 +499,12 @@ export function WeekCalendar({
               {proposedPositions
                 .filter((p) => p.dayIndex === dayIdx)
                 .map((p, i) => (
-                  <ProposedBlock key={`p${i}`} block={p} pxPerHour={PX_PER_HOUR} />
+                  <ProposedBlock
+                    key={`p${i}`}
+                    block={p}
+                    pxPerHour={PX_PER_HOUR}
+                    reservedForGoalDrag={reservedForGoalDrag}
+                  />
                 ))}
             </div>
             );
@@ -688,7 +716,8 @@ function SystemBlockSlice({
 
 function ProposedBlock({
   block,
-  pxPerHour
+  pxPerHour,
+  reservedForGoalDrag
 }: {
   block: PositionedBlock & {
     isSegment: boolean;
@@ -697,6 +726,7 @@ function ProposedBlock({
     goalSlices?: GoalCalendarSlice[];
   };
   pxPerHour: number;
+  reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
@@ -716,6 +746,7 @@ function ProposedBlock({
         goalId={goalId}
         slices={slices}
         dayIndex={block.dayIndex}
+        reservedForGoalDrag={reservedForGoalDrag}
       />
     );
   }

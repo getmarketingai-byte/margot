@@ -755,6 +755,64 @@ describe("allocateWeek", () => {
     expect(Math.floor((plainBlock!.endMs - plainBlock!.startMs) / 60_000)).toBe(60);
   });
 
+  it("places gym goals before other goals so drive windows are not taken first", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const busy: BusyEvent[] = [
+      {
+        sourceId: "mon-am",
+        title: "Busy",
+        startMs: weekStartMs,
+        endMs: weekStartMs + 10 * HOUR_MS,
+        busy: true,
+        source: "google"
+      },
+      {
+        sourceId: "mon-pm",
+        title: "Busy2",
+        startMs: weekStartMs + 11.25 * HOUR_MS,
+        endMs: weekStartMs + DAY_MS,
+        busy: true,
+        source: "google"
+      }
+    ];
+    const plan: WeeklyPlan = {
+      id: "gym-order",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [
+        {
+          id: "filler",
+          title: "Other",
+          targetMinutes: 60,
+          dayOfWeek: "monday",
+          energyMode: "neutral",
+          ppfHorizon: "unspecified"
+        },
+        {
+          id: "gym-goal",
+          title: "Gym",
+          targetMinutes: 60,
+          dayOfWeek: "monday",
+          energyMode: "neutral",
+          ppfHorizon: "unspecified",
+          specialGoalType: "gym"
+        }
+      ]
+    };
+    const result = allocateWeek({
+      plan,
+      busy,
+      settings: buildSettings({
+        gym: { ...DEFAULT_USER_SETTINGS.gym, driveMinutes: 10 }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const gymBlock = result.blocks.find((b) => b.goalId === "gym-goal");
+    expect(gymBlock).toBeDefined();
+    expect(Math.floor((gymBlock!.endMs - gymBlock!.startMs) / 60_000)).toBe(45);
+  });
+
   it("restricts a goal to inverted-calendar availability windows", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const result = allocateWeek({
@@ -881,6 +939,47 @@ describe("allocateWeek", () => {
     expect(placed?.startMs).toBe(first!.startMs + delta);
     expect(placed?.pinnedFromOverride).toBe(true);
     expect(placed?.dragOverrideSaved).toBe(true);
+  });
+
+  it("ignores a goal drag override that overlaps reserved busy and schedules in free time instead", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const reservedStart = ws + 6 * HOUR_MS;
+    const reservedEnd = ws + 10 * HOUR_MS;
+    const reserved: BusyEvent = {
+      sourceId: "reserved",
+      title: "Morning routine",
+      startMs: reservedStart,
+      endMs: reservedEnd,
+      busy: true,
+      source: "internal"
+    };
+    const key = buildGoalDragKey("solo", weekStartIso, 0);
+    const badStart = reservedStart + 30 * 60 * 1000;
+    const badEnd = badStart + 45 * 60 * 1000;
+    const result = allocateWeek({
+      plan: {
+        id: "p",
+        weekStart: weekStartIso,
+        timezone: "UTC",
+        goals: [goal({ id: "solo", title: "Solo", targetMinutes: 90, maxMinutesPerDay: 90 })],
+        overrides: [
+          { kind: "goal", key, startMs: badStart, endMs: badEnd, source: "drag", setAt: 1 }
+        ]
+      },
+      busy: [reserved],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: weekStartIso
+    });
+    const solo = result.blocks.filter((b) => b.goalId === "solo");
+    expect(solo.length).toBeGreaterThanOrEqual(1);
+    for (const b of solo) {
+      const overlapsReserved = b.startMs < reservedEnd && b.endMs > reservedStart;
+      expect(overlapsReserved).toBe(false);
+    }
+    expect(solo.some((b) => b.pinnedFromOverride)).toBe(false);
   });
 
   it("buildGoalDragKey scopes overrides by week anchor and slot", () => {

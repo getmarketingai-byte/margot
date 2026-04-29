@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import {
+  filterSchedulingGoals,
   type BlockOverride,
   type WeeklyGoal,
   type WeeklyIntent,
@@ -15,6 +16,11 @@ import {
 } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
+import { isoCalendarDay, localMidnightMs } from "@/lib/week";
+import {
+  loadDashboardWeeklyPlan,
+  runThisWeekAllocationForPlan
+} from "@/lib/perfect-week-this-week-allocation";
 import { loadSettings } from "@/lib/settings-store";
 
 /**
@@ -303,4 +309,105 @@ export async function clearGoalDragOverrides(keys: readonly string[]): Promise<v
   if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
   revalidatePlanRoutes();
+}
+
+function isActualGoalOverride(o: BlockOverride): boolean {
+  return o.kind === "goal" && o.source === "actual";
+}
+
+/**
+ * Maps day-sheet goal log slots to planner goal drag overrides (`source:
+ * "actual"`) so Perfect Week shows them like manual drags. Pairs each tagged
+ * slot with the allocator block on the same calendar day (same goal, nth
+ * slot ↔ nth block). Manual drag overrides (`source: "drag"` or omitted) are
+ * preserved.
+ */
+export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  if (!db) return;
+
+  try {
+    const settings = await loadSettings(userId);
+    const tz = settings.timezone;
+    const planFull = await loadDashboardWeeklyPlan(userId, tz);
+
+    const planBaseline: WeeklyPlan = {
+      ...planFull,
+      overrides: planFull.overrides.filter((o) => !isActualGoalOverride(o))
+    };
+
+    const run = await runThisWeekAllocationForPlan(userId, planBaseline, settings);
+    if (!run) return;
+
+    const { allocation, weekDates, reviewsByDate } = run;
+    const schedulingIds = new Set(filterSchedulingGoals(planFull.goals).map((g) => g.id));
+
+    const paired: BlockOverride[] = [];
+    const setAt = Date.now();
+
+    for (const date of weekDates) {
+      const review = reviewsByDate.get(date);
+      if (!review) continue;
+
+      const slots = review.slots.filter(
+        (s) => s.category === "goal" && s.goalId && schedulingIds.has(s.goalId)
+      );
+      if (slots.length === 0) continue;
+
+      const byGoal = new Map<string, typeof slots>();
+      for (const s of slots) {
+        const gid = s.goalId!;
+        const list = byGoal.get(gid);
+        if (list) list.push(s);
+        else byGoal.set(gid, [s]);
+      }
+
+      for (const [goalId, slotList] of byGoal) {
+        slotList.sort((a, b) => a.startMinute - b.startMinute);
+        const blocksForDay = allocation.blocks
+          .filter(
+            (b) =>
+              b.goalId === goalId &&
+              !b.segment &&
+              Boolean(b.dragKey) &&
+              isoCalendarDay(b.startMs, tz) === date
+          )
+          .sort((a, b) => a.startMs - b.startMs);
+
+        const n = Math.min(slotList.length, blocksForDay.length);
+        for (let i = 0; i < n; i++) {
+          const slot = slotList[i]!;
+          const block = blocksForDay[i]!;
+          const [y, mo, d] = date.split("-").map(Number) as [number, number, number];
+          const dayStart = localMidnightMs(y, mo, d, tz);
+          const startMs = dayStart + slot.startMinute * 60 * 1000;
+          const endMs = dayStart + slot.endMinute * 60 * 1000;
+          paired.push(
+            blockOverrideSchema.parse({
+              kind: "goal",
+              key: block.dragKey!,
+              startMs,
+              endMs,
+              source: "actual",
+              setAt
+            })
+          );
+        }
+      }
+    }
+
+    const preserved = planFull.overrides.filter((o) => !isActualGoalOverride(o));
+    const pairedKeys = new Set(paired.map((p) => p.key));
+    const preservedNoPinCollision = preserved.filter(
+      (o) => !(o.kind === "goal" && pairedKeys.has(o.key))
+    );
+    planFull.overrides = [...preservedNoPinCollision, ...paired];
+    weeklyPlanSchema.parse(planFull);
+    await savePlan(userId, planFull);
+    revalidatePlanRoutes();
+  } catch (err) {
+    console.warn("syncActualGoalOverridesFromDayLogs failed", err);
+  }
 }

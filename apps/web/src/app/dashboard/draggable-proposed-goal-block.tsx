@@ -11,24 +11,46 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
 import { clearGoalDragOverrides, setGoalBlockOverridesBatch } from "./plan/actions";
 
+function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
 const SNAP_MIN = 15;
 const MS_PER_MIN = 60_000;
 /** Calendar-day shift between columns (DST handled imperfectly; rare edge case). */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function weekDayIndexUnderPoint(clientX: number, clientY: number): number | null {
-  const els = document.elementsFromPoint(clientX, clientY);
-  for (const el of els) {
-    let node: Element | null = el;
-    while (node) {
-      if (node instanceof HTMLElement && node.dataset.weekDayIndex !== undefined) {
-        const n = Number(node.dataset.weekDayIndex);
-        return Number.isFinite(n) ? n : null;
+/**
+ * Finds `[data-week-day-index]` under the pointer. The dragged block must be
+ * excluded from hit-testing (it stays DOM-parented under the source column
+ * while `transform` moves it visually), otherwise we always resolve the
+ * original day.
+ */
+function weekDayIndexUnderPoint(
+  clientX: number,
+  clientY: number,
+  ignoreHitTarget: HTMLElement | null
+): number | null {
+  const prevPointerEvents = ignoreHitTarget?.style.pointerEvents;
+  if (ignoreHitTarget) ignoreHitTarget.style.pointerEvents = "none";
+  try {
+    const els = document.elementsFromPoint(clientX, clientY);
+    for (const el of els) {
+      let node: Element | null = el;
+      while (node) {
+        if (node instanceof HTMLElement && node.dataset.weekDayIndex !== undefined) {
+          const n = Number(node.dataset.weekDayIndex);
+          return Number.isFinite(n) ? n : null;
+        }
+        node = node.parentElement;
       }
-      node = node.parentElement;
+    }
+    return null;
+  } finally {
+    if (ignoreHitTarget) {
+      ignoreHitTarget.style.pointerEvents = prevPointerEvents ?? "";
     }
   }
-  return null;
 }
 
 export interface GoalCalendarSlice {
@@ -49,6 +71,11 @@ interface DraggableProposedGoalBlockProps {
   slices: GoalCalendarSlice[];
   /** Which week column this block sits in (same index as `WeekCalendar` day columns). */
   dayIndex: number;
+  /**
+   * Sleep, routines, travel, and calendar busy — drags that would overlap any
+   * of these are rejected (matches planner hard constraints).
+   */
+  reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
 }
 
 export function DraggableProposedGoalBlock({
@@ -60,7 +87,8 @@ export function DraggableProposedGoalBlock({
   opacity,
   goalId,
   slices,
-  dayIndex
+  dayIndex,
+  reservedForGoalDrag
 }: DraggableProposedGoalBlockProps) {
   const elRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<{
@@ -126,7 +154,7 @@ export function DraggableProposedGoalBlock({
 
     if (drag.cancelled) return;
 
-    const targetDay = weekDayIndexUnderPoint(e.clientX, e.clientY);
+    const targetDay = weekDayIndexUnderPoint(e.clientX, e.clientY, el ?? null);
     const dayDelta = targetDay !== null ? targetDay - dayIndex : 0;
     const deltaMsVertical = snapDeltaMs(rawDeltaY);
     const deltaMs = deltaMsVertical + dayDelta * DAY_MS;
@@ -134,6 +162,17 @@ export function DraggableProposedGoalBlock({
     if (deltaMs === 0) {
       if (Math.abs(rawDeltaY) < 4 && Math.abs(rawDeltaX) < 4) dispatchGoalFocus(goalId);
       return;
+    }
+
+    for (const s of slices) {
+      const ns = s.startMs + deltaMs;
+      const ne = s.endMs + deltaMs;
+      for (const r of reservedForGoalDrag) {
+        if (intervalsOverlap(ns, ne, r.startMs, r.endMs)) {
+          console.warn("Goal drag rejected: overlaps sleep, routine, travel, or an existing event.");
+          return;
+        }
+      }
     }
 
     setPending(true);

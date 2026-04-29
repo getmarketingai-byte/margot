@@ -98,6 +98,11 @@ export function RangeToggleCalendar({
     [showWeather, system]
   );
 
+  const rollingSpansTwoIsoWeeks = useMemo(
+    () => mode === "next-7-days" && dayOffsets.some((d) => d > 6),
+    [mode, dayOffsets]
+  );
+
   return (
     <div className="flex flex-col gap-2">
       <div className="px-1 text-xs text-ink-400">
@@ -141,6 +146,14 @@ export function RangeToggleCalendar({
           {showWeather ? "Hide weather" : "Show weather"}
         </button>
       </div>
+      {rollingSpansTwoIsoWeeks ? (
+        <p className="px-1 text-[11px] leading-snug text-ink-500 dark:text-ink-400">
+          This rolling view can show two ISO weeks at once. Each week is still planned as a full
+          Mon–Sun: goals may sit on days that are off-screen here. Switch to{" "}
+          <span className="font-medium text-ink-700 dark:text-ink-200">Calendar week</span> to see
+          the whole board for one week.
+        </p>
+      ) : null}
       <WeekCalendar
         weekStartMs={weekStartMs}
         timezone={timezone}

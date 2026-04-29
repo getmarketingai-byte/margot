@@ -13,6 +13,7 @@ import {
 } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
 import { loadDailyReview, saveDailyReview } from "@/lib/review-store";
+import { syncActualGoalOverridesFromDayLogs } from "@/app/dashboard/plan/actions";
 import { loadSettings } from "@/lib/settings-store";
 
 async function loadReviewForUser(date: string): Promise<{
@@ -68,6 +69,7 @@ export async function setLogSlots(
   // Re-validate each slot defensively; the schema rejects malformed times.
   const parsed = slots.map((s) => logSlotSchema.parse(s));
   await commit(userId, { ...review, slots: parsed });
+  await syncActualGoalOverridesFromDayLogs();
 }
 
 export async function setBlockMark(
