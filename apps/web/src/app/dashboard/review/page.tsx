@@ -134,133 +134,149 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
   // date. This freezes the data block marks reference so re-allocations
   // don't orphan their keys.
   if (review.plannedBlocksSnapshot.length === 0 && plan.goals.length > 0) {
-    const weekStartMs = localMondayMidnightMs(tz);
-    const weekEndMs = weekStartMs + 7 * DAY_MS;
-    const sameWeek = dayStartMs >= weekStartMs && dayEndMs <= weekEndMs;
+    const sameWeek =
+      localMondayIso(tz, new Date(dayStartMs)) === localMondayIso(tz);
     if (sameWeek) {
-      const busyFetch = await fetchGoogleBusy(
-        userId,
-        settings.calendars.sources,
-        weekStartMs,
-        weekEndMs
-      ).catch(() => ({ busyEvents: [], goalAvailabilityWindows: {} }));
-      const busy = busyFetch.busyEvents.filter(
-        (e) => e.endMs > weekStartMs && e.startMs < weekEndMs
-      );
-      const systemBlocks = await buildSystemBlocks({
-        userId,
-        settings,
-        weekStartMs,
-        busy,
-        overrides: overridesFromPlan(plan)
-      });
-      const sleepBlockMs = systemBlocks
-        .filter((b) => b.system === "sleep")
-        .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
-      const weatherTimemapEvents = await buildWeatherTimemapEvents({
-        userId,
-        windowStartMs: weekStartMs,
-        windowEndMs: weekEndMs,
-        weather: settings.weather,
-        homeAddress: settings.travel.homeAddress,
-        geocodes: settings.travelCache?.geocodes,
-        stableUid: buildStableUid,
-        sleepBlockMs
-      });
-      const niceWeatherWindows = outsideNiceWeatherIntervalsInRange(
-        weatherTimemapEvents,
-        weekStartMs,
-        weekEndMs
-      );
-      const weeklyReview = await loadWeeklyReview(
-        userId,
-        localMondayIso(tz),
-        tz
-      );
-      const catchUpMode = settings.allocator.catchUpMode;
-      let allocation;
-      if (catchUpMode === "manual") {
-        allocation = allocateWeek({
-          plan,
-          busy: [...busy, ...systemBlocks],
-          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-          niceWeatherWindows,
-          settings,
-          weekStartMs,
-          weekEndMs,
-          catchUpFloors: weeklyReview.catchUpAdjustments ?? {},
-          weekAnchorDate: localMondayIso(tz),
-          goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-          sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
-        });
-      } else {
-        const baselineAllocation = allocateWeek({
-          plan,
-          busy: [...busy, ...systemBlocks],
-          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-          niceWeatherWindows,
-          settings,
-          weekStartMs,
-          weekEndMs,
-          catchUpFloors: {},
-          weekAnchorDate: localMondayIso(tz),
-          goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-          sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
-        });
-        const weekDates = isoDatesForWeek(weekStartMs, tz);
-        const dailyReviewsRange = await loadDailyReviewsInRange(
+      try {
+        const weekStartMs = localMondayMidnightMs(tz);
+        const weekEndMs = weekStartMs + 7 * DAY_MS;
+        const busyFetch = await fetchGoogleBusy(
           userId,
-          weekDates[0]!,
-          weekDates[weekDates.length - 1]!
+          settings.calendars.sources,
+          weekStartMs,
+          weekEndMs
+        ).catch(() => ({ busyEvents: [], goalAvailabilityWindows: {} }));
+        const busy = busyFetch.busyEvents.filter(
+          (e) => e.endMs > weekStartMs && e.startMs < weekEndMs
         );
-        const reviewsByDate = new Map(
-          dailyReviewsRange.map((r) => [r.date, r] as const)
-        );
-        const effectiveTargetBaseline: Record<string, number> = {};
-        for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
-          effectiveTargetBaseline[id] = m.targetMinutes;
-        }
-        const schedulingGoals = filterSchedulingGoals(plan.goals);
-        const todayIsoSnap = todayIsoInTz(tz);
-        const todayIdxSnap = weekDates.indexOf(todayIsoSnap);
-        const dayIndexSnap = todayIdxSnap >= 0 ? todayIdxSnap : 6;
-        const baselineRollups = computeGoalRollups({
-          goals: schedulingGoals,
-          reviewsByDate,
-          effectiveTargetByGoal: effectiveTargetBaseline,
-          weekDates,
-          dayIndex: dayIndexSnap
-        });
-        const catchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
-        allocation = allocateWeek({
-          plan,
-          busy: [...busy, ...systemBlocks],
-          goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-          niceWeatherWindows,
+        const systemBlocks = await buildSystemBlocks({
+          userId,
           settings,
           weekStartMs,
-          weekEndMs,
-          catchUpFloors,
-          weekAnchorDate: localMondayIso(tz),
-          goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-          sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+          busy,
+          overrides: overridesFromPlan(plan)
         });
-      }
-      const todaysBlocks: AllocatedBlockSnapshot[] = allocation.blocks
-        .filter(
-          (b) =>
-            !b.segment && b.startMs >= dayStartMs && b.endMs <= dayEndMs
-        )
-        .map((b) => ({
-          goalId: b.goalId,
-          title: b.title,
-          startMs: b.startMs,
-          endMs: b.endMs,
-          ...(b.dragKey ? { dragKey: b.dragKey } : {})
-        }));
-      if (todaysBlocks.length > 0) {
-        review.plannedBlocksSnapshot = todaysBlocks;
-        await saveDailyReview(userId, review);
+        const sleepBlockMs = systemBlocks
+          .filter((b) => b.system === "sleep")
+          .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+        const weatherTimemapEvents = await buildWeatherTimemapEvents({
+          userId,
+          windowStartMs: weekStartMs,
+          windowEndMs: weekEndMs,
+          weather: settings.weather,
+          homeAddress: settings.travel.homeAddress,
+          geocodes: settings.travelCache?.geocodes,
+          stableUid: buildStableUid,
+          sleepBlockMs
+        });
+        const niceWeatherWindows = outsideNiceWeatherIntervalsInRange(
+          weatherTimemapEvents,
+          weekStartMs,
+          weekEndMs
+        );
+        const weeklyReview = await loadWeeklyReview(
+          userId,
+          localMondayIso(tz),
+          tz
+        );
+        const catchUpMode = settings.allocator.catchUpMode;
+        let allocation;
+        if (catchUpMode === "manual") {
+          allocation = allocateWeek({
+            plan,
+            busy: [...busy, ...systemBlocks],
+            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+            niceWeatherWindows,
+            settings,
+            weekStartMs,
+            weekEndMs,
+            catchUpFloors: weeklyReview.catchUpAdjustments ?? {},
+            weekAnchorDate: localMondayIso(tz),
+            goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+            sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+          });
+        } else {
+          const baselineAllocation = allocateWeek({
+            plan,
+            busy: [...busy, ...systemBlocks],
+            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+            niceWeatherWindows,
+            settings,
+            weekStartMs,
+            weekEndMs,
+            catchUpFloors: {},
+            weekAnchorDate: localMondayIso(tz),
+            goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+            sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+          });
+          const weekDates = isoDatesForWeek(weekStartMs, tz);
+          const dailyReviewsRange = await loadDailyReviewsInRange(
+            userId,
+            weekDates[0]!,
+            weekDates[weekDates.length - 1]!
+          );
+          const reviewsByDate = new Map(
+            dailyReviewsRange.map((r) => [r.date, r] as const)
+          );
+          const effectiveTargetBaseline: Record<string, number> = {};
+          for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
+            effectiveTargetBaseline[id] = m.targetMinutes;
+          }
+          const schedulingGoals = filterSchedulingGoals(plan.goals);
+          const todayIsoSnap = todayIsoInTz(tz);
+          const todayIdxSnap = weekDates.indexOf(todayIsoSnap);
+          const dayIndexSnap = todayIdxSnap >= 0 ? todayIdxSnap : 6;
+          const baselineRollups = computeGoalRollups({
+            goals: schedulingGoals,
+            reviewsByDate,
+            effectiveTargetByGoal: effectiveTargetBaseline,
+            weekDates,
+            dayIndex: dayIndexSnap
+          });
+          const catchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
+          allocation = allocateWeek({
+            plan,
+            busy: [...busy, ...systemBlocks],
+            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+            niceWeatherWindows,
+            settings,
+            weekStartMs,
+            weekEndMs,
+            catchUpFloors,
+            weekAnchorDate: localMondayIso(tz),
+            goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+            sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+          });
+        }
+        const titleForSnapshot = (t: string) => {
+          const s = (t ?? "").trim();
+          return s.length > 0 ? s : "Block";
+        };
+        const todaysBlocks: AllocatedBlockSnapshot[] = allocation.blocks
+          .filter(
+            (b) =>
+              !b.segment &&
+              Boolean(b.goalId?.trim()) &&
+              b.startMs >= dayStartMs &&
+              b.endMs <= dayEndMs &&
+              b.endMs > b.startMs
+          )
+          .map((b) => ({
+            goalId: b.goalId,
+            title: titleForSnapshot(b.title),
+            startMs: b.startMs,
+            endMs: b.endMs,
+            ...(b.dragKey ? { dragKey: b.dragKey } : {})
+          }));
+        if (todaysBlocks.length > 0) {
+          review.plannedBlocksSnapshot = todaysBlocks;
+          await saveDailyReview(userId, review);
+        }
+      } catch (err) {
+        console.error("review page: planned snapshot allocation failed", {
+          date,
+          err
+        });
       }
     }
   }
