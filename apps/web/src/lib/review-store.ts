@@ -12,7 +12,13 @@ import { and, eq, gte, lte } from "drizzle-orm";
 import {
   type DailyReview,
   type WeeklyReview,
+  allocatedBlockSnapshotSchema,
+  blockMarkSchema,
   dailyReviewSchema,
+  eveningScorecardSchema,
+  goalMarkSchema,
+  logSlotSchema,
+  morningPromptSchema,
   weeklyReviewSchema
 } from "@calendar-automations/schema";
 import { db, schema } from "./db/index";
@@ -28,6 +34,67 @@ function emptyWeeklyReview(weekStart: string, timezone: string): WeeklyReview {
   return weeklyReviewSchema.parse({ weekStart, timezone });
 }
 
+/**
+ * DB jsonb can contain legacy or hand-edited rows that no longer satisfy the
+ * strict Zod contract (e.g. log slots with endMinute ≤ startMinute). Strip
+ * invalid list items so a single bad slot does not 500 the day sheet.
+ */
+function hydrateDailyReviewFromRow(
+  data: object,
+  date: string,
+  timezone: string
+): DailyReview {
+  const merged = { ...data, date, timezone };
+  const strict = dailyReviewSchema.safeParse(merged);
+  if (strict.success) return strict.data;
+
+  const raw = data as Record<string, unknown>;
+  const slotsRaw = Array.isArray(raw.slots) ? raw.slots : [];
+  const slots = slotsRaw
+    .map((s) => logSlotSchema.safeParse(s))
+    .filter((r) => r.success)
+    .map((r) => r.data);
+
+  const snapRaw = Array.isArray(raw.plannedBlocksSnapshot) ? raw.plannedBlocksSnapshot : [];
+  const plannedBlocksSnapshot = snapRaw
+    .map((b) => allocatedBlockSnapshotSchema.safeParse(b))
+    .filter((r) => r.success)
+    .map((r) => r.data);
+
+  const bmRaw = Array.isArray(raw.blockMarks) ? raw.blockMarks : [];
+  const blockMarks = bmRaw
+    .map((b) => blockMarkSchema.safeParse(b))
+    .filter((r) => r.success)
+    .map((r) => r.data);
+
+  const gmRaw = Array.isArray(raw.goalMarks) ? raw.goalMarks : [];
+  const goalMarks = gmRaw
+    .map((g) => goalMarkSchema.safeParse(g))
+    .filter((r) => r.success)
+    .map((r) => r.data);
+
+  const morning = morningPromptSchema.safeParse(raw.morning);
+  const evening = eveningScorecardSchema.safeParse(raw.evening);
+  const shell = emptyDailyReview(date, timezone);
+
+  const recovered = dailyReviewSchema.safeParse({
+    date,
+    timezone,
+    plannedBlocksSnapshot,
+    morning: morning.success ? morning.data : shell.morning,
+    slots,
+    blockMarks,
+    goalMarks,
+    evening: evening.success ? evening.data : shell.evening
+  });
+  if (recovered.success) return recovered.data;
+
+  console.warn("hydrateDailyReviewFromRow: could not recover row; using empty shell", {
+    date
+  });
+  return emptyDailyReview(date, timezone);
+}
+
 export async function loadDailyReview(
   userId: string,
   date: string,
@@ -41,8 +108,7 @@ export async function loadDailyReview(
     .limit(1);
   const row = rows[0];
   if (!row) return emptyDailyReview(date, timezone);
-  // Re-parse defensively so old rows missing newer fields hydrate cleanly.
-  return dailyReviewSchema.parse({ ...(row.data as object), date, timezone });
+  return hydrateDailyReviewFromRow(row.data as object, date, timezone);
 }
 
 export async function saveDailyReview(
@@ -96,9 +162,7 @@ export async function loadDailyReviewsInRange(
         lte(schema.dailyReviews.date, endDate)
       )
     );
-  return rows.map((r) =>
-    dailyReviewSchema.parse({ ...(r.data as object), date: r.date, timezone: r.timezone })
-  );
+  return rows.map((r) => hydrateDailyReviewFromRow(r.data as object, r.date, r.timezone));
 }
 
 export async function loadWeeklyReview(
