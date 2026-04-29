@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
 import { clearGoalDragOverrides, setGoalBlockOverridesBatch } from "./plan/actions";
 
@@ -90,6 +91,7 @@ export function DraggableProposedGoalBlock({
   dayIndex,
   reservedForGoalDrag
 }: DraggableProposedGoalBlockProps) {
+  const router = useRouter();
   const elRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<{
     pointerId: number;
@@ -186,6 +188,7 @@ export function DraggableProposedGoalBlock({
           source: "drag" as const
         }))
       );
+      router.refresh();
     } catch (err) {
       console.warn("setGoalBlockOverridesBatch failed", err);
     } finally {
@@ -222,6 +225,7 @@ export function DraggableProposedGoalBlock({
     setPending(true);
     try {
       await clearGoalDragOverrides(slices.map((s) => s.dragKey));
+      router.refresh();
     } catch (err) {
       console.warn("clearGoalDragOverrides failed", err);
     } finally {

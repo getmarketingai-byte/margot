@@ -159,9 +159,9 @@ export interface AllocateInput {
    *
    * When the user is behind on a goal mid-week, the weekly review surface
    * computes a deficit and stores it here as `goalId -> additionalMinutes`.
-   * The allocator adds these minutes to the goal's effective weekly floor
-   * (and weekly ceiling, so the cap doesn't silently swallow the boost) so
-   * the remaining days of the week pick up the extra time.
+   * The allocator adds these minutes to the goal's effective weekly floor so
+   * the remaining days prioritise extra time — the user's `maxMinutesPerWeek`
+   * (if any) stays a hard ceiling and is not raised by catch-up.
    *
    * Negative values are honoured (you can shrink a goal that ran ahead).
    * Missing or zero entries are no-ops, preserving baseline behaviour.
@@ -401,18 +401,10 @@ function distributeMinutes(
     const norm = normaliseGoalTime(goal);
     const bump = catchUpFloors?.[goal.id] ?? 0;
     if (bump !== 0) {
-      // Bump both the floor (so the catch-up is reserved in Pass 1) and the
-      // ceiling (so a tight `maxMinutesPerWeek` doesn't swallow the boost).
-      // Floors clamp at zero — a negative catch-up cannot drive the floor
-      // below zero or below an existing larger ceiling.
+      // Floor only. Raising the weekly ceiling here made allocations exceed a
+      // stated `maxMinutesPerWeek` (catch-up looked like "ignore my cap").
       const baseFloor = norm.minMinutesPerWeek ?? 0;
       norm.minMinutesPerWeek = Math.max(0, baseFloor + bump);
-      if (norm.maxMinutesPerWeek !== undefined) {
-        norm.maxMinutesPerWeek = Math.max(
-          norm.minMinutesPerWeek,
-          norm.maxMinutesPerWeek + bump
-        );
-      }
     }
     return {
       goal,

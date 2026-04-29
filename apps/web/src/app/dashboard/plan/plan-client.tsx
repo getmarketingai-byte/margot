@@ -9,6 +9,7 @@ import {
   useTransition,
   type FormEvent
 } from "react";
+import { useRouter } from "next/navigation";
 import type {
   DayOfWeek,
   EnergyMode,
@@ -117,6 +118,7 @@ export function PlanClient({
   allocationMode,
   paceByGoal
 }: PlanClientProps) {
+  const router = useRouter();
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
   const [, startTransition] = useTransition();
@@ -172,6 +174,7 @@ export function PlanClient({
       try {
         const { id } = await addGoal(payload);
         setGoals((prev) => prev.map((g) => (g.id === tempId ? { ...g, id } : g)));
+        router.refresh();
       } catch (err) {
         console.error("addGoal failed", err);
         setGoals((prev) => prev.filter((g) => g.id !== tempId));
@@ -184,6 +187,7 @@ export function PlanClient({
     startTransition(async () => {
       try {
         await updateGoal(id, ensureGoalShape(next));
+        router.refresh();
       } catch (err) {
         console.error("updateGoal failed", err);
       }
@@ -196,6 +200,7 @@ export function PlanClient({
     startTransition(async () => {
       try {
         await removeGoal(id);
+        router.refresh();
       } catch (err) {
         console.error("removeGoal failed", err);
         setGoals(snapshot);
@@ -214,6 +219,7 @@ export function PlanClient({
     startTransition(async () => {
       try {
         await reorderGoals(ids);
+        router.refresh();
       } catch (err) {
         console.error("reorderGoals failed", err);
       }
