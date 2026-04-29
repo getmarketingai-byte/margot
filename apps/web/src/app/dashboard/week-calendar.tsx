@@ -1,12 +1,8 @@
+"use client";
+
 /**
- * Server-rendered week grid that overlays two layers:
- *   1. The user's connected Google busy events (greyed background).
- *   2. The planner's proposed blocks for this week (accent foreground).
- *
- * The grid uses absolute positioning within per-day containers, so the layout
- * scales cleanly to the time range chosen (defaults 6am–10pm in the user's
- * timezone). Events outside the visible window are rendered as small "earlier"
- * / "later" badges at the day's edges so nothing silently disappears.
+ * Week grid: busy layer, system layer, proposed goal blocks. Client component so
+ * planning surfaces can pass drag callbacks for optimistic UI.
  */
 
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
@@ -45,6 +41,11 @@ interface WeekCalendarProps {
   dayIndices?: readonly number[];
   /** Heading label for the calendar card. */
   title?: string;
+  /**
+   * Called after a proposed block drag is saved so the parent can apply
+   * optimistic times before `router.refresh()` completes.
+   */
+  onProposedDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
 }
 
 const PX_PER_HOUR = 30;
@@ -344,7 +345,8 @@ export function WeekCalendar({
   endHour = 24,
   compact = false,
   dayIndices,
-  title = "This week"
+  title = "This week",
+  onProposedDragCommit
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
@@ -508,6 +510,7 @@ export function WeekCalendar({
                     block={p}
                     pxPerHour={PX_PER_HOUR}
                     reservedForGoalDrag={reservedForGoalDrag}
+                    onDragCommit={onProposedDragCommit}
                   />
                 ))}
             </div>
@@ -721,7 +724,8 @@ function SystemBlockSlice({
 function ProposedBlock({
   block,
   pxPerHour,
-  reservedForGoalDrag
+  reservedForGoalDrag,
+  onDragCommit
 }: {
   block: PositionedBlock & {
     isSegment: boolean;
@@ -731,6 +735,7 @@ function ProposedBlock({
   };
   pxPerHour: number;
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
+  onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
@@ -751,6 +756,7 @@ function ProposedBlock({
         slices={slices}
         dayIndex={block.dayIndex}
         reservedForGoalDrag={reservedForGoalDrag}
+        onDragCommit={onDragCommit}
       />
     );
   }

@@ -79,6 +79,11 @@ interface DraggableProposedGoalBlockProps {
    * of these are rejected (matches planner hard constraints).
    */
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
+  /**
+   * When set, called with new epoch times per `dragKey` after a successful save.
+   * Parent should apply optimistic UI and call `router.refresh()` (e.g. inside `startTransition`).
+   */
+  onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
 }
 
 export function DraggableProposedGoalBlock({
@@ -91,7 +96,8 @@ export function DraggableProposedGoalBlock({
   goalId,
   slices,
   dayIndex,
-  reservedForGoalDrag
+  reservedForGoalDrag,
+  onDragCommit
 }: DraggableProposedGoalBlockProps) {
   const router = useRouter();
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -196,7 +202,15 @@ export function DraggableProposedGoalBlock({
           source: "drag" as const
         }))
       );
-      router.refresh();
+      const updates: Record<string, { startMs: number; endMs: number }> = {};
+      for (const s of slices) {
+        updates[s.dragKey] = { startMs: s.startMs + deltaMs, endMs: s.endMs + deltaMs };
+      }
+      if (onDragCommit) {
+        onDragCommit(updates);
+      } else {
+        router.refresh();
+      }
     } catch (err) {
       console.warn("setGoalBlockOverridesBatch failed", err);
     } finally {

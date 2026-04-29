@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
 import type { SystemBlock } from "@/lib/week-blocks";
 import { WeekCalendar } from "../week-calendar";
@@ -9,6 +10,26 @@ type CalendarRangeMode = "calendar-week" | "next-7-days";
 
 const STORAGE_KEY = "dashboard.plan.calendar.rangeMode";
 const WEATHER_STORAGE_KEY = "dashboard.plan.calendar.showWeather";
+
+function applyProposedOptimisticTimes(
+  blocks: readonly AllocatedBlock[],
+  patch: Record<string, { startMs: number; endMs: number }>
+): AllocatedBlock[] {
+  if (Object.keys(patch).length === 0) return [...blocks];
+  return blocks.map((b) => {
+    if (!b.dragKey) return b;
+    const p = patch[b.dragKey];
+    if (!p) return b;
+    return {
+      ...b,
+      startMs: p.startMs,
+      endMs: p.endMs,
+      dragOverrideSaved: true,
+      pinnedFromOverride: true,
+      overrideSource: "drag" as const
+    };
+  });
+}
 
 function partsInTimezone(ms: number, timezone: string) {
   const fmt = new Intl.DateTimeFormat("en-US", {
@@ -53,8 +74,37 @@ export function RangeToggleCalendar({
   proposed: readonly AllocatedBlock[];
   compact?: boolean;
 }) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  const [timePatch, setTimePatch] = useState<Record<string, { startMs: number; endMs: number }>>({});
   const [mode, setMode] = useState<CalendarRangeMode>("calendar-week");
   const [showWeather, setShowWeather] = useState(true);
+
+  const proposedSig = useMemo(
+    () =>
+      proposed
+        .filter((b) => b.dragKey)
+        .map((b) => `${b.dragKey}:${b.startMs}:${b.endMs}`)
+        .sort()
+        .join("|"),
+    [proposed]
+  );
+
+  useEffect(() => {
+    setTimePatch((p) => (Object.keys(p).length === 0 ? p : {}));
+  }, [proposedSig]);
+
+  const displayProposed = useMemo(
+    () => applyProposedOptimisticTimes(proposed, timePatch),
+    [proposed, timePatch]
+  );
+
+  const handleProposedDragCommit = (updates: Record<string, { startMs: number; endMs: number }>) => {
+    setTimePatch((prev) => ({ ...prev, ...updates }));
+    startTransition(() => {
+      router.refresh();
+    });
+  };
 
   useEffect(() => {
     try {
@@ -159,9 +209,10 @@ export function RangeToggleCalendar({
         timezone={timezone}
         busy={busy}
         system={visibleSystem}
-        proposed={proposed}
+        proposed={displayProposed}
         compact={compact}
         dayIndices={dayOffsets}
+        onProposedDragCommit={handleProposedDragCommit}
       />
     </div>
   );
