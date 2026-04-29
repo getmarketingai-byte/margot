@@ -911,7 +911,7 @@ function allocateGoal(
 
   // If the user set a daily floor, ensure each scheduled day lands at least that.
   const minPerDay = norm.minMinutesPerDay ?? 0;
-  const perDayBudget = Math.max(perDay, minPerDay);
+  let perDayBudget = Math.max(perDay, minPerDay);
 
   const dayHeadroomFor = (dayIdx: number): number => {
     const day = days[dayIdx]!;
@@ -970,6 +970,24 @@ function allocateGoal(
     }
     return false;
   };
+
+  // Re-size daily budget to the number of days that are actually schedulable
+  // in this run horizon (future windows + day headroom). This preserves the
+  // one-block-per-day rule while avoiding undersized blocks mid-week.
+  if (norm.frequencyPerWeek === undefined) {
+    const schedulableAllowedDays = allowedDays.filter(
+      (dayIdx) => dayHeadroomFor(dayIdx) >= QUANTUM && hasFuturePlacementWindow(dayIdx)
+    );
+    const schedulableCount = schedulableAllowedDays.length;
+    if (schedulableCount > 0 && schedulableCount < targetDays) {
+      perDay = Math.ceil(remainingMinutes / schedulableCount);
+      if (norm.maxMinutesPerDay !== undefined) {
+        perDay = Math.min(perDay, norm.maxMinutesPerDay);
+      }
+      if (perDay <= 0) return;
+      perDayBudget = Math.max(perDay, minPerDay);
+    }
+  }
 
   let slotIndex = 0;
   /** Drag overrides that failed `tryPinGoalBlock` — treat as unpinned so we do not auto-place duplicates on later passes. */
