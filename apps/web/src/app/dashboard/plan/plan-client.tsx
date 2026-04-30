@@ -9,7 +9,6 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import { useRouter } from "next/navigation";
 import type {
   DayOfWeek,
   EnergyMode,
@@ -25,8 +24,10 @@ import {
   formatMinutes,
   summariseAllocation
 } from "./goal-helpers";
+import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
+import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
 import { addGoal, removeGoal, reorderGoals, updateGoal } from "./actions";
 
 type GoalDraft = Omit<WeeklyGoal, "id" | "title">;
@@ -131,7 +132,7 @@ export function PlanClient({
   effectiveTargetByGoal,
   paceByGoal
 }: PlanClientProps) {
-  const router = useRouter();
+  const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(850);
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
   const [, startTransition] = useTransition();
@@ -182,12 +183,16 @@ export function PlanClient({
       commitmentLevel: draft.commitmentLevel ?? "committed"
     };
     setGoals((prev) => [...prev, optimistic]);
+    const actionId = `goal-add-${tempId}`;
+    reportPerceivedInteraction("goal_add", actionId);
     const payload = ensureGoalShape({ title, ...draft });
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         const { id } = await addGoal(payload);
         setGoals((prev) => prev.map((g) => (g.id === tempId ? { ...g, id } : g)));
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("addGoal failed", err);
         setGoals((prev) => prev.filter((g) => g.id !== tempId));
@@ -196,11 +201,15 @@ export function PlanClient({
   };
 
   const handleUpdate = (id: string, next: GoalInput) => {
+    const actionId = `goal-update-${id}-${crypto.randomUUID().slice(0, 8)}`;
+    reportPerceivedInteraction("goal_update", actionId);
     setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, ...next, id } : g)));
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         await updateGoal(id, ensureGoalShape(next));
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("updateGoal failed", err);
       }
@@ -208,12 +217,16 @@ export function PlanClient({
   };
 
   const handleDelete = (id: string) => {
+    const actionId = `goal-delete-${id}`;
+    reportPerceivedInteraction("goal_delete", actionId);
     const snapshot = goals;
     setGoals((prev) => prev.filter((g) => g.id !== id));
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         await removeGoal(id);
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("removeGoal failed", err);
         setGoals(snapshot);
@@ -223,6 +236,8 @@ export function PlanClient({
 
   const handleReorder = (fromIdx: number, toIdx: number) => {
     if (fromIdx === toIdx) return;
+    const actionId = `goal-reorder-${fromIdx}-${toIdx}-${crypto.randomUUID().slice(0, 6)}`;
+    reportPerceivedInteraction("goal_reorder", actionId);
     const next = [...goals];
     const [moved] = next.splice(fromIdx, 1);
     if (!moved) return;
@@ -230,9 +245,11 @@ export function PlanClient({
     setGoals(next);
     const ids = next.map((g) => g.id);
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         await reorderGoals(ids);
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("reorderGoals failed", err);
       }

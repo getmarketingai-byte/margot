@@ -6,6 +6,8 @@ import {
   type WeeklyReview
 } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
+import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadWeeklyReview, saveWeeklyReview } from "@/lib/review-store";
 import { loadSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
@@ -25,9 +27,10 @@ async function loadForUser(weekStart?: string): Promise<{
 
 function commit(userId: string, review: WeeklyReview): Promise<void> {
   return saveWeeklyReview(userId, review).then(() => {
+    invalidateUserAllocationCache(userId);
     revalidatePath("/dashboard/week-review");
     revalidatePath("/dashboard/review");
-    revalidatePath("/dashboard/plan");
+    revalidatePlanningRoutes();
   });
 }
 

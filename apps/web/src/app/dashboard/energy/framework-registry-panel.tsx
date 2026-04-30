@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import type { FrameworkRegistryId, FrameworkSystem } from "@calendar-automations/schema";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
   FRAMEWORK_REGISTRY_DESCRIPTIONS
 } from "@calendar-automations/schema";
+import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
+import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
 import { persistSchedulerFrameworkInclusion, updateFrameworkOverlay } from "./framework-system-actions";
 
 const SCHEDULER_IDS = [
@@ -21,35 +22,76 @@ const SCHEDULER_IDS = [
 ] as const satisfies readonly FrameworkRegistryId[];
 
 export function FrameworkRegistryPanel({ initial }: { initial: FrameworkSystem }) {
-  const router = useRouter();
-  const frameworks = useMemo(
-    () => [...initial.frameworks].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)),
-    [initial.frameworks]
+  const [frameworkRows, setFrameworkRows] = useState<FrameworkSystem["frameworks"]>(
+    () => [...initial.frameworks].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
   );
 
+  useEffect(() => {
+    const sorted = [...initial.frameworks].sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)
+    );
+    setFrameworkRows(sorted);
+  }, [initial.frameworks]);
+
+  const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(900);
+
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  const frameworks = useMemo(() => [...frameworkRows], [frameworkRows]);
+
+  const patchFrameworkRow = (id: FrameworkRegistryId, patch: Partial<FrameworkSystem["frameworks"][number]>) => {
+    setFrameworkRows((rows) =>
+      rows
+        .map((r) => (r.id === id ? ({ ...r, ...patch } as FrameworkSystem["frameworks"][number]) : r))
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
+    );
+  };
 
   const commitSchedulerIncluded = async (row: FrameworkSystem["frameworks"][number], next: boolean) => {
     const key = mapIdToInclusionKey(row.id);
     if (!key) return;
+    const actionId = `fw-scheduler-${row.id}-${next}-${crypto.randomUUID().slice(0, 8)}`;
+    reportPerceivedInteraction("framework_scheduler_toggle", actionId);
+    patchFrameworkRow(row.id, { enabled: next });
     setBusyId(row.id);
+    const t0 = typeof performance !== "undefined" ? performance.now() : 0;
     try {
       await persistSchedulerFrameworkInclusion({ [key]: next });
-      router.refresh();
+      measureServerAck(actionId, t0);
+      scheduleStaleDataRefresh();
     } catch (err) {
       console.error("persistSchedulerFrameworkInclusion failed", err);
+      setFrameworkRows(
+        [...initial.frameworks].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
+      );
     } finally {
       setBusyId(null);
     }
   };
 
   const toggleOverlayCalendar = async (id: FrameworkRegistryId, nextOverlay: boolean) => {
+    const actionId = `fw-overlay-${id}-${nextOverlay}`;
+    reportPerceivedInteraction("framework_overlay_toggle", actionId);
+    setFrameworkRows((rows) =>
+      rows
+        .map((r) =>
+          r.id === id
+            ? { ...r, overlay: { ...(r.overlay ?? { enabled: true }), enabled: nextOverlay } }
+            : r
+        )
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
+    );
     setBusyId(`ov-${id}`);
+    const t0 = typeof performance !== "undefined" ? performance.now() : 0;
     try {
       await updateFrameworkOverlay(id, { enabled: nextOverlay });
-      router.refresh();
+      measureServerAck(actionId, t0);
+      scheduleStaleDataRefresh();
     } catch (err) {
       console.error("updateFrameworkOverlay failed", err);
+      setFrameworkRows(
+        [...initial.frameworks].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
+      );
     } finally {
       setBusyId(null);
     }

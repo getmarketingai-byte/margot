@@ -4,6 +4,8 @@ import { authOrPreview, signOut } from "@/lib/auth";
 import { loadBillingState } from "@/lib/billing-state-server";
 import { AccountMenu } from "./account-menu";
 import { BillingBanner } from "./billing-banner";
+import { DashboardPerfListener } from "./dashboard-perf-listener";
+import { DashboardRoutePrefetch } from "./dashboard-route-prefetch";
 import { DashboardPrimaryNav } from "./dashboard-primary-nav";
 
 const ACCOUNT_LINKS = [
@@ -33,6 +35,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </header>
 
       <DashboardPrimaryNav />
+
+      <DashboardPerfListener />
+
+      <DashboardRoutePrefetch />
 
       <BillingBanner state={billing} />
 

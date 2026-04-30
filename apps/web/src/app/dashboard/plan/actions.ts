@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import {
   filterSchedulingGoals,
@@ -23,6 +22,8 @@ import {
   loadDashboardWeeklyPlan,
   runThisWeekAllocationForPlan
 } from "@/lib/perfect-week-this-week-allocation";
+import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { refreshPlannedSnapshotsForCurrentWeek } from "@/lib/refresh-review-planned-snapshots";
 import { runRegenerateForUser } from "@/lib/regenerate-user-snapshot";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
@@ -31,15 +32,10 @@ function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): 
   return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
 }
 
-/**
- * Routes that read either the goal list or the weekly intent need to be
- * invalidated whenever those slices change. Centralising the list keeps the
- * planning hub and Perfect Week page in sync after an edit.
- */
-function revalidatePlanRoutes(): void {
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard/energy");
-  revalidatePath("/dashboard");
+/** Refresh cached allocator inputs + dashboard pages after plan/settings-driven mutations. */
+function afterPlanMutation(userId: string, options?: { includeReviews?: boolean }): void {
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes(options);
 }
 
 /** Persist Personal Perfect Week profile (guided + advanced rules). */
@@ -56,7 +52,7 @@ export async function updatePersonalSystem(input: PersonalSystem): Promise<void>
     ...settings,
     personalSystem: parsed
   });
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /**
@@ -147,7 +143,7 @@ export async function addGoal(input: Omit<WeeklyGoal, "id">): Promise<{ id: stri
   const parsed = weeklyGoalSchema.parse({ ...input, id });
   plan.goals.push(parsed);
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
   return { id };
 }
 
@@ -166,7 +162,7 @@ export async function updateGoal(id: string, input: Omit<WeeklyGoal, "id">): Pro
   if (isInvertedTimemapGoal(plan.goals[idx]!)) return;
   plan.goals[idx] = weeklyGoalSchema.parse({ ...input, id });
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /**
@@ -190,7 +186,7 @@ export async function patchGoal(
   const merged = { ...plan.goals[idx]!, ...patch, id };
   plan.goals[idx] = weeklyGoalSchema.parse(merged);
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 export async function removeGoal(id: string): Promise<void> {
@@ -203,7 +199,7 @@ export async function removeGoal(id: string): Promise<void> {
   if (victim && isInvertedTimemapGoal(victim)) return;
   plan.goals = plan.goals.filter((g) => g.id !== id);
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /**
@@ -228,7 +224,7 @@ export async function reorderGoals(orderedIds: readonly string[]): Promise<void>
   plan.goals = [...reordered, ...missing, ...timemapTail];
   weeklyPlanSchema.parse(plan);
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /**
@@ -245,7 +241,7 @@ export async function updateWeeklyIntent(input: WeeklyIntent): Promise<void> {
   const plan = await loadOrCreatePlan(userId, settings.timezone);
   plan.weeklyIntent = weeklyIntentSchema.parse(input);
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /**
@@ -275,7 +271,7 @@ export async function setBlockOverride(
   );
   plan.overrides = [...filtered, parsed];
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /** Remove an override by `kind` + `key`. No-op if no matching override exists. */
@@ -292,7 +288,7 @@ export async function clearBlockOverride(
   plan.overrides = plan.overrides.filter((o) => !(o.kind === kind && o.key === key));
   if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /**
@@ -317,7 +313,7 @@ export async function setGoalBlockOverridesBatch(
   }
   plan.overrides = next;
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 /** Remove all goal drag overrides matching `keys` in one write (merged-bar reset). */
@@ -333,7 +329,7 @@ export async function clearGoalDragOverrides(keys: readonly string[]): Promise<v
   plan.overrides = plan.overrides.filter((o) => !(o.kind === "goal" && keySet.has(o.key)));
   if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
-  revalidatePlanRoutes();
+  afterPlanMutation(userId);
 }
 
 function isActualGoalOverride(o: BlockOverride): boolean {
@@ -490,9 +486,7 @@ export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
     weeklyPlanSchema.parse(planFull);
     await savePlan(userId, planFull);
     await refreshPlannedSnapshotsForCurrentWeek(userId, planFull, settings);
-    revalidatePlanRoutes();
-    revalidatePath("/dashboard/review");
-    revalidatePath("/dashboard/week-review");
+    afterPlanMutation(userId, { includeReviews: true });
     await runRegenerateForUser(userId);
   } catch (err) {
     console.warn("syncActualGoalOverridesFromDayLogs failed", err);

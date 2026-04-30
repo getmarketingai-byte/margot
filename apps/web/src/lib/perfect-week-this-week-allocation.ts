@@ -14,7 +14,7 @@ import {
 import { allocateWeek, goalOverrideSourcesFromPlan, type AllocateResult } from "@calendar-automations/planner";
 import { db, schema } from "@/lib/db";
 import { localMondayIso } from "@/lib/week";
-import { loadPlanWeekAllocationInputs } from "@/lib/allocation-run-context";
+import { getCachedPlanWeekAllocationInputs } from "@/lib/cached-plan-week-allocation-inputs";
 import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 
 async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
@@ -73,7 +73,7 @@ export async function runThisWeekAllocationForPlan(
 } | null> {
   if (!db) return null;
 
-  const ctx = await loadPlanWeekAllocationInputs({
+  const ctx = await getCachedPlanWeekAllocationInputs({
     userId,
     plan,
     settings,

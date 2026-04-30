@@ -15,6 +15,7 @@ import {
   websiteLd
 } from "@/lib/json-ld";
 import { JsonLd } from "@/components/json-ld";
+import { authOrPreview } from "@/lib/auth";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -38,7 +39,10 @@ export const metadata: Metadata = {
 
 const TOP_FAQ = FAQ.slice(0, 4);
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const session = await authOrPreview();
+  const isSignedIn = Boolean(session?.user?.id);
+
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col gap-12 px-5 pb-16 pt-10 sm:max-w-3xl">
       <JsonLd
@@ -55,12 +59,16 @@ export default function LandingPage() {
         <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">{PRODUCT.tagline}</h1>
         <p className="text-ink-600 dark:text-ink-200 sm:text-lg">{PRODUCT.shortDescription}</p>
         <div className="flex flex-wrap gap-3">
-          <Link href="/api/auth/signin?callbackUrl=/dashboard" className="btn-primary">
-            Sign in with Google
-          </Link>
-          <Link href="/dashboard" className="btn-secondary">
-            Open dashboard
-          </Link>
+          {!isSignedIn ? (
+            <Link href="/api/auth/signin?callbackUrl=/dashboard" className="btn-primary">
+              Sign up / sign in with Google
+            </Link>
+          ) : null}
+          {isSignedIn ? (
+            <Link href="/dashboard" className="btn-secondary">
+              Open dashboard
+            </Link>
+          ) : null}
           <Link href="/faq" className="btn-secondary">
             FAQ
           </Link>

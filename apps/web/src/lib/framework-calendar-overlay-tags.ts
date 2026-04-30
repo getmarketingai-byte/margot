@@ -41,6 +41,7 @@ export function overlayTagsForGoal(
   const tags: Array<{ abbr: string; title: string }> = [];
 
   for (const row of sorted) {
+    if (!row.enabled) continue;
     if (!layerIsOn(row.id, row, activeLayers)) continue;
     switch (row.id) {
       case "commitment": {

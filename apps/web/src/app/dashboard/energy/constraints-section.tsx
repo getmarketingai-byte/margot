@@ -1,5 +1,6 @@
-import { revalidatePath } from "next/cache";
 import { authOrPreview } from "@/lib/auth";
+import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
   coerceSettingsAfterLegacyWheelPpfHppEdit,
@@ -17,9 +18,9 @@ const HP6: { key: Hp6HabitKey; label: string }[] = [
   { key: "courage", label: "Demonstrate courage" }
 ];
 
-function revalidatePlanningSurfaces() {
-  revalidatePath("/dashboard/energy");
-  revalidatePath("/dashboard/plan");
+function afterConstraintsSave(userId: string): void {
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
 }
 
 async function updateWheel(formData: FormData): Promise<void> {
@@ -44,7 +45,7 @@ async function updateWheel(formData: FormData): Promise<void> {
       wheel: { ...settings.wheel, enabled: true, areas }
     })
   );
-  revalidatePlanningSurfaces();
+  afterConstraintsSave(userId);
 }
 
 async function updatePpf(formData: FormData): Promise<void> {
@@ -65,7 +66,7 @@ async function updatePpf(formData: FormData): Promise<void> {
       ppf: { enabled: true, targets }
     })
   );
-  revalidatePlanningSurfaces();
+  afterConstraintsSave(userId);
 }
 
 async function updateHpp(formData: FormData): Promise<void> {
@@ -88,7 +89,7 @@ async function updateHpp(formData: FormData): Promise<void> {
       }
     })
   );
-  revalidatePlanningSurfaces();
+  afterConstraintsSave(userId);
 }
 
 async function updateEnergy(formData: FormData): Promise<void> {
@@ -102,7 +103,7 @@ async function updateEnergy(formData: FormData): Promise<void> {
     ...settings,
     energyOrdering: { ...settings.energyOrdering, mode }
   });
-  revalidatePlanningSurfaces();
+  afterConstraintsSave(userId);
 }
 
 async function updateAllocator(formData: FormData): Promise<void> {
@@ -118,7 +119,7 @@ async function updateAllocator(formData: FormData): Promise<void> {
     ...settings,
     allocator: { ...settings.allocator, starvationMode }
   });
-  revalidatePlanningSurfaces();
+  afterConstraintsSave(userId);
 }
 
 async function updateAllocationMode(formData: FormData): Promise<void> {
@@ -134,7 +135,7 @@ async function updateAllocationMode(formData: FormData): Promise<void> {
     ...settings,
     allocator: { ...settings.allocator, allocationMode }
   });
-  revalidatePlanningSurfaces();
+  afterConstraintsSave(userId);
 }
 
 async function updateCatchUpMode(formData: FormData): Promise<void> {
@@ -150,7 +151,7 @@ async function updateCatchUpMode(formData: FormData): Promise<void> {
     ...settings,
     allocator: { ...settings.allocator, catchUpMode }
   });
-  revalidatePlanningSurfaces();
+  afterConstraintsSave(userId);
 }
 
 export async function ConstraintsSection() {

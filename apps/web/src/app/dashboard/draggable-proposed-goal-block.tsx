@@ -81,9 +81,10 @@ interface DraggableProposedGoalBlockProps {
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
   /**
    * When set, called with new epoch times per `dragKey` after a successful save.
-   * Parent should apply optimistic UI and call `router.refresh()` (e.g. inside `startTransition`).
    */
   onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
+  /** When drag overrides are cleared (reset), parent can drop optimistic patches without a full reload. */
+  onDragOverridesCleared?: (dragKeys: string[]) => void;
   /** Tiny framework chips under the goal title (Perfect Week overlays). */
   frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
 }
@@ -101,6 +102,7 @@ export function DraggableProposedGoalBlock({
   reservedForGoalDrag,
   onDragCommit,
   frameworkOverlayChips,
+  onDragOverridesCleared
 }: DraggableProposedGoalBlockProps) {
   const router = useRouter();
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -211,8 +213,6 @@ export function DraggableProposedGoalBlock({
       }
       if (onDragCommit) {
         onDragCommit(updates);
-      } else {
-        router.refresh();
       }
     } catch (err) {
       console.warn("setGoalBlockOverridesBatch failed", err);
@@ -248,9 +248,13 @@ export function DraggableProposedGoalBlock({
 
   async function reset() {
     setPending(true);
+    const keys = slices.map((s) => s.dragKey);
     try {
-      await clearGoalDragOverrides(slices.map((s) => s.dragKey));
-      router.refresh();
+      await clearGoalDragOverrides(keys);
+      onDragOverridesCleared?.(keys);
+      if (!onDragOverridesCleared) {
+        router.refresh();
+      }
     } catch (err) {
       console.warn("clearGoalDragOverrides failed", err);
     } finally {

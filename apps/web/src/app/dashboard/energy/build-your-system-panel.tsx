@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import type { PersonalSystem, PersonalSystemAdvancedRule } from "@calendar-automations/schema";
 import { updatePersonalSystem } from "../plan/actions";
 
@@ -29,7 +28,6 @@ export function BuildYourSystemPanel({
   tuningHints: string[];
   variant?: "standalone" | "embedded";
 }) {
-  const router = useRouter();
   const [sys, setSys] = useState(initial);
   const [pending, startTransition] = useTransition();
 
@@ -39,7 +37,9 @@ export function BuildYourSystemPanel({
 
   function persist(next: PersonalSystem) {
     startTransition(() => {
-      void updatePersonalSystem(next).then(() => router.refresh());
+      void updatePersonalSystem(next).catch(() => {
+        /* keep local state — next navigation resyncs server truth */
+      });
     });
   }
 

@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
@@ -11,6 +10,7 @@ import {
 } from "@calendar-automations/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import type { SystemBlock } from "@/lib/week-blocks";
+import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { WeekCalendar } from "../week-calendar";
 
@@ -107,8 +107,7 @@ export function RangeToggleCalendar({
   frameworkSystem?: FrameworkSystem;
   wheelAreas?: ReadonlyArray<{ id: string; label: string }>;
 }) {
-  const router = useRouter();
-  const [, startTransition] = useTransition();
+  const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(750);
   const [timePatch, setTimePatch] = useState<Record<string, { startMs: number; endMs: number }>>({});
   const [mode, setMode] = useState<CalendarRangeMode>("calendar-week");
   const [showWeather, setShowWeather] = useState(true);
@@ -117,7 +116,7 @@ export function RangeToggleCalendar({
   const taggableFrameworkRows = useMemo(
     () =>
       (frameworkSystem?.frameworks ?? [])
-        .filter((f) => f.id !== "consistency" && f.id !== "routines")
+        .filter((f) => f.enabled && f.id !== "consistency" && f.id !== "routines")
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)),
     [frameworkSystem?.frameworks]
   );
@@ -165,9 +164,17 @@ export function RangeToggleCalendar({
 
   const handleProposedDragCommit = (updates: Record<string, { startMs: number; endMs: number }>) => {
     setTimePatch((prev) => ({ ...prev, ...updates }));
-    startTransition(() => {
-      router.refresh();
+    scheduleStaleDataRefresh();
+  };
+
+  const handleProposedDragOverridesCleared = (dragKeys: string[]) => {
+    setTimePatch((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      const next = { ...prev };
+      for (const k of dragKeys) delete next[k];
+      return next;
     });
+    scheduleStaleDataRefresh();
   };
 
   useEffect(() => {
@@ -369,8 +376,9 @@ export function RangeToggleCalendar({
         compact={compact}
         dayIndices={dayOffsets}
         onProposedDragCommit={handleProposedDragCommit}
+        onProposedDragOverridesCleared={handleProposedDragOverridesCleared}
         weeklyGoalsForFrameworkOverlays={schedulingGoals}
-        frameworkRegistryForOverlays={frameworkSystem?.frameworks}
+        frameworkRegistryForOverlays={taggableFrameworkRows}
         frameworkOverlayLayerState={
           taggableFrameworkRows.length && schedulingGoals?.length ? fwOverlayLayers : undefined
         }

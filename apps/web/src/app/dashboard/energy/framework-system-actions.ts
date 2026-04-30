@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import {
   applyCanonicalFromFrameworkSystem,
   applyFrameworkOverlayOffForSchedulerPatch,
@@ -15,12 +14,13 @@ import {
   type SchedulerFrameworkInclusion
 } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
+import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 
-function revalidatePlanningSurfaces() {
-  revalidatePath("/dashboard/energy");
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
+function afterSettingsPlanningMutation(userId: string): void {
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
 }
 
 /**
@@ -43,7 +43,7 @@ export async function persistSchedulerFrameworkInclusion(
   });
   const withOverlayClears = applyFrameworkOverlayOffForSchedulerPatch(coerced, patch);
   await saveSettings(userId, withOverlayClears);
-  revalidatePlanningSurfaces();
+  afterSettingsPlanningMutation(userId);
 }
 
 export async function updateFrameworkRegistryToggle(
@@ -67,7 +67,7 @@ export async function updateFrameworkRegistryToggle(
     frameworkSystem: { ...fsParse, frameworks }
   });
   await saveSettings(userId, next);
-  revalidatePlanningSurfaces();
+  afterSettingsPlanningMutation(userId);
 }
 
 export async function updateFrameworkOverlay(
@@ -93,7 +93,7 @@ export async function updateFrameworkOverlay(
     ...settings,
     frameworkSystem: { ...fsParse, frameworks }
   });
-  revalidatePlanningSurfaces();
+  afterSettingsPlanningMutation(userId);
 }
 
 export async function updateMethodModuleEnabled(
@@ -115,7 +115,7 @@ export async function updateMethodModuleEnabled(
     frameworkSystem: { ...fsParse, methodModules: mods }
   });
   await saveSettings(userId, next);
-  revalidatePlanningSurfaces();
+  afterSettingsPlanningMutation(userId);
 }
 
 export async function updatePlacementSignalsFromFramework(order: readonly PlacementSignalKey[]): Promise<void> {
@@ -130,5 +130,5 @@ export async function updatePlacementSignalsFromFramework(order: readonly Placem
     frameworkSystem: { ...fsParse, placementSignalsOrder: [...order] }
   });
   await saveSettings(userId, next);
-  revalidatePlanningSurfaces();
+  afterSettingsPlanningMutation(userId);
 }

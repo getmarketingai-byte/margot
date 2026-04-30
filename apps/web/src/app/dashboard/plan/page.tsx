@@ -7,8 +7,12 @@ import {
 } from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
+import {
+  getCachedPlanWeekAllocationInputs,
+  invalidateUserAllocationCache
+} from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";
-import { loadPlanWeekAllocationInputs } from "@/lib/allocation-run-context";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
 import { gymGoalTravelBlocksFromProposed, sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
@@ -22,7 +26,6 @@ import { ResizableColumns } from "./resizable-columns";
 import { WeeklyIntentCard } from "./weekly-intent-card";
 import { WeekCalendar } from "../week-calendar";
 import { RangeToggleCalendar } from "./range-toggle-calendar";
-import { revalidatePath } from "next/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -101,9 +104,8 @@ async function updateRoutines(formData: FormData): Promise<void> {
     }
   });
 
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/energy");
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
 }
 
 export default async function PlanPage() {
@@ -113,7 +115,7 @@ export default async function PlanPage() {
   const plan = await loadPlan(userId, settings.timezone);
   const catchUpMode = settings.allocator.catchUpMode;
   const nowMs = Date.now();
-  const ctx = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
   const schedulingGoals = filterSchedulingGoals(plan.goals);
   const resolvedCatchUpFloors = ctx.catchUpFloors;
   const {

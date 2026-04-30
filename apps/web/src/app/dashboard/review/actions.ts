@@ -11,9 +11,11 @@ import {
   goalMarkSchema,
   logSlotSchema
 } from "@calendar-automations/schema";
-import { authOrPreview } from "@/lib/auth";
-import { loadDailyReview, saveDailyReview } from "@/lib/review-store";
 import { syncActualGoalOverridesFromDayLogs } from "@/app/dashboard/plan/actions";
+import { authOrPreview } from "@/lib/auth";
+import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
+import { loadDailyReview, saveDailyReview } from "@/lib/review-store";
 import { loadSettings } from "@/lib/settings-store";
 
 async function loadReviewForUser(date: string): Promise<{
@@ -33,9 +35,10 @@ function commit(
   review: DailyReview
 ): Promise<void> {
   return saveDailyReview(userId, review).then(() => {
+    invalidateUserAllocationCache(userId);
     revalidatePath("/dashboard/review");
     revalidatePath("/dashboard/week-review");
-    revalidatePath("/dashboard/plan");
+    revalidatePlanningRoutes();
   });
 }
 

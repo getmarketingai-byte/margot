@@ -12,8 +12,11 @@ import { revalidatePath } from "next/cache";
 import { filterSchedulingGoals, type VisionSettings, type WeeklyPlan, visionSettingsSchema, weeklyIntentSchema } from "@calendar-automations/schema";
 import { allocateWeek, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
+import {
+  getCachedPlanWeekAllocationInputs,
+  invalidateUserAllocationCache
+} from "@/lib/cached-plan-week-allocation-inputs";
 import { db, schema } from "@/lib/db";
-import { loadPlanWeekAllocationInputs } from "@/lib/allocation-run-context";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
 import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
@@ -77,6 +80,7 @@ async function updateVision(input: VisionSettings): Promise<void> {
     ...settings,
     vision: visionSettingsSchema.parse(input)
   });
+  invalidateUserAllocationCache(userId);
   revalidatePath("/dashboard/energy");
 }
 
@@ -88,7 +92,7 @@ export default async function PlanningHubPage() {
   const schedulingGoals = filterSchedulingGoals(plan.goals);
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
   const nowMs = Date.now();
-  const ctx = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
   const {
     busyFetch,
     weekStartMs,

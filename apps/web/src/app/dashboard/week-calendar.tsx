@@ -52,9 +52,12 @@ interface WeekCalendarProps {
   title?: string;
   /**
    * Called after a proposed block drag is saved so the parent can apply
-   * optimistic times before `router.refresh()` completes.
+   * optimistic times. Server actions already persist; use debounced soft refresh
+   * to reconcile metrics without blocking each drag.
    */
   onProposedDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
+  /** When goal drag overrides are cleared (reset), parent can drop optimistic patches. */
+  onProposedDragOverridesCleared?: (dragKeys: string[]) => void;
   /** Goals used to render framework abbreviation chips on proposed blocks. */
   weeklyGoalsForFrameworkOverlays?: readonly WeeklyGoal[];
   /** Registry rows (`frameworkSystem.frameworks`). */
@@ -396,6 +399,7 @@ export function WeekCalendar({
   dayIndices,
   title = "This week",
   onProposedDragCommit,
+  onProposedDragOverridesCleared,
   weeklyGoalsForFrameworkOverlays,
   frameworkRegistryForOverlays,
   frameworkOverlayLayerState,
@@ -437,117 +441,165 @@ export function WeekCalendar({
     wheelAreaLabel
   ]);
 
-  // Build positioned arrays once, dropping events outside the window.
-  const busyPositions: PositionedBlock[] = [];
-  for (const b of busy) {
-    busyPositions.push(
-      ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title)
-    );
-  }
-
-  const daySheetPositions: Array<PositionedBlock & { sourceId: string; goalId?: string }> = [];
-  for (const b of daySheetGoalBusy) {
-    const gid = goalIdFromDaySheetSourceId(b.sourceId);
-    for (const slice of position(
-      b.startMs,
-      b.endMs,
-      weekStartMs,
-      timezone,
-      startHour,
-      endHour,
-      b.title
-    )) {
-      daySheetPositions.push({ ...slice, sourceId: b.sourceId, goalId: gid });
+  const {
+    busyByDay,
+    daySheetByDay,
+    systemByDay,
+    proposedByDay,
+    reservedForGoalDrag,
+    hasSleep,
+    hasTravel,
+    hasRoutine,
+    hasWeather,
+    hasDaySheetLog,
+    invertedLegend
+  } = useMemo(() => {
+    function groupPositionsByDay<T extends { dayIndex: number }>(
+      positions: readonly T[]
+    ): Map<number, T[]> {
+      const map = new Map<number, T[]>();
+      for (const p of positions) {
+        const bucket = map.get(p.dayIndex);
+        if (bucket) bucket.push(p);
+        else map.set(p.dayIndex, [p]);
+      }
+      return map;
     }
-  }
 
-  const invertedGoalIdsSorted = [
-    ...new Set(
-      system
-        .filter((b) => b.system === "inverted-timemap" && b.invertedGoalId)
-        .map((b) => b.invertedGoalId!)
-    )
-  ].sort();
-  const invertedBarOffsetByGoalId = new Map(invertedGoalIdsSorted.map((id, i) => [id, i]));
-
-  const systemPositions: Array<
-    PositionedBlock & {
-      kind: SystemBlock["system"];
-      override?: SystemBlock["override"];
-      sourceStartMs: number;
-      sourceEndMs: number;
-      invertedGoalId?: string;
-      invertedBarOffsetIndex?: number;
+    const busyPositions: PositionedBlock[] = [];
+    for (const b of busy) {
+      busyPositions.push(
+        ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title)
+      );
     }
-  > = [];
-  for (const b of system) {
-    const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
-    const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
-    const invertedBarOffsetIndex =
-      invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
-    for (const s of slices) {
-      systemPositions.push({
-        ...s,
-        kind: b.system,
-        override: b.override,
-        sourceStartMs: b.startMs,
-        sourceEndMs: b.endMs,
-        invertedGoalId,
-        invertedBarOffsetIndex
-      });
-    }
-  }
 
-  const proposedPositionsRaw: ProposedPositioned[] = [];
-  for (const b of proposed) {
-    const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
-    const gid = b.goalId;
-    const canDragSlices =
-      Boolean(b.dragKey) &&
-      !b.segment &&
-      Boolean(gid) &&
-      !String(gid).startsWith("segment:");
-    for (const s of slices) {
-      const chipList = gid ? overlayChipsByGoalId.get(gid) : undefined;
-      proposedPositionsRaw.push({
-        ...s,
-        isSegment: Boolean(b.segment),
-        color: goalColorFromKey(gid || b.title),
-        goalId: gid,
-        goalSlices:
-          canDragSlices && b.dragKey
-            ? [
-                {
-                  dragKey: b.dragKey,
-                  startMs: b.startMs,
-                  endMs: b.endMs,
-                  dragOverrideSaved: b.dragOverrideSaved,
-                  overrideSource: b.overrideSource,
-                  pinnedFromOverride: b.pinnedFromOverride
-                }
-              ]
-            : undefined,
-        frameworkOverlayChips: chipList && chipList.length > 0 ? chipList : undefined
-      });
+    const daySheetPositions: Array<PositionedBlock & { sourceId: string; goalId?: string }> = [];
+    for (const b of daySheetGoalBusy) {
+      const gid = goalIdFromDaySheetSourceId(b.sourceId);
+      for (const slice of position(
+        b.startMs,
+        b.endMs,
+        weekStartMs,
+        timezone,
+        startHour,
+        endHour,
+        b.title
+      )) {
+        daySheetPositions.push({ ...slice, sourceId: b.sourceId, goalId: gid });
+      }
     }
-  }
-  const proposedPositions = mergeAdjacentProposedSameGoal(proposedPositionsRaw);
 
-  const hasSleep = systemPositions.some((p) => p.kind === "sleep");
-  const hasTravel = systemPositions.some((p) => p.kind === "travel");
-  const hasRoutine = systemPositions.some((p) => p.kind === "routine");
-  const hasWeather = systemPositions.some((p) => p.kind === "weather");
-  const hasDaySheetLog = daySheetGoalBusy.length > 0;
-  const invertedLegend: { goalId: string; title: string }[] = [];
-  const invertedLegendSeen = new Set<string>();
-  for (const s of system) {
-    if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
-    if (invertedLegendSeen.has(s.invertedGoalId)) continue;
-    invertedLegendSeen.add(s.invertedGoalId);
-    invertedLegend.push({ goalId: s.invertedGoalId, title: s.title });
-  }
-  invertedLegend.sort((a, b) => a.goalId.localeCompare(b.goalId));
-  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system, daySheetGoalBusy);
+    const invertedGoalIdsSorted = [
+      ...new Set(
+        system
+          .filter((b) => b.system === "inverted-timemap" && b.invertedGoalId)
+          .map((b) => b.invertedGoalId!)
+      )
+    ].sort();
+    const invertedBarOffsetByGoalId = new Map(invertedGoalIdsSorted.map((id, i) => [id, i]));
+
+    const systemPositions: Array<
+      PositionedBlock & {
+        kind: SystemBlock["system"];
+        override?: SystemBlock["override"];
+        sourceStartMs: number;
+        sourceEndMs: number;
+        invertedGoalId?: string;
+        invertedBarOffsetIndex?: number;
+      }
+    > = [];
+    for (const b of system) {
+      const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+      const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
+      const invertedBarOffsetIndex =
+        invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
+      for (const s of slices) {
+        systemPositions.push({
+          ...s,
+          kind: b.system,
+          override: b.override,
+          sourceStartMs: b.startMs,
+          sourceEndMs: b.endMs,
+          invertedGoalId,
+          invertedBarOffsetIndex
+        });
+      }
+    }
+
+    const proposedPositionsRaw: ProposedPositioned[] = [];
+    for (const b of proposed) {
+      const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+      const gid = b.goalId;
+      const canDragSlices =
+        Boolean(b.dragKey) &&
+        !b.segment &&
+        Boolean(gid) &&
+        !String(gid).startsWith("segment:");
+      for (const s of slices) {
+        const chipList = gid ? overlayChipsByGoalId.get(gid) : undefined;
+        proposedPositionsRaw.push({
+          ...s,
+          isSegment: Boolean(b.segment),
+          color: goalColorFromKey(gid || b.title),
+          goalId: gid,
+          goalSlices:
+            canDragSlices && b.dragKey
+              ? [
+                  {
+                    dragKey: b.dragKey,
+                    startMs: b.startMs,
+                    endMs: b.endMs,
+                    dragOverrideSaved: b.dragOverrideSaved,
+                    overrideSource: b.overrideSource,
+                    pinnedFromOverride: b.pinnedFromOverride
+                  }
+                ]
+              : undefined,
+          frameworkOverlayChips: chipList && chipList.length > 0 ? chipList : undefined
+        });
+      }
+    }
+    const proposedPositions = mergeAdjacentProposedSameGoal(proposedPositionsRaw);
+
+    const hasSleepInner = systemPositions.some((p) => p.kind === "sleep");
+    const hasTravelInner = systemPositions.some((p) => p.kind === "travel");
+    const hasRoutineInner = systemPositions.some((p) => p.kind === "routine");
+    const hasWeatherInner = systemPositions.some((p) => p.kind === "weather");
+
+    const invertedLegendInner: { goalId: string; title: string }[] = [];
+    const invertedLegendSeen = new Set<string>();
+    for (const s of system) {
+      if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
+      if (invertedLegendSeen.has(s.invertedGoalId)) continue;
+      invertedLegendSeen.add(s.invertedGoalId);
+      invertedLegendInner.push({ goalId: s.invertedGoalId, title: s.title });
+    }
+    invertedLegendInner.sort((a, b) => a.goalId.localeCompare(b.goalId));
+
+    return {
+      busyByDay: groupPositionsByDay(busyPositions),
+      daySheetByDay: groupPositionsByDay(daySheetPositions),
+      systemByDay: groupPositionsByDay(systemPositions),
+      proposedByDay: groupPositionsByDay(proposedPositions),
+      reservedForGoalDrag: buildReservedIntervalsForGoalDrag(busy, system, daySheetGoalBusy),
+      hasSleep: hasSleepInner,
+      hasTravel: hasTravelInner,
+      hasRoutine: hasRoutineInner,
+      hasWeather: hasWeatherInner,
+      hasDaySheetLog: daySheetGoalBusy.length > 0,
+      invertedLegend: invertedLegendInner
+    };
+  }, [
+    busy,
+    daySheetGoalBusy,
+    proposed,
+    system,
+    weekStartMs,
+    timezone,
+    startHour,
+    endHour,
+    overlayChipsByGoalId
+  ]);
 
   return (
     <div className="card p-3">
@@ -614,30 +666,23 @@ export function WeekCalendar({
                   style={{ height: Math.min(gridHeight, Math.max(0, elapsedTodayPx)) }}
                 />
               ) : null}
-              {busyPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
-                  <BusyBlock key={`b${i}`} block={p} />
+              {(busyByDay.get(dayIdx) ?? []).map((p, i) => (
+                  <BusyBlock key={`b${dayIdx}-${i}`} block={p} />
                 ))}
-              {daySheetPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
-                  <DaySheetLoggedBlock key={`d${p.sourceId}-${i}`} block={p} goalId={p.goalId} />
+              {(daySheetByDay.get(dayIdx) ?? []).map((p, i) => (
+                  <DaySheetLoggedBlock key={`d${p.sourceId}-${dayIdx}-${i}`} block={p} goalId={p.goalId} />
                 ))}
-              {systemPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
-                  <SystemBlockSlice key={`s${i}`} block={p} pxPerHour={PX_PER_HOUR} />
+              {(systemByDay.get(dayIdx) ?? []).map((p, i) => (
+                  <SystemBlockSlice key={`s${dayIdx}-${i}`} block={p} pxPerHour={PX_PER_HOUR} />
                 ))}
-              {proposedPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
+              {(proposedByDay.get(dayIdx) ?? []).map((p, i) => (
                   <ProposedBlock
-                    key={`p${i}`}
+                    key={`p${dayIdx}-${i}`}
                     block={p}
                     pxPerHour={PX_PER_HOUR}
                     reservedForGoalDrag={reservedForGoalDrag}
                     onDragCommit={onProposedDragCommit}
+                    onDragOverridesCleared={onProposedDragOverridesCleared}
                   />
                 ))}
             </div>
@@ -946,7 +991,8 @@ function ProposedBlock({
   block,
   pxPerHour,
   reservedForGoalDrag,
-  onDragCommit
+  onDragCommit,
+  onDragOverridesCleared
 }: {
   block: PositionedBlock & {
     isSegment: boolean;
@@ -958,6 +1004,7 @@ function ProposedBlock({
   pxPerHour: number;
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
   onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
+  onDragOverridesCleared?: (dragKeys: string[]) => void;
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
@@ -984,6 +1031,7 @@ function ProposedBlock({
         dayIndex={block.dayIndex}
         reservedForGoalDrag={reservedForGoalDrag}
         onDragCommit={onDragCommit}
+        onDragOverridesCleared={onDragOverridesCleared}
         frameworkOverlayChips={block.frameworkOverlayChips}
       />
     );
