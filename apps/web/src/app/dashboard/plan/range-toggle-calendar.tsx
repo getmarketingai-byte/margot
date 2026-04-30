@@ -285,78 +285,6 @@ export function RangeToggleCalendar({
         >
           Next 7 days
         </button>
-        <button
-          type="button"
-          onClick={() => setWeatherAndPersist(!showWeather)}
-          aria-pressed={showWeather}
-          className={`rounded border px-2 py-1 ${
-            showWeather
-              ? "border-sky-400/70 bg-sky-500/20 text-sky-700 dark:text-sky-200"
-              : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
-          }`}
-        >
-          {showWeather ? "Hide weather" : "Show weather"}
-        </button>
-        {invertedGoals.map(({ goalId, title }) => {
-          const on = isInvertedGoalShown(invertedVisibility, goalId);
-          const swatch = goalColorFromKey(goalId);
-          const short =
-            title.length > 22 ? `${title.slice(0, 20).trimEnd()}…` : title;
-          return (
-            <button
-              key={goalId}
-              type="button"
-              onClick={() => setInvertedGoalAndPersist(goalId, !on)}
-              aria-pressed={on}
-              title={title}
-              className={`max-w-[11rem] truncate rounded border px-2 py-1 ${
-                on
-                  ? "border-ink-300 bg-ink-50 text-ink-800 dark:border-ink-500 dark:bg-ink-800/40 dark:text-ink-100"
-                  : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
-              }`}
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  aria-hidden
-                  className="inline-block h-3 w-1.5 shrink-0 rounded-sm border border-ink-300/60 dark:border-ink-500/60"
-                  style={{ backgroundColor: swatch, opacity: on ? 1 : 0.35 }}
-                />
-                <span className="truncate">{on ? `Hide ${short}` : `Show ${short}`}</span>
-              </span>
-            </button>
-          );
-        })}
-        {taggableFrameworkRows.length > 0 && schedulingGoals?.length ? (
-          <>
-            {taggableFrameworkRows.map((row) => {
-              const defaultOn = row.overlay.enabled !== false;
-              const layerOn = fwOverlayLayers[row.id] ?? defaultOn;
-              const label = FRAMEWORK_REGISTRY_DEFAULT_LABELS[row.id as FrameworkRegistryId] ?? row.id;
-              const shortLabel = label.length > 14 ? `${label.slice(0, 12)}…` : label;
-              return (
-                <button
-                  key={row.id}
-                  type="button"
-                  onClick={() =>
-                    setFwOverlayLayers((prev) => ({
-                      ...prev,
-                      [row.id]: !layerOn
-                    }))
-                  }
-                  aria-pressed={layerOn}
-                  title={`Framework tags on calendar: ${label}`}
-                  className={`rounded border px-2 py-1 ${
-                    layerOn
-                      ? "border-violet-400/70 bg-violet-500/15 text-violet-900 dark:text-violet-100"
-                      : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
-                  }`}
-                >
-                  {layerOn ? "Hide" : "Show"} {shortLabel}
-                </button>
-              );
-            })}
-          </>
-        ) : null}
       </div>
       {rollingSpansTwoIsoWeeks ? (
         <p className="px-1 text-[11px] leading-snug text-ink-500 dark:text-ink-400">
@@ -384,6 +312,79 @@ export function RangeToggleCalendar({
         }
         wheelAreaLabel={wheelAreas?.length ? wheelAreaLabel : undefined}
       />
+      <div className="mt-1 flex flex-wrap items-center gap-1 px-1 text-xs">
+        <button
+          type="button"
+          onClick={() => setWeatherAndPersist(!showWeather)}
+          aria-pressed={showWeather}
+          className={`rounded border px-2 py-1 ${
+            showWeather
+              ? "border-sky-400/70 bg-sky-500/20 text-sky-700 dark:text-sky-200"
+              : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+          }`}
+        >
+          {showWeather ? "Hide weather" : "Show weather"}
+        </button>
+        {invertedGoals.map(({ goalId, title }) => {
+          const on = isInvertedGoalShown(invertedVisibility, goalId);
+          const swatch = goalColorFromKey(goalId);
+          const short = title.length > 22 ? `${title.slice(0, 20).trimEnd()}…` : title;
+          return (
+            <button
+              key={goalId}
+              type="button"
+              onClick={() => setInvertedGoalAndPersist(goalId, !on)}
+              aria-pressed={on}
+              title={title}
+              className={`max-w-[11rem] truncate rounded border px-2 py-1 ${
+                on
+                  ? "border-ink-300 bg-ink-50 text-ink-800 dark:border-ink-500 dark:bg-ink-800/40 dark:text-ink-100"
+                  : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+              }`}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block h-3 w-1.5 shrink-0 rounded-sm border border-ink-300/60 dark:border-ink-500/60"
+                  style={{ backgroundColor: swatch, opacity: on ? 1 : 0.35 }}
+                />
+                <span className="truncate">{on ? `Hide ${short}` : `Show ${short}`}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {taggableFrameworkRows.length > 0 && schedulingGoals?.length ? (
+        <div className="flex flex-wrap items-center gap-1 px-1 text-xs">
+          {taggableFrameworkRows.map((row) => {
+            const defaultOn = row.overlay.enabled !== false;
+            const layerOn = fwOverlayLayers[row.id] ?? defaultOn;
+            const label = FRAMEWORK_REGISTRY_DEFAULT_LABELS[row.id as FrameworkRegistryId] ?? row.id;
+            const shortLabel = label.length > 14 ? `${label.slice(0, 12)}…` : label;
+            return (
+              <button
+                key={row.id}
+                type="button"
+                onClick={() =>
+                  setFwOverlayLayers((prev) => ({
+                    ...prev,
+                    [row.id]: !layerOn
+                  }))
+                }
+                aria-pressed={layerOn}
+                title={`Framework tags on calendar: ${label}`}
+                className={`rounded border px-2 py-1 ${
+                  layerOn
+                    ? "border-violet-400/70 bg-violet-500/15 text-violet-900 dark:text-violet-100"
+                    : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+                }`}
+              >
+                {layerOn ? "Hide" : "Show"} {shortLabel}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

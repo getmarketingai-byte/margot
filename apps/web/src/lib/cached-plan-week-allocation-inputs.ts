@@ -13,8 +13,6 @@ import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automation
 import type { PlanWeekAllocationInputs } from "./allocation-run-context";
 import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
 
-const TIME_BUCKET_MS = 120_000;
-
 type CachedPlanWeekAllocationInputs = Omit<PlanWeekAllocationInputs, "reviewsByDate"> & {
   reviewsByDateEntries: Array<[string, DailyReview]>;
 };
@@ -47,7 +45,6 @@ export async function getCachedPlanWeekAllocationInputs(options: {
 }): Promise<PlanWeekAllocationInputs> {
   const { userId, plan, settings, nowMs } = options;
   const fp = fingerprint(plan, settings);
-  const bucket = Math.floor(nowMs / TIME_BUCKET_MS);
 
   const cached = await unstable_cache(
     async (): Promise<CachedPlanWeekAllocationInputs> => {
@@ -57,7 +54,10 @@ export async function getCachedPlanWeekAllocationInputs(options: {
         reviewsByDateEntries: [...inputs.reviewsByDate.entries()]
       };
     },
-    ["plan-week-alloc-inputs-v1", userId, fp, String(bucket)],
+    // Keep this cache stable across page revisits. It should only bust when
+    // plan/settings fingerprints change or explicit mutation paths call
+    // `invalidateUserAllocationCache(userId)`.
+    ["plan-week-alloc-inputs-v2", userId, fp],
     { tags: [userAllocationCacheTag(userId)] }
   )();
 

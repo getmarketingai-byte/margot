@@ -154,6 +154,43 @@ async function updateCatchUpMode(formData: FormData): Promise<void> {
   afterConstraintsSave(userId);
 }
 
+async function updateRoutines(formData: FormData): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const morningEnabled = formData.get("morning_enabled") === "on";
+  const shutdownEnabled = formData.get("shutdown_enabled") === "on";
+  const morningMinutes = Math.max(
+    0,
+    Math.min(180, Number(formData.get("morning_minutes") ?? settings.timemap.morningRoutine.minutes))
+  );
+  const shutdownMinutes = Math.max(
+    0,
+    Math.min(180, Number(formData.get("shutdown_minutes") ?? settings.timemap.shutdownRoutine.minutes))
+  );
+
+  await saveSettings(userId, {
+    ...settings,
+    timemap: {
+      ...settings.timemap,
+      morningRoutine: {
+        ...settings.timemap.morningRoutine,
+        enabled: morningEnabled,
+        minutes: morningMinutes
+      },
+      shutdownRoutine: {
+        ...settings.timemap.shutdownRoutine,
+        enabled: shutdownEnabled,
+        minutes: shutdownMinutes
+      }
+    }
+  });
+
+  afterConstraintsSave(userId);
+}
+
 export async function ConstraintsSection() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
@@ -173,13 +210,68 @@ export async function ConstraintsSection() {
             scheduling methods
           </a>{" "}
           in the framework system card (e.g. energy + transition scoring)—use both only if you want
-          both layers. Routines live on{" "}
-          <a className="underline" href="/dashboard/plan">
-            My Perfect Week
-          </a>
-          .
+          both layers.
         </p>
       </header>
+
+      <details className="card" open>
+        <summary className="cursor-pointer text-sm font-semibold">Daily routines</summary>
+        <p className="mt-1 text-xs text-ink-400">
+          Morning and shutdown routines are reserved around sleep and block planner time-map slots
+          from being placed in the same window.
+        </p>
+        <form action={updateRoutines} className="mt-3 grid gap-4 sm:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-3">
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                name="morning_enabled"
+                defaultChecked={settings.timemap.morningRoutine.enabled}
+              />
+              <span>Enable morning routine</span>
+            </label>
+            <label className="flex min-w-0 flex-col gap-1 text-xs">
+              Morning minutes
+              <input
+                type="number"
+                name="morning_minutes"
+                min={0}
+                max={180}
+                step={5}
+                defaultValue={settings.timemap.morningRoutine.minutes}
+                className="field w-full"
+              />
+            </label>
+          </div>
+          <div className="flex min-w-0 flex-col gap-3">
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                name="shutdown_enabled"
+                defaultChecked={settings.timemap.shutdownRoutine.enabled}
+              />
+              <span>Enable shutdown routine</span>
+            </label>
+            <label className="flex min-w-0 flex-col gap-1 text-xs">
+              Shutdown minutes
+              <input
+                type="number"
+                name="shutdown_minutes"
+                min={0}
+                max={180}
+                step={5}
+                defaultValue={settings.timemap.shutdownRoutine.minutes}
+                className="field w-full"
+              />
+            </label>
+          </div>
+          <div className="sm:col-span-2">
+            <button type="submit" className="btn-primary w-full text-xs">
+              Save routines
+            </button>
+          </div>
+        </form>
+      </details>
 
       <details className="card" open>
         <summary className="cursor-pointer text-sm font-semibold">Catch-up from day sheet</summary>

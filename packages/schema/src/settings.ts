@@ -650,13 +650,7 @@ export type PersonalSystem = z.infer<typeof personalSystemSchema>;
 
 /* ─────────────────── Unified framework registry (Planning + calendar UI) ─── */
 
-export const frameworkRegistryExtraIds = ["consistency", "routines"] as const;
-export type FrameworkRegistryExtraId = (typeof frameworkRegistryExtraIds)[number];
-
-export const frameworkRegistryIdSchema = z.enum([
-  ...schedulerFrameworkInclusionKeys,
-  ...frameworkRegistryExtraIds
-]);
+export const frameworkRegistryIdSchema = z.enum([...schedulerFrameworkInclusionKeys]);
 export type FrameworkRegistryId = z.infer<typeof frameworkRegistryIdSchema>;
 
 export const frameworkOverlaySchema = z.object({
@@ -702,9 +696,7 @@ export const FRAMEWORK_REGISTRY_DEFAULT_LABELS: Record<FrameworkRegistryId, stri
   wheel: "Wheel of Life",
   ppfPillar: "PPF pillar",
   ppfHorizon: "PPF horizon",
-  hp6: "HP6",
-  consistency: "Consistency segments",
-  routines: "Routines"
+  hp6: "HP6"
 };
 
 /** Short onboarding copy for the Planning Hub framework picker (blank-canvas UX). */
@@ -724,11 +716,7 @@ export const FRAMEWORK_REGISTRY_DESCRIPTIONS: Record<FrameworkRegistryId, string
   ppfHorizon:
     "1y / 3y / 5y horizon tagging that pairs with PPF scheduling rules.",
   hp6:
-    "Brendon Burchard’s six habits — pairs with habit minimum touches in scheduling outcomes.",
-  consistency:
-    "Mirrors whether consistency scheduling is on — calendar overlay only.",
-  routines:
-    "Mirrors morning / shutdown routines in your timemap — calendar overlay only."
+    "Brendon Burchard’s six habits — pairs with habit minimum touches in scheduling outcomes."
 };
 
 const INCLUSION_KEY_BY_REGISTRY_ID: Partial<
@@ -752,16 +740,11 @@ const FRAMEWORK_REGISTRY_DEFAULT_SORT: Record<FrameworkRegistryId, number> = {
   wheel: 4,
   ppfPillar: 5,
   ppfHorizon: 6,
-  hp6: 7,
-  consistency: 8,
-  routines: 9
+  hp6: 7
 };
 
 /** Full registry IDs in deterministic order (matches `frameworkRegistryIdSchema`). */
-const FRAMEWORK_IDS_ALL = [
-  ...schedulerFrameworkInclusionKeys,
-  ...frameworkRegistryExtraIds
-] as const satisfies readonly FrameworkRegistryId[];
+const FRAMEWORK_IDS_ALL = [...schedulerFrameworkInclusionKeys] as const satisfies readonly FrameworkRegistryId[];
 
 const PLACEMENT_SIGNAL_KEYS_ALL: PlacementSignalKey[] = [
   "energyMode",
@@ -779,8 +762,7 @@ function placementSignalsOrderComplete(order: readonly string[]): boolean {
 export function defaultFrameworkRegistryFromInclusion(
   inclusion: SchedulerFrameworkInclusion
 ): FrameworkRegistryEntry[] {
-  const keys = FRAMEWORK_IDS_ALL.filter((id) => id !== "consistency" && id !== "routines");
-  return keys.map((id) => ({
+  return FRAMEWORK_IDS_ALL.map((id) => ({
     id,
     enabled: inclusion[INCLUSION_KEY_BY_REGISTRY_ID[id]!] ?? false,
     sortOrder: FRAMEWORK_REGISTRY_DEFAULT_SORT[id],
@@ -869,7 +851,7 @@ export function applyFrameworkOverlayOffForSchedulerPatch(
 
 /**
  * Hydrate `frameworkSystem` from canonical allocator fields (inclusion, energy module,
- * placement, consistency/routines). Safe on every load/save — call after merges.
+ * placement). Safe on every load/save — call after merges.
  */
 export function reconcileFrameworkSystemFromCanonical(settings: UserSettings): UserSettings {
   const inc = settings.schedulerFrameworkInclusion;
@@ -882,7 +864,6 @@ export function reconcileFrameworkSystemFromCanonical(settings: UserSettings): U
   const byId = new Map(frameworks.map((r) => [r.id, { ...r }] as const));
 
   for (const id of FRAMEWORK_IDS_ALL) {
-    if (id === "consistency" || id === "routines") continue;
     const incKey = INCLUSION_KEY_BY_REGISTRY_ID[id];
     if (!incKey) continue;
     const existing = byId.get(id);
@@ -903,45 +884,6 @@ export function reconcileFrameworkSystemFromCanonical(settings: UserSettings): U
         sortOrder: existing.sortOrder ?? FRAMEWORK_REGISTRY_DEFAULT_SORT[id]
       });
     }
-  }
-
-  const consistencyEnabled = settings.consistency.enabled === true;
-  const routinesEnabled =
-    settings.timemap.morningRoutine.enabled === true ||
-    settings.timemap.shutdownRoutine.enabled === true;
-
-  if (!byId.has("consistency")) {
-    byId.set("consistency", {
-      id: "consistency",
-      label: FRAMEWORK_REGISTRY_DEFAULT_LABELS.consistency,
-      enabled: consistencyEnabled,
-      sortOrder: FRAMEWORK_REGISTRY_DEFAULT_SORT.consistency,
-      overlay: { enabled: true }
-    });
-  } else {
-    const row = byId.get("consistency")!;
-    byId.set("consistency", {
-      ...row,
-      enabled: consistencyEnabled,
-      label: row.label ?? FRAMEWORK_REGISTRY_DEFAULT_LABELS.consistency
-    });
-  }
-
-  if (!byId.has("routines")) {
-    byId.set("routines", {
-      id: "routines",
-      label: FRAMEWORK_REGISTRY_DEFAULT_LABELS.routines,
-      enabled: routinesEnabled,
-      sortOrder: FRAMEWORK_REGISTRY_DEFAULT_SORT.routines,
-      overlay: { enabled: true }
-    });
-  } else {
-    const row = byId.get("routines")!;
-    byId.set("routines", {
-      ...row,
-      enabled: routinesEnabled,
-      label: row.label ?? FRAMEWORK_REGISTRY_DEFAULT_LABELS.routines
-    });
   }
 
   frameworks = FRAMEWORK_IDS_ALL.map((id) => byId.get(id)!).sort(
@@ -1047,6 +989,19 @@ function coerceSchedulerFrameworkInclusionForParse(raw: Record<string, unknown>)
   }
 }
 
+function coerceFrameworkSystemForParse(raw: Record<string, unknown>): void {
+  const candidate = raw.frameworkSystem;
+  if (!candidate || typeof candidate !== "object") return;
+  const asObj = candidate as Record<string, unknown>;
+  const frameworks = asObj.frameworks;
+  if (!Array.isArray(frameworks)) return;
+  asObj.frameworks = frameworks.filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const id = (entry as Record<string, unknown>).id;
+    return typeof id === "string" && schedulerFrameworkInclusionKeys.includes(id as SchedulerFrameworkInclusionKey);
+  });
+}
+
 /**
  * Given a possibly-untyped settings JSON pulled from the database, parse it through
  * the current schema. Older versions can be upgraded here as new versions land.
@@ -1057,6 +1012,7 @@ export function migrateSettings(raw: unknown): UserSettings {
       ? { ...(raw as object) }
       : {};
   coerceSchedulerFrameworkInclusionForParse(coerced);
+  coerceFrameworkSystemForParse(coerced);
   let parsed = userSettingsSchema.parse({
     ...coerced,
     schemaVersion: SETTINGS_SCHEMA_VERSION

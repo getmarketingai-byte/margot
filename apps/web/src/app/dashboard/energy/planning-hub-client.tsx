@@ -25,6 +25,7 @@ import type {
   AttentionMode,
   CommitmentLevel,
   EnergyPolarity,
+  FrameworkRegistryId,
   FrameworkSystem,
   Hp6HabitKey,
   PlacementSignalKey,
@@ -84,6 +85,17 @@ type FrameworkKey =
   | "ppfHorizon"
   | "hp6";
 
+const SCHEDULER_BOARD_KEYS: readonly FrameworkKey[] = [
+  "commitment",
+  "polarity",
+  "attention",
+  "workLayer",
+  "wheel",
+  "ppfPillar",
+  "ppfHorizon",
+  "hp6"
+];
+
 interface BoardColumn {
   id: string;
   title: string;
@@ -122,6 +134,8 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     savePlacementOrder
   } = props;
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
+  const [schedulerInclusion, setSchedulerInclusion] =
+    useState<SchedulerFrameworkInclusion>(initialInclusion);
   const lastSeenSig = useRef<string>("");
   useEffect(() => {
     const sig = initialGoals.map((g) => `${g.id}:${g.title}`).join("|");
@@ -131,6 +145,10 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     }
   }, [initialGoals]);
 
+  useEffect(() => {
+    setSchedulerInclusion(initialInclusion);
+  }, [initialInclusion]);
+
   const wheelLabel = useMemo(
     () => (id: string) => wheelAreas.find((a) => a.id === id)?.label ?? id,
     [wheelAreas]
@@ -138,8 +156,8 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
 
   const boards = useMemo<BoardConfig[]>(() => {
     const all = buildBoardRegistry({ wheelAreas });
-    return all.filter((b) => initialInclusion[b.key as keyof SchedulerFrameworkInclusion]);
-  }, [wheelAreas, initialInclusion]);
+    return all.filter((b) => schedulerInclusion[b.key as keyof SchedulerFrameworkInclusion]);
+  }, [wheelAreas, schedulerInclusion]);
 
   const [activeBoardKey, setActiveBoardKey] = useState<FrameworkKey>("commitment");
 
@@ -160,9 +178,25 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     });
   };
 
+  const handleSchedulerInclusionChange = ({
+    key,
+    enabled
+  }: {
+    key: FrameworkRegistryId;
+    enabled: boolean;
+  }) => {
+    if (!SCHEDULER_BOARD_KEYS.includes(key as FrameworkKey)) return;
+    const boardKey = key as FrameworkKey;
+    setSchedulerInclusion((prev) => ({ ...prev, [boardKey]: enabled }));
+    if (enabled) setActiveBoardKey(boardKey);
+  };
+
   return (
     <div className="flex flex-col gap-6">
-      <FrameworkRegistryPanel initial={initialFrameworkSystem} />
+      <FrameworkRegistryPanel
+        initial={initialFrameworkSystem}
+        onSchedulerInclusionChange={handleSchedulerInclusionChange}
+      />
 
       {boards.length > 0 ? (
         <FrameworkBoardsPlanningSection

@@ -70,44 +70,6 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   };
 }
 
-async function updateRoutines(formData: FormData): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const morningEnabled = formData.get("morning_enabled") === "on";
-  const shutdownEnabled = formData.get("shutdown_enabled") === "on";
-  const morningMinutes = Math.max(
-    0,
-    Math.min(180, Number(formData.get("morning_minutes") ?? settings.timemap.morningRoutine.minutes))
-  );
-  const shutdownMinutes = Math.max(
-    0,
-    Math.min(180, Number(formData.get("shutdown_minutes") ?? settings.timemap.shutdownRoutine.minutes))
-  );
-
-  await saveSettings(userId, {
-    ...settings,
-    timemap: {
-      ...settings.timemap,
-      morningRoutine: {
-        ...settings.timemap.morningRoutine,
-        enabled: morningEnabled,
-        minutes: morningMinutes
-      },
-      shutdownRoutine: {
-        ...settings.timemap.shutdownRoutine,
-        enabled: shutdownEnabled,
-        minutes: shutdownMinutes
-      }
-    }
-  });
-
-  invalidateUserAllocationCache(userId);
-  revalidatePlanningRoutes();
-}
-
 export default async function PlanPage() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
@@ -169,7 +131,6 @@ export default async function PlanPage() {
     sleepIntervals: sleepIntervalsFromSystemBlocks(nextWeekSystemBlocks)
   });
 
-  const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
   const daySheetGoalBusyForCalendar = [...daySheetGoalBusyThisWeek, ...daySheetGoalBusyNextWeek];
   const weatherPreviewBlocks = weatherTimemapEvents
@@ -281,14 +242,6 @@ export default async function PlanPage() {
 
       <WeeklyIntentCard initial={plan.weeklyIntent} save={updateWeeklyIntent} />
 
-      {catchUpActive && (
-        <CatchUpBanner
-          adjustments={resolvedCatchUpFloors}
-          goals={schedulingGoals}
-          mode={catchUpMode}
-        />
-      )}
-
       {allocation.metrics.overcommitted ? (
         <Overcommitted
           neededMin={allocation.metrics.overcommitted.neededMin}
@@ -311,65 +264,6 @@ export default async function PlanPage() {
               effectiveTargetByGoal={effectiveTargetByGoal}
               paceByGoal={paceByGoal}
             />
-
-            <section className="card">
-              <div className="text-sm font-semibold">Daily routines</div>
-              <p className="mt-1 text-xs text-ink-400">
-                Morning and shutdown routines are reserved around sleep and block planner time-map
-                slots from being placed in the same window.
-              </p>
-              <form action={updateRoutines} className="mt-3 grid gap-4 sm:grid-cols-2">
-                <div className="flex min-w-0 flex-col gap-3">
-                  <label className="flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      name="morning_enabled"
-                      defaultChecked={settings.timemap.morningRoutine.enabled}
-                    />
-                    <span>Enable morning routine</span>
-                  </label>
-                  <label className="flex min-w-0 flex-col gap-1 text-xs">
-                    Morning minutes
-                    <input
-                      type="number"
-                      name="morning_minutes"
-                      min={0}
-                      max={180}
-                      step={5}
-                      defaultValue={settings.timemap.morningRoutine.minutes}
-                      className="field w-full"
-                    />
-                  </label>
-                </div>
-                <div className="flex min-w-0 flex-col gap-3">
-                  <label className="flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      name="shutdown_enabled"
-                      defaultChecked={settings.timemap.shutdownRoutine.enabled}
-                    />
-                    <span>Enable shutdown routine</span>
-                  </label>
-                  <label className="flex min-w-0 flex-col gap-1 text-xs">
-                    Shutdown minutes
-                    <input
-                      type="number"
-                      name="shutdown_minutes"
-                      min={0}
-                      max={180}
-                      step={5}
-                      defaultValue={settings.timemap.shutdownRoutine.minutes}
-                      className="field w-full"
-                    />
-                  </label>
-                </div>
-                <div className="sm:col-span-2">
-                  <button type="submit" className="btn-primary w-full text-xs">
-                    Save routines
-                  </button>
-                </div>
-              </form>
-            </section>
 
             {allocation.metrics.notScheduled.length > 0 && (
               <section className="card border-amber-300/40">
@@ -473,46 +367,6 @@ function CalendarPreview({
       frameworkSystem={frameworkSystem}
       wheelAreas={wheelAreas}
     />
-  );
-}
-
-function CatchUpBanner({
-  adjustments,
-  goals,
-  mode
-}: {
-  adjustments: Record<string, number>;
-  goals: WeeklyPlan["goals"];
-  mode: "automated" | "manual";
-}) {
-  const titleById = new Map(goals.map((g) => [g.id, g.title] as const));
-  const entries = Object.entries(adjustments).filter(([, mins]) => mins !== 0);
-  const summary = entries
-    .map(([id, mins]) => {
-      const title = titleById.get(id) ?? id;
-      const sign = mins > 0 ? "+" : "";
-      return `${title} ${sign}${mins}m`;
-    })
-    .join(", ");
-  const secondaryHref =
-    mode === "automated" ? "/dashboard/energy#scheduling-outcomes" : "/dashboard/week-review";
-  const secondaryLabel = mode === "automated" ? "Catch-up settings" : "Adjust catch-up";
-  const blurb =
-    mode === "automated"
-      ? `Based on your day sheet vs baseline targets, extra weekly floors are applied for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`
-      : `Allocator is reserving extra time for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`;
-  return (
-    <section className="card border-amber-300/40 bg-amber-50/30 dark:bg-amber-900/10">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-semibold">Catch-up active</div>
-          <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">{blurb}</p>
-        </div>
-        <Link href={secondaryHref} className="btn-secondary text-xs">
-          {secondaryLabel}
-        </Link>
-      </div>
-    </section>
   );
 }
 
