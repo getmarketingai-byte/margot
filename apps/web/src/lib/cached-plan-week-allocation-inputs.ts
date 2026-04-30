@@ -8,12 +8,16 @@ import "server-only";
 
 import { createHash } from "crypto";
 import { unstable_cache, revalidateTag } from "next/cache";
-import type { UserSettings, WeeklyPlan } from "@calendar-automations/schema";
+import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
 
 import type { PlanWeekAllocationInputs } from "./allocation-run-context";
 import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
 
 const TIME_BUCKET_MS = 120_000;
+
+type CachedPlanWeekAllocationInputs = Omit<PlanWeekAllocationInputs, "reviewsByDate"> & {
+  reviewsByDateEntries: Array<[string, DailyReview]>;
+};
 
 export function userAllocationCacheTag(userId: string): string {
   return `user-alloc-context-${userId}`;
@@ -45,9 +49,20 @@ export async function getCachedPlanWeekAllocationInputs(options: {
   const fp = fingerprint(plan, settings);
   const bucket = Math.floor(nowMs / TIME_BUCKET_MS);
 
-  return unstable_cache(
-    async () => loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs }),
+  const cached = await unstable_cache(
+    async (): Promise<CachedPlanWeekAllocationInputs> => {
+      const inputs = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+      return {
+        ...inputs,
+        reviewsByDateEntries: [...inputs.reviewsByDate.entries()]
+      };
+    },
     ["plan-week-alloc-inputs-v1", userId, fp, String(bucket)],
     { tags: [userAllocationCacheTag(userId)] }
   )();
+
+  return {
+    ...cached,
+    reviewsByDate: new Map(cached.reviewsByDateEntries)
+  };
 }

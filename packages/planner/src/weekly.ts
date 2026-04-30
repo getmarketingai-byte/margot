@@ -1358,7 +1358,12 @@ function allocateGoal(
     }
     if (daysScheduledThisPass === 0) break;
   }
-  if (remainingMinutes >= QUANTUM && needsExtraPasses && remainingMinutes <= 8 * 60) {
+  if (
+    process.env.NODE_ENV !== "production" &&
+    remainingMinutes >= QUANTUM &&
+    needsExtraPasses &&
+    remainingMinutes <= 8 * 60
+  ) {
     console.warn(
       `[allocateWeek] Goal "${goal.title}" (${goal.id}) has ${remainingMinutes} min unscheduled after ${maxPasses} passes (availability/nice-weather squeeze).`
     );

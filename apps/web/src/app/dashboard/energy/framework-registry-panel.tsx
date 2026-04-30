@@ -168,11 +168,11 @@ export function FrameworkRegistryPanel({ initial }: { initial: FrameworkSystem }
       )}
 
       {mirrored.length > 0 && (
-        <div className="flex flex-col gap-2 border-t border-ink-200 pt-4 dark:border-ink-600">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400">
+      <div className="flex flex-col gap-2 border-t border-ink-200 pt-4 dark:border-ink-500">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-300">
             Calendar overlays (mirrored)
           </p>
-          <p className="text-[11px] text-ink-500 dark:text-ink-400">
+          <p className="text-[11px] text-ink-500 dark:text-ink-300">
             Reflect settings elsewhere — you can&apos;t toggle allocator behavior here, only Perfect
             Week tags.
           </p>
@@ -215,7 +215,7 @@ function FrameworkPickerCard({
   const overlayOn = row.overlay?.enabled !== false;
 
   return (
-    <li className="flex flex-col gap-2 rounded-lg border border-ink-200 bg-ink-50/35 p-3 text-xs dark:border-ink-600 dark:bg-ink-900/25">
+    <li className="flex flex-col gap-2 rounded-lg border border-ink-200 bg-ink-50/35 p-3 text-xs dark:border-ink-500 dark:bg-ink-900/40">
       <div className="flex items-start gap-2">
         {mirror && (
           <span
@@ -230,13 +230,13 @@ function FrameworkPickerCard({
           <div className="flex flex-wrap items-baseline gap-2">
             <span className="font-semibold text-ink-800 dark:text-ink-100">{label}</span>
             {mirror && (
-              <span className="text-[10px] font-medium text-ink-500 dark:text-ink-400">mirrored</span>
+              <span className="text-[10px] font-medium text-ink-500 dark:text-ink-300">mirrored</span>
             )}
           </div>
-          <p className="mt-1 text-[11px] leading-snug text-ink-600 dark:text-ink-300">{desc}</p>
+          <p className="mt-1 text-[11px] leading-snug text-ink-600 dark:text-ink-200">{desc}</p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 border-t border-ink-200/80 pt-2 dark:border-ink-700">
+      <div className="flex flex-wrap items-center gap-2 border-t border-ink-200/80 pt-2 dark:border-ink-600">
         {mirror ? null : inScheduler ? (
           <button
             type="button"
@@ -257,7 +257,7 @@ function FrameworkPickerCard({
           </button>
         )}
         {(inScheduler || mirror) && (
-          <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-ink-600 dark:text-ink-300">
+          <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-ink-600 dark:text-ink-200">
             <input
               type="checkbox"
               checked={overlayOn}
