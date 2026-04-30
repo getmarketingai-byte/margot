@@ -1358,8 +1358,10 @@ function allocateGoal(
     }
     if (daysScheduledThisPass === 0) break;
   }
+  const nodeEnv =
+    (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV ?? "";
   if (
-    process.env.NODE_ENV !== "production" &&
+    nodeEnv !== "production" &&
     remainingMinutes >= QUANTUM &&
     needsExtraPasses &&
     remainingMinutes <= 8 * 60
