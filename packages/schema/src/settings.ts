@@ -838,6 +838,36 @@ export const userSettingsSchema = z.object({
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 /**
+ * When turning allocator inclusion off for a registry-backed framework row, disable its
+ * Perfect Week overlay too (avoids “Cal on but scheduler off” after reconcile hydrate).
+ */
+export function applyFrameworkOverlayOffForSchedulerPatch(
+  settings: UserSettings,
+  inclusionPatch: Partial<SchedulerFrameworkInclusion>
+): UserSettings {
+  const patchKeys = schedulerFrameworkInclusionKeys.filter((k) => inclusionPatch[k] === false);
+  if (patchKeys.length === 0) return settings;
+
+  const fs = frameworkSystemSchema.parse(settings.frameworkSystem ?? {});
+  const disabledIds = new Set(
+    FRAMEWORK_IDS_ALL.filter((fid) => {
+      const rk = INCLUSION_KEY_BY_REGISTRY_ID[fid];
+      return rk != null && patchKeys.includes(rk);
+    })
+  );
+
+  let changed = false;
+  const frameworks = fs.frameworks.map((row) => {
+    if (!disabledIds.has(row.id)) return row;
+    const cur = row.overlay ?? { enabled: true };
+    if (cur.enabled === false) return row;
+    changed = true;
+    return { ...row, overlay: { ...cur, enabled: false } };
+  });
+  return changed ? { ...settings, frameworkSystem: { ...fs, frameworks } } : settings;
+}
+
+/**
  * Hydrate `frameworkSystem` from canonical allocator fields (inclusion, energy module,
  * placement, consistency/routines). Safe on every load/save — call after merges.
  */

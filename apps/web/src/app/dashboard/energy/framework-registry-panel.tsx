@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { FrameworkRegistryId, FrameworkSystem } from "@calendar-automations/schema";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
@@ -20,7 +21,7 @@ const SCHEDULER_IDS = [
 ] as const satisfies readonly FrameworkRegistryId[];
 
 export function FrameworkRegistryPanel({ initial }: { initial: FrameworkSystem }) {
-  const [, startTransition] = useTransition();
+  const router = useRouter();
   const frameworks = useMemo(
     () => [...initial.frameworks].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)),
     [initial.frameworks]
@@ -28,29 +29,30 @@ export function FrameworkRegistryPanel({ initial }: { initial: FrameworkSystem }
 
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const setSchedulerIncluded = async (row: FrameworkSystem["frameworks"][number], next: boolean) => {
+  const commitSchedulerIncluded = async (row: FrameworkSystem["frameworks"][number], next: boolean) => {
     const key = mapIdToInclusionKey(row.id);
     if (!key) return;
-    startTransition(async () => {
-      setBusyId(row.id);
-      try {
-        await persistSchedulerFrameworkInclusion({ [key]: next });
-        if (!next) await updateFrameworkOverlay(row.id, { enabled: false });
-      } finally {
-        setBusyId(null);
-      }
-    });
+    setBusyId(row.id);
+    try {
+      await persistSchedulerFrameworkInclusion({ [key]: next });
+      router.refresh();
+    } catch (err) {
+      console.error("persistSchedulerFrameworkInclusion failed", err);
+    } finally {
+      setBusyId(null);
+    }
   };
 
-  const toggleOverlayCalendar = (id: FrameworkRegistryId, nextOverlay: boolean) => {
-    startTransition(async () => {
-      setBusyId(`ov-${id}`);
-      try {
-        await updateFrameworkOverlay(id, { enabled: nextOverlay });
-      } finally {
-        setBusyId(null);
-      }
-    });
+  const toggleOverlayCalendar = async (id: FrameworkRegistryId, nextOverlay: boolean) => {
+    setBusyId(`ov-${id}`);
+    try {
+      await updateFrameworkOverlay(id, { enabled: nextOverlay });
+      router.refresh();
+    } catch (err) {
+      console.error("updateFrameworkOverlay failed", err);
+    } finally {
+      setBusyId(null);
+    }
   };
 
   const schedRows = SCHEDULER_IDS.map((sid) => frameworks.find((r) => r.id === sid)).filter(
@@ -94,8 +96,8 @@ export function FrameworkRegistryPanel({ initial }: { initial: FrameworkSystem }
                 busy={busyId === row.id || busyId === `ov-${row.id}`}
                 inScheduler
                 mirror={false}
-                onToggleScheduler={(on) => setSchedulerIncluded(row, on)}
-                onToggleCal={(enabled) => toggleOverlayCalendar(row.id, enabled)}
+                onToggleScheduler={(on) => void commitSchedulerIncluded(row, on)}
+                onToggleCal={(enabled) => void toggleOverlayCalendar(row.id, enabled)}
               />
             ))}
           </ul>
@@ -115,8 +117,8 @@ export function FrameworkRegistryPanel({ initial }: { initial: FrameworkSystem }
                 busy={busyId === row.id || busyId === `ov-${row.id}`}
                 inScheduler={false}
                 mirror={false}
-                onToggleScheduler={(on) => setSchedulerIncluded(row, on)}
-                onToggleCal={(enabled) => toggleOverlayCalendar(row.id, enabled)}
+                onToggleScheduler={(on) => void commitSchedulerIncluded(row, on)}
+                onToggleCal={(enabled) => void toggleOverlayCalendar(row.id, enabled)}
               />
             ))}
           </ul>
@@ -141,7 +143,7 @@ export function FrameworkRegistryPanel({ initial }: { initial: FrameworkSystem }
                 inScheduler={false}
                 mirror
                 onToggleScheduler={() => {}}
-                onToggleCal={(enabled) => toggleOverlayCalendar(row.id, enabled)}
+                onToggleCal={(enabled) => void toggleOverlayCalendar(row.id, enabled)}
               />
             ))}
           </ul>
@@ -167,7 +169,8 @@ function FrameworkPickerCard({
   onToggleCal: (enabled: boolean) => void;
 }) {
   const label = row.label ?? FRAMEWORK_REGISTRY_DEFAULT_LABELS[row.id];
-  const desc = FRAMEWORK_REGISTRY_DESCRIPTIONS[row.id];
+  const desc = FRAMEWORK_REGISTRY_DESCRIPTIONS[row.id] ?? "";
+  const overlayOn = row.overlay?.enabled !== false;
 
   return (
     <li className="flex flex-col gap-2 rounded-lg border border-ink-200 bg-ink-50/35 p-3 text-xs dark:border-ink-600 dark:bg-ink-900/25">
@@ -212,14 +215,10 @@ function FrameworkPickerCard({
           </button>
         )}
         {(inScheduler || mirror) && (
-          <label
-            className={`ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-ink-600 dark:text-ink-300 ${
-              !inScheduler && !mirror ? "opacity-50 pointer-events-none" : ""
-            }`}
-          >
+          <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-ink-600 dark:text-ink-300">
             <input
               type="checkbox"
-              checked={row.overlay.enabled !== false}
+              checked={overlayOn}
               disabled={busy}
               title="Show tags on proposed blocks on My Perfect Week"
               onChange={(e) => onToggleCal(e.target.checked)}

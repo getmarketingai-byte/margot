@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
   applyCanonicalFromFrameworkSystem,
+  applyFrameworkOverlayOffForSchedulerPatch,
   coerceSettingsAfterSchedulerFrameworkInclusionPatch,
   frameworkSystemSchema,
   type FrameworkOverlay,
@@ -29,20 +30,19 @@ export async function persistSchedulerFrameworkInclusion(
   patch: Partial<SchedulerFrameworkInclusion>
 ): Promise<void> {
   const session = await authOrPreview();
-  if (!session?.user?.id) return;
+  if (!session?.user?.id) throw new Error("Unauthorized");
   const userId = session.user.id;
   const settings = await loadSettings(userId);
   const merged = schedulerFrameworkInclusionSchema.parse({
     ...settings.schedulerFrameworkInclusion,
     ...patch
   });
-  await saveSettings(
-    userId,
-    coerceSettingsAfterSchedulerFrameworkInclusionPatch({
-      ...settings,
-      schedulerFrameworkInclusion: merged
-    })
-  );
+  const coerced = coerceSettingsAfterSchedulerFrameworkInclusionPatch({
+    ...settings,
+    schedulerFrameworkInclusion: merged
+  });
+  const withOverlayClears = applyFrameworkOverlayOffForSchedulerPatch(coerced, patch);
+  await saveSettings(userId, withOverlayClears);
   revalidatePlanningSurfaces();
 }
 
