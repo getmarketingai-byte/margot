@@ -196,28 +196,28 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
       <FrameworkRegistryPanel
         initial={initialFrameworkSystem}
         onSchedulerInclusionChange={handleSchedulerInclusionChange}
-      />
+      >
+        {boards.length > 0 ? (
+          <FrameworkBoardsPlanningSection
+            boards={boards}
+            activeBoardKey={activeBoard?.key ?? activeBoardKey}
+            onBoardChange={setActiveBoardKey}
+          />
+        ) : null}
 
-      {boards.length > 0 ? (
-        <FrameworkBoardsPlanningSection
-          boards={boards}
-          activeBoardKey={activeBoard?.key ?? activeBoardKey}
-          onBoardChange={setActiveBoardKey}
-        />
-      ) : null}
-
-      {boards.length === 0 ? (
-        <NoFrameworksForTaggingCallout />
-      ) : goals.length === 0 ? (
-        <EmptyGoalsCallout />
-      ) : activeBoard ? (
-        <FrameworkBoard
-          board={activeBoard}
-          goals={goals}
-          wheelLabel={wheelLabel}
-          onPatch={handlePatch}
-        />
-      ) : null}
+        {boards.length === 0 ? (
+          <NoFrameworksForTaggingCallout />
+        ) : goals.length === 0 ? (
+          <EmptyGoalsCallout />
+        ) : activeBoard ? (
+          <FrameworkBoard
+            board={activeBoard}
+            goals={goals}
+            wheelLabel={wheelLabel}
+            onPatch={handlePatch}
+          />
+        ) : null}
+      </FrameworkRegistryPanel>
 
       <PlacementPriorityCard
         initialOrder={initialPlacementOrder}
@@ -469,8 +469,13 @@ function FrameworkBoard({ board, goals, wheelLabel, onPatch }: FrameworkBoardPro
     if (!overId) return;
     const goal = goals.find((g) => g.id === goalId);
     if (!goal) return;
-    if (board.columnOf(goal) === overId) return;
-    onPatch(goalId, board.patchFor(overId));
+    const targetColumnId = board.columns.some((column) => column.id === overId)
+      ? overId
+      : grouped.entries().find(([, colGoals]) => colGoals.some((g) => g.id === overId))?.[0] ??
+        null;
+    if (!targetColumnId) return;
+    if (board.columnOf(goal) === targetColumnId) return;
+    onPatch(goalId, board.patchFor(targetColumnId));
   };
 
   return (

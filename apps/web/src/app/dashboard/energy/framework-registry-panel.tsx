@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { FrameworkRegistryId, FrameworkSystem } from "@calendar-automations/schema";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
@@ -23,10 +23,12 @@ const SCHEDULER_IDS = [
 
 export function FrameworkRegistryPanel({
   initial,
-  onSchedulerInclusionChange
+  onSchedulerInclusionChange,
+  children
 }: {
   initial: FrameworkSystem;
   onSchedulerInclusionChange?: (args: { key: FrameworkRegistryId; enabled: boolean }) => void;
+  children?: ReactNode;
 }) {
   const [frameworkRows, setFrameworkRows] = useState<FrameworkSystem["frameworks"]>(
     () => [...initial.frameworks].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
@@ -142,6 +144,10 @@ export function FrameworkRegistryPanel({
           </ul>
         </div>
       )}
+
+      {children ? (
+        <div className="border-t border-ink-200 pt-5 dark:border-ink-600">{children}</div>
+      ) : null}
     </div>
   );
 }
