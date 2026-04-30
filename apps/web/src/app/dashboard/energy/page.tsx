@@ -20,10 +20,7 @@ import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 import { updateWeeklyIntent } from "../plan/actions";
 import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ConstraintsSection } from "./constraints-section";
-import {
-  persistSchedulerFrameworkInclusion,
-  updatePlacementSignalsFromFramework
-} from "./framework-system-actions";
+import { updatePlacementSignalsFromFramework } from "./framework-system-actions";
 import { PlanningHubClient } from "./planning-hub-client";
 import { WhyWeeklyIntentSection } from "./why-weekly-intent-section";
 
@@ -175,7 +172,6 @@ export default async function PlanningHubPage() {
           wheelAreas={wheelAreas}
           schedulerFrameworkInclusion={settings.schedulerFrameworkInclusion}
           savePlacementOrder={updatePlacementSignalsFromFramework}
-          patchSchedulerFrameworkInclusion={persistSchedulerFrameworkInclusion}
         />
 
         <div

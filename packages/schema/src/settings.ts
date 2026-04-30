@@ -520,13 +520,13 @@ export type SchedulerFrameworkInclusionKey = (typeof schedulerFrameworkInclusion
  * sync on read/write via helpers below.
  */
 export const schedulerFrameworkInclusionSchema = z.object({
-  commitment: z.boolean().default(true),
-  polarity: z.boolean().default(true),
-  attention: z.boolean().default(true),
-  workLayer: z.boolean().default(true),
+  commitment: z.boolean().default(false),
+  polarity: z.boolean().default(false),
+  attention: z.boolean().default(false),
+  workLayer: z.boolean().default(false),
   wheel: z.boolean().default(false),
   ppfPillar: z.boolean().default(false),
-  ppfHorizon: z.boolean().default(true),
+  ppfHorizon: z.boolean().default(false),
   hp6: z.boolean().default(false)
 });
 export type SchedulerFrameworkInclusion = z.infer<typeof schedulerFrameworkInclusionSchema>;
@@ -545,10 +545,10 @@ export function defaultSchedulerFrameworkInclusionFromLegacy(
   const p = raw.ppf?.enabled ?? false;
   const h = raw.hpp?.enabled ?? false;
   return {
-    commitment: true,
-    polarity: true,
-    attention: true,
-    workLayer: true,
+    commitment: false,
+    polarity: false,
+    attention: false,
+    workLayer: false,
     wheel: w,
     ppfPillar: p,
     /** Legacy had a single PPF toggle covering both pillar rules and horizon tagging. */
@@ -707,6 +707,30 @@ export const FRAMEWORK_REGISTRY_DEFAULT_LABELS: Record<FrameworkRegistryId, stri
   routines: "Routines"
 };
 
+/** Short onboarding copy for the Planning Hub framework picker (blank-canvas UX). */
+export const FRAMEWORK_REGISTRY_DESCRIPTIONS: Record<FrameworkRegistryId, string> = {
+  commitment:
+    "Non-negotiable vs nice-to-have tiers so true priorities reserve time before everything else.",
+  polarity:
+    "Energising vs draining goals so draining work is spaced and recovery can cluster.",
+  attention:
+    "Deep hyper-focus vs reactive hyper-awareness so gaps match cognitive mode.",
+  workLayer:
+    "Needle-moving vs ops vs play so the allocator can balance workload shape.",
+  wheel:
+    "Life-area tags with optional weekly minimums from scheduling outcomes.",
+  ppfPillar:
+    "Personal / professional / financial mix and touch targets when PPF rules are enabled.",
+  ppfHorizon:
+    "1y / 3y / 5y horizon tagging that pairs with PPF scheduling rules.",
+  hp6:
+    "Brendon Burchard’s six habits — pairs with habit minimum touches in scheduling outcomes.",
+  consistency:
+    "Mirrors whether consistency scheduling is on — calendar overlay only.",
+  routines:
+    "Mirrors morning / shutdown routines in your timemap — calendar overlay only."
+};
+
 const INCLUSION_KEY_BY_REGISTRY_ID: Partial<
   Record<FrameworkRegistryId, SchedulerFrameworkInclusionKey>
 > = {
@@ -758,7 +782,7 @@ export function defaultFrameworkRegistryFromInclusion(
   const keys = FRAMEWORK_IDS_ALL.filter((id) => id !== "consistency" && id !== "routines");
   return keys.map((id) => ({
     id,
-    enabled: inclusion[INCLUSION_KEY_BY_REGISTRY_ID[id]!] ?? true,
+    enabled: inclusion[INCLUSION_KEY_BY_REGISTRY_ID[id]!] ?? false,
     sortOrder: FRAMEWORK_REGISTRY_DEFAULT_SORT[id],
     overlay: { enabled: true }
   }));

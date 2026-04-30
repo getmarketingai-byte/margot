@@ -16,7 +16,8 @@ describe("UserSettings schema", () => {
     expect(parsed.timemap.bands).toHaveLength(4);
     expect(parsed.wheel.areas).toHaveLength(8);
     expect(parsed.ppf.targets).toHaveLength(3);
-    expect(parsed.calendars.schedulingWindowDays).toBe(60);
+    expect(parsed.schedulerFrameworkInclusion.commitment).toBe(false);
+    expect(parsed.schedulerFrameworkInclusion.workLayer).toBe(false);
     expect(parsed.allocator.starvationMode).toBe("proportional");
     expect(parsed.allocator.allocationMode).toBe("even");
     expect(parsed.allocator.catchUpMode).toBe("automated");
@@ -91,6 +92,8 @@ describe("UserSettings schema", () => {
     expect(migrated.schedulerFrameworkInclusion.wheel).toBe(true);
     expect(migrated.schedulerFrameworkInclusion.ppfPillar).toBe(true);
     expect(migrated.schedulerFrameworkInclusion.hp6).toBe(false);
+    expect(migrated.schedulerFrameworkInclusion.commitment).toBe(false);
+    expect(migrated.schedulerFrameworkInclusion.workLayer).toBe(false);
     expect(migrated.wheel.enabled).toBe(true);
     expect(migrated.ppf.enabled).toBe(true);
   });

@@ -93,7 +93,6 @@ interface BoardConfig {
   key: FrameworkKey;
   title: string;
   description: string;
-  enabled: boolean;
   columns: BoardColumn[];
   columnOf: (goal: WeeklyGoal) => string;
   patchFor: (columnId: string) => Partial<Omit<WeeklyGoal, "id">>;
@@ -107,9 +106,6 @@ interface PlanningHubClientProps {
   wheelAreas: ReadonlyArray<{ id: string; label: string }>;
   schedulerFrameworkInclusion: SchedulerFrameworkInclusion;
   savePlacementOrder: (order: readonly PlacementSignalKey[]) => Promise<void>;
-  patchSchedulerFrameworkInclusion: (
-    patch: Partial<SchedulerFrameworkInclusion>
-  ) => Promise<void>;
 }
 
 /**
@@ -123,8 +119,7 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     initialPlacementOrder,
     wheelAreas,
     schedulerFrameworkInclusion: initialInclusion,
-    savePlacementOrder,
-    patchSchedulerFrameworkInclusion
+    savePlacementOrder
   } = props;
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const lastSeenSig = useRef<string>("");
@@ -141,47 +136,20 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     [wheelAreas]
   );
 
-  const boards = useMemo<BoardConfig[]>(() => buildBoardRegistry({ wheelAreas }), [wheelAreas]);
-
-  const inclusionSig = useMemo(() => JSON.stringify(initialInclusion), [initialInclusion]);
-  const [schedulerInclusion, setSchedulerInclusion] =
-    useState<SchedulerFrameworkInclusion>(initialInclusion);
-  useEffect(() => {
-    setSchedulerInclusion(initialInclusion);
-  }, [inclusionSig, initialInclusion]);
-
-  const [, inclusionTransition] = useTransition();
-
-  const setFrameworkInScheduler = (
-    key: keyof SchedulerFrameworkInclusion,
-    enabled: boolean
-  ) => {
-    const prev = schedulerInclusion[key];
-    setSchedulerInclusion((s) =>
-      ({
-        ...s,
-        [key]: enabled
-      }) as SchedulerFrameworkInclusion
-    );
-    inclusionTransition(async () => {
-      try {
-        await patchSchedulerFrameworkInclusion({ [key]: enabled });
-      } catch (err) {
-        console.error("patch scheduler framework inclusion failed", err);
-        setSchedulerInclusion((s) => ({ ...s, [key]: prev }) as SchedulerFrameworkInclusion);
-      }
-    });
-  };
+  const boards = useMemo<BoardConfig[]>(() => {
+    const all = buildBoardRegistry({ wheelAreas });
+    return all.filter((b) => initialInclusion[b.key as keyof SchedulerFrameworkInclusion]);
+  }, [wheelAreas, initialInclusion]);
 
   const [activeBoardKey, setActiveBoardKey] = useState<FrameworkKey>("commitment");
-  const activeBoard = boards.find((b) => b.key === activeBoardKey) ?? boards[0]!;
 
   useEffect(() => {
-    const current = boards.find((b) => b.key === activeBoardKey);
-    if (current?.enabled) return;
-    const fallback = boards.find((b) => b.enabled) ?? boards[0];
-    if (fallback) setActiveBoardKey(fallback.key);
+    if (boards.length === 0) return;
+    if (boards.some((b) => b.key === activeBoardKey)) return;
+    setActiveBoardKey(boards[0]!.key);
   }, [boards, activeBoardKey]);
+
+  const activeBoard = boards.find((b) => b.key === activeBoardKey) ?? boards[0];
 
   const handlePatch = (goalId: string, patch: Partial<Omit<WeeklyGoal, "id">>) => {
     setGoals((prev) =>
@@ -196,24 +164,26 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     <div className="flex flex-col gap-6">
       <FrameworkRegistryPanel initial={initialFrameworkSystem} />
 
-      <FrameworkBoardsPlanningSection
-        boards={boards}
-        activeBoardKey={activeBoard.key}
-        onBoardChange={setActiveBoardKey}
-        schedulerInclusion={schedulerInclusion}
-        onToggleFrameworkInScheduler={setFrameworkInScheduler}
-      />
+      {boards.length > 0 ? (
+        <FrameworkBoardsPlanningSection
+          boards={boards}
+          activeBoardKey={activeBoard?.key ?? activeBoardKey}
+          onBoardChange={setActiveBoardKey}
+        />
+      ) : null}
 
-      {goals.length === 0 ? (
+      {boards.length === 0 ? (
+        <NoFrameworksForTaggingCallout />
+      ) : goals.length === 0 ? (
         <EmptyGoalsCallout />
-      ) : (
+      ) : activeBoard ? (
         <FrameworkBoard
           board={activeBoard}
           goals={goals}
           wheelLabel={wheelLabel}
           onPatch={handlePatch}
         />
-      )}
+      ) : null}
 
       <PlacementPriorityCard
         initialOrder={initialPlacementOrder}
@@ -358,8 +328,6 @@ function FrameworkBoardsPlanningSection(props: {
   boards: ReadonlyArray<BoardConfig>;
   activeBoardKey: FrameworkKey;
   onBoardChange: (key: FrameworkKey) => void;
-  schedulerInclusion: SchedulerFrameworkInclusion;
-  onToggleFrameworkInScheduler: (key: keyof SchedulerFrameworkInclusion, enabled: boolean) => void;
 }) {
   return (
     <div className="flex flex-col gap-3 border-t border-ink-200 pt-6 dark:border-ink-600">
@@ -368,60 +336,33 @@ function FrameworkBoardsPlanningSection(props: {
           Goal tagging (boards)
         </h2>
         <p className="mt-1 text-xs text-ink-400">
-          Each pill is both a tagging board (right) and allocator inclusion (left checkbox). Detailed
-          floors, mix targets, and HP6 minimums stay under{" "}
-          <a className="underline" href="#scheduling-outcomes">
+          Pill below switches which tagging board you are using. Inclusion is controlled in{" "}
+          <strong>Choose frameworks</strong> above. Rule floors and mix targets stay under{" "}
+          <a className="underline" href="#scheduling-outcomes-heading">
             Scheduling outcomes
           </a>
           .
         </p>
       </div>
-      <nav aria-label="Framework boards and allocator inclusion">
+      <nav aria-label="Goal tagging frameworks">
         <ul className="flex flex-wrap gap-2">
           {props.boards.map((board) => {
             const active = board.key === props.activeBoardKey;
-            const incKey = board.key as keyof SchedulerFrameworkInclusion;
-            const inScheduler = props.schedulerInclusion[incKey];
             return (
               <li key={board.key}>
-                <div
-                  className={`inline-flex max-w-full items-stretch overflow-hidden rounded-full border text-xs transition focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-1 focus-within:ring-offset-white dark:focus-within:ring-offset-zinc-950 ${
+                <button
+                  type="button"
+                  data-active={active}
+                  aria-pressed={active}
+                  onClick={() => props.onBoardChange(board.key)}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-950 ${
                     active
-                      ? "border-accent shadow-sm shadow-accent/20"
-                      : "border-ink-200 dark:border-ink-600"
+                      ? "border-accent bg-accent text-accent-fg shadow-sm shadow-accent/20"
+                      : "border-ink-200 text-ink-700 hover:bg-ink-100/70 dark:border-ink-600 dark:text-ink-100 dark:hover:bg-ink-800/70"
                   }`}
                 >
-                  <label
-                    title="Include this framework in allocator behavior"
-                    className={`flex cursor-pointer items-center gap-1.5 px-2 py-1.5 ${
-                      inScheduler
-                        ? "bg-accent/15 text-ink-800 dark:bg-accent/20 dark:text-ink-100"
-                        : "bg-ink-50/70 text-ink-500 dark:bg-ink-900/50 dark:text-ink-400"
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      className="h-3.5 w-3.5 shrink-0 rounded border-ink-300 text-accent focus:ring-accent"
-                      checked={inScheduler}
-                      onChange={(e) => props.onToggleFrameworkInScheduler(incKey, e.target.checked)}
-                      onClick={(e) => e.stopPropagation()}
-                      aria-label={`Include ${board.title} in allocator`}
-                    />
-                    <span className="sr-only">allocator</span>
-                  </label>
-                  <button
-                    type="button"
-                    data-active={active}
-                    onClick={() => props.onBoardChange(board.key)}
-                    className={`px-2.5 py-1.5 font-medium transition ${
-                      active
-                        ? "bg-accent text-accent-fg"
-                        : "text-ink-700 hover:bg-ink-100/70 dark:text-ink-100 dark:hover:bg-ink-800/70"
-                    }`}
-                  >
-                    {board.title}
-                  </button>
-                </div>
+                  {board.title}
+                </button>
               </li>
             );
           })}
@@ -440,7 +381,20 @@ function EmptyGoalsCallout() {
         <a className="underline" href="/dashboard/plan">
           Perfect Week
         </a>
-        . Once you have a list, the framework boards below let you classify each one.
+        . Once you have a list, the boards above let you classify each one.
+      </p>
+    </div>
+  );
+}
+
+function NoFrameworksForTaggingCallout() {
+  return (
+    <div className="rounded-lg border border-dashed border-ink-200 p-4 dark:border-ink-600">
+      <h2 className="text-sm font-semibold">Tagging stays off until you add frameworks</h2>
+      <p className="mt-1 text-xs text-ink-400">
+        Start with{" "}
+        <strong>Add to scheduler</strong> in Choose frameworks above. Each framework you add unlocks its
+        board for drag-and-drop classification.
       </p>
     </div>
   );
@@ -641,9 +595,7 @@ function buildBoardRegistry({
       key: "commitment",
       title: "Commitment",
       description:
-        "Non-negotiables get first access to free time. Nice-to-haves only land after the rest fits.",
-      enabled: true,
-      columns: [
+        "Non-negotiables get first access to free time. Nice-to-haves only land after the rest fits.",      columns: [
         { id: "non_negotiable", title: COMMITMENT_LABELS.non_negotiable },
         { id: "committed", title: COMMITMENT_LABELS.committed },
         { id: "nice_to_have", title: COMMITMENT_LABELS.nice_to_have }
@@ -655,9 +607,7 @@ function buildBoardRegistry({
       key: "polarity",
       title: "Energy",
       description:
-        "Classify which goals recharge you and which drain you. Drains will be spread out, energise blocks may be batched.",
-      enabled: true,
-      columns: [
+        "Classify which goals recharge you and which drain you. Drains will be spread out, energise blocks may be batched.",      columns: [
         { id: "energise", title: "Energise" },
         { id: "neutral", title: "Neutral" },
         { id: "drain", title: "Drain" }
@@ -669,9 +619,7 @@ function buildBoardRegistry({
       key: "attention",
       title: "Attention",
       description:
-        "Hyper-focus = deep, single-tasked work; hyper-awareness = scanning, batched, reactive.",
-      enabled: true,
-      columns: [
+        "Hyper-focus = deep, single-tasked work; hyper-awareness = scanning, batched, reactive.",      columns: [
         { id: "hyperfocus", title: "Hyper focus" },
         { id: "unspecified", title: "Either" },
         { id: "hyperaware", title: "Hyper aware" }
@@ -683,9 +631,7 @@ function buildBoardRegistry({
       key: "workLayer",
       title: "Work layer",
       description:
-        "Bustamante-style four layers: needle-mover, execution, ops/future, play.",
-      enabled: true,
-      columns: [
+        "Bustamante-style four layers: needle-mover, execution, ops/future, play.",      columns: [
         { id: "needle-mover", title: "Needle mover" },
         { id: "execution", title: "Execution" },
         { id: "ops", title: "Ops / future" },
@@ -701,9 +647,7 @@ function buildBoardRegistry({
     key: "wheel",
     title: "Wheel of Life",
     description:
-      "Tag each goal to a life area. When Wheel is checked under In scheduler and floors are set in Scheduling rules, the allocator respects those floors.",
-    enabled: true,
-    columns: [
+      "Tag each goal to a life area. When Wheel is checked under In scheduler and floors are set in Scheduling rules, the allocator respects those floors.",    columns: [
       ...wheelAreas.map((a) => ({ id: a.id, title: a.label })),
       { id: "__none__", title: "Unassigned" }
     ],
@@ -715,9 +659,7 @@ function buildBoardRegistry({
     key: "ppfPillar",
     title: "PPF pillar",
     description:
-      "Personal / Professional / Financial — Natalie Dawson's three buckets. When PPF is checked under In scheduler, mix metrics and touch rules from Scheduling rules apply.",
-    enabled: true,
-    columns: [
+      "Personal / Professional / Financial — Natalie Dawson's three buckets. When PPF is checked under In scheduler, mix metrics and touch rules from Scheduling rules apply.",    columns: [
       { id: "personal", title: "Personal" },
       { id: "professional", title: "Professional" },
       { id: "financial", title: "Financial" },
@@ -733,9 +675,7 @@ function buildBoardRegistry({
     key: "ppfHorizon",
     title: "PPF horizon",
     description:
-      "Which time horizon does this goal serve — 1, 3, or 5 years out? PPF scheduler rules apply when PPF is checked under In scheduler.",
-    enabled: true,
-    columns: [
+      "Which time horizon does this goal serve — 1, 3, or 5 years out? PPF scheduler rules apply when PPF is checked under In scheduler.",    columns: [
       { id: "y1", title: "1 year" },
       { id: "y3", title: "3 years" },
       { id: "y5", title: "5 years" },
@@ -749,9 +689,7 @@ function buildBoardRegistry({
     key: "hp6",
     title: "HP6 habit",
     description:
-      "Tag goals against Brendon Burchard's six high-performance habits. When HP6 is checked under In scheduler, minimum touches from Scheduling rules apply.",
-    enabled: true,
-    columns: [
+      "Tag goals against Brendon Burchard's six high-performance habits. When HP6 is checked under In scheduler, minimum touches from Scheduling rules apply.",    columns: [
       ...HP6_KEYS.map((h) => ({ id: h, title: HP6_LABELS[h] })),
       { id: "__none__", title: "Unassigned" }
     ],

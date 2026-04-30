@@ -1599,7 +1599,12 @@ describe("allocateWeek energy-aware suggestion pass", () => {
         ]
       },
       busy,
-      settings: buildSettings(),
+      settings: buildSettings({
+        schedulerFrameworkInclusion: {
+          ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
+          workLayer: true
+        }
+      }),
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
@@ -1662,10 +1667,18 @@ describe("allocateWeek energy-aware suggestion pass", () => {
       expect(startHour).toBeLessThan(11);
     }
 
+    const mixedSettings = {
+      schedulerFrameworkInclusion: {
+        ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
+        workLayer: true
+      }
+    } as const;
+
     const layerFirst = allocateWeek({
       plan: planForGoal,
       busy,
       settings: buildSettings({
+        ...mixedSettings,
         placementPriority: {
           order: ["workLayer", "energyMode", "attentionMode", "energyPolarity"]
         }
@@ -1741,13 +1754,17 @@ describe("allocateWeek energy-aware suggestion pass", () => {
         ]
       },
       busy,
-      settings: buildSettings(),
+      settings: buildSettings({
+        schedulerFrameworkInclusion: {
+          ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
+          commitment: true
+        }
+      }),
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
 
     // The non-negotiable goal lands first, so its block sits in the very
-    // first available 9am gap (Monday) while the nice-to-have falls to a
     // later day.
     const mustBlocks = result.blocks.filter((b) => b.goalId === "must");
     const niceBlocks = result.blocks.filter((b) => b.goalId === "nice");
