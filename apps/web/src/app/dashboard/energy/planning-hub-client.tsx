@@ -114,13 +114,15 @@ interface PlanningHubClientProps {
 }
 
 /**
- * Top-level planning hub. Composes (in order down the page):
+ * Top-level planning hub. Down the page:
  *
- *   1. Weekly intentions card — short reflection prompts that anchor the week.
- *   2. Long-horizon vision — PPF-aligned text persisted on user settings.
- *   3. Framework boards — tag goals and flip allocator inclusion per framework in one strip.
- *   4. Active board — drag goals between columns to set the framework tag.
- *   5. Placement tie-break — rank the four placement signals.
+ *   1. Weekly intentions — anchor the week.
+ *   2. Long-horizon vision — PPF-aligned text on user settings.
+ *   3. Framework boards — classify goals; toggles choose which dimensions feed the allocator.
+ *   4. Active board — drag goals between columns for tags.
+ *   5. Placement tie-break — rank the four placement signals when tags disagree on ideal timing.
+ *
+ * Parent page then adds Build your system (optional scheduling methods) and Scheduling rules.
  */
 export function PlanningHubClient(props: PlanningHubClientProps) {
   const {

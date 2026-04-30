@@ -17,7 +17,6 @@ import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
 import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
 import { PlanClient } from "./plan-client";
-import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
 import { RangeToggleCalendar } from "./range-toggle-calendar";
@@ -133,8 +132,7 @@ export default async function PlanPage() {
     dayIndex,
     nextWeekAnchor,
     daySheetGoalBusyThisWeek,
-    daySheetGoalBusyNextWeek,
-    dayCalendarDrainThisWeek
+    daySheetGoalBusyNextWeek
   } = ctx;
 
   const allocation = allocateWeek({
@@ -167,7 +165,6 @@ export default async function PlanPage() {
     sleepIntervals: sleepIntervalsFromSystemBlocks(nextWeekSystemBlocks)
   });
 
-  const tuningHints = allocation.metrics.personalEnergyPlan?.tuningHints ?? [];
   const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
   const daySheetGoalBusyForCalendar = [...daySheetGoalBusyThisWeek, ...daySheetGoalBusyNextWeek];
@@ -270,7 +267,11 @@ export default async function PlanPage() {
         <h1 className="text-2xl font-semibold">My Perfect Week</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
           List the things you want each week. Type a goal and press Enter — we&apos;ll find the
-          time.
+          time. Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
+          <Link className="underline" href="/dashboard/energy#personal-scheduling">
+            Planning
+          </Link>{" "}
+          with your frameworks.
         </p>
       </header>
 
@@ -293,12 +294,6 @@ export default async function PlanPage() {
       <ResizableColumns
         left={
           <div className="flex flex-col gap-5">
-            <BuildYourSystemPanel
-              initial={settings.personalSystem}
-              dayDrain={dayCalendarDrainThisWeek}
-              tuningHints={tuningHints}
-            />
-
             <PlanClient
               initialGoals={schedulingGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}

@@ -163,8 +163,14 @@ export async function ConstraintsSection() {
       <header>
         <h2 className="text-lg font-semibold">Scheduling rules</h2>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Optional rules that shape how your perfect week gets scheduled. Each section is
-          independent; collapse what you don&apos;t need. Morning and shutdown routines live on{" "}
+          Global allocator mechanics: catch-up, how the day&apos;s <strong>energy curve</strong>{" "}
+          biases gap choice (morning vs afternoon), starvation when you&apos;re overcommitted, and
+          wheel / PPF / HP6 targets. Distinct from optional{" "}
+          <a className="underline" href="#personal-scheduling">
+            scheduling methods
+          </a>{" "}
+          above (e.g. energy + transition scoring)—use both only if you want both layers. Routines
+          live on{" "}
           <a className="underline" href="/dashboard/plan">
             My Perfect Week
           </a>
@@ -293,7 +299,9 @@ export async function ConstraintsSection() {
       <details className="card">
         <summary className="cursor-pointer text-sm font-semibold">Energy ordering</summary>
         <p className="mt-1 text-xs text-ink-400">
-          Lay deep-focus goals before scanning ones, matching your daily energy curve.
+          Lay deep-focus goals before scanning ones, matching your daily energy curve. This is the
+          built-in <strong>hour / curve</strong> bias—not the optional &quot;Energy and calendar
+          transitions&quot; method above, which adds transition and calendar-load nudges on top.
         </p>
         <form action={updateEnergy} className="mt-3 flex items-end gap-2">
           <label className="flex flex-col gap-1 text-xs">

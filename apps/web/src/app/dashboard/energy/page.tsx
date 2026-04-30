@@ -2,11 +2,9 @@
  * Planning hub (the "second page" of the dashboard).
  *
  * The hub is the strategic surface that pairs framework-aware classification
- * boards with weekly intentions and a long-horizon vision. The Perfect Week
- * page handles when things land on the calendar; the planning hub handles
- * why each goal exists, which framework lens applies, and how non-negotiable
- * each commitment is. All edits flow through the same goal/plan server
- * actions so the allocator stays single-source-of-truth.
+ * boards with weekly intentions and long-horizon vision, optional scheduling methods
+ * (Build your system), and global allocator rules. My Perfect Week lists concrete
+ * goals and calendar preview.
  */
 
 import { eq } from "drizzle-orm";
@@ -23,11 +21,15 @@ import {
   visionSettingsSchema,
   weeklyIntentSchema
 } from "@calendar-automations/schema";
+import { allocateWeek, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
+import { loadPlanWeekAllocationInputs } from "@/lib/allocation-run-context";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
+import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 import { updateWeeklyIntent } from "../plan/actions";
+import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ConstraintsSection } from "./constraints-section";
 import { PlanningHubClient } from "./planning-hub-client";
 
@@ -134,15 +136,50 @@ export default async function PlanningHubPage() {
   const plan = await loadPlan(userId, settings.timezone);
   const schedulingGoals = filterSchedulingGoals(plan.goals);
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
+  const nowMs = Date.now();
+  const ctx = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const {
+    busyFetch,
+    weekStartMs,
+    weekEndMs,
+    busy,
+    systemBlocks,
+    niceWeatherThisWeek,
+    daySheetGoalBusyThisWeek,
+    dayCalendarDrainThisWeek
+  } = ctx;
+  const resolvedCatchUpFloors = ctx.catchUpFloors;
+
+  const allocation = allocateWeek({
+    plan,
+    busy: [...busy, ...daySheetGoalBusyThisWeek, ...systemBlocks],
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+    niceWeatherWindows: niceWeatherThisWeek,
+    settings,
+    weekStartMs,
+    weekEndMs,
+    catchUpFloors: resolvedCatchUpFloors,
+    weekAnchorDate: plan.weekStart,
+    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+    nowMs,
+    sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+  });
+  const tuningHints = allocation.metrics.personalEnergyPlan?.tuningHints ?? [];
 
   return (
     <div className="flex flex-col gap-5">
       <header>
         <h1 className="text-2xl font-semibold">Planning</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Set the week&apos;s intentions, classify each goal across the frameworks you trust, tune
-          allocator rules at the bottom, and decide which framework wins when they disagree.
-          Everything here feeds the Perfect Week calendar.
+          Start with why (intentions, vision), then <strong>classify goals</strong> with the frameworks
+          you actually use. Turn on optional <strong>scheduling methods</strong> in the middle when you
+          want extra nuance—otherwise the built-in allocator stays the same. Finish with{" "}
+          <strong>scheduling rules</strong> at the bottom for catch-up, energy curve, and caps. All of
+          this feeds{" "}
+          <a className="underline" href="/dashboard/plan">
+            My Perfect Week
+          </a>
+          .
         </p>
       </header>
 
@@ -158,6 +195,14 @@ export default async function PlanningHubPage() {
         saveWeeklyIntent={updateWeeklyIntent}
         patchSchedulerFrameworkInclusion={patchSchedulerFrameworkInclusion}
       />
+
+      <div id="personal-scheduling" className="scroll-mt-6">
+        <BuildYourSystemPanel
+          initial={settings.personalSystem}
+          dayDrain={dayCalendarDrainThisWeek}
+          tuningHints={tuningHints}
+        />
+      </div>
 
       <ConstraintsSection />
     </div>
