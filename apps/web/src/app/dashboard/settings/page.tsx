@@ -6,6 +6,8 @@ import {
   type GeocodeCacheEntry
 } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
+import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { geocodeAddressToCoords } from "@/lib/geocode-address";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { PRODUCT } from "@/lib/marketing";
@@ -38,6 +40,8 @@ async function updateBasics(formData: FormData): Promise<void> {
   };
   await saveSettings(userId, next);
   revalidatePath("/dashboard/settings");
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
 }
 
 async function updateTravel(formData: FormData): Promise<void> {
@@ -94,8 +98,8 @@ async function updateTravel(formData: FormData): Promise<void> {
 
   await saveSettings(userId, next);
   revalidatePath("/dashboard/settings");
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/plan");
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
 }
 
 async function updateWeather(formData: FormData): Promise<void> {
@@ -142,8 +146,8 @@ async function updateWeather(formData: FormData): Promise<void> {
 
   await saveSettings(userId, next);
   revalidatePath("/dashboard/settings");
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/plan");
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
 }
 
 const SETTINGS_BANNERS: Record<string, string> = {

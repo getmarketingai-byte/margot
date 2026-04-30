@@ -1,9 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
+import {
+  FRAMEWORK_REGISTRY_DEFAULT_LABELS,
+  type FrameworkRegistryId,
+  type FrameworkSystem,
+  type WeeklyGoal
+} from "@calendar-automations/schema";
+import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import type { SystemBlock } from "@/lib/week-blocks";
+import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { WeekCalendar } from "../week-calendar";
 
@@ -84,7 +91,10 @@ export function RangeToggleCalendar({
   daySheetGoalBusy = [],
   system,
   proposed,
-  compact
+  compact,
+  schedulingGoals,
+  frameworkSystem,
+  wheelAreas
 }: {
   weekStartMs: number;
   timezone: string;
@@ -93,13 +103,45 @@ export function RangeToggleCalendar({
   system: readonly SystemBlock[];
   proposed: readonly AllocatedBlock[];
   compact?: boolean;
+  schedulingGoals?: readonly WeeklyGoal[];
+  frameworkSystem?: FrameworkSystem;
+  wheelAreas?: ReadonlyArray<{ id: string; label: string }>;
 }) {
-  const router = useRouter();
-  const [, startTransition] = useTransition();
+  const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(750);
   const [timePatch, setTimePatch] = useState<Record<string, { startMs: number; endMs: number }>>({});
   const [mode, setMode] = useState<CalendarRangeMode>("calendar-week");
   const [showWeather, setShowWeather] = useState(true);
   const [invertedVisibility, setInvertedVisibility] = useState<Record<string, boolean>>({});
+
+  const taggableFrameworkRows = useMemo(
+    () =>
+      (frameworkSystem?.frameworks ?? [])
+        .filter((f) => f.enabled)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)),
+    [frameworkSystem?.frameworks]
+  );
+
+  const fwOverlayBootstrapSig = useMemo(
+    () =>
+      taggableFrameworkRows.map((r) => `${r.id}:${r.overlay.enabled}`).join("|"),
+    [taggableFrameworkRows]
+  );
+
+  const [fwOverlayLayers, setFwOverlayLayers] = useState<FrameworkOverlayLayerState>({});
+
+  useEffect(() => {
+    const init: FrameworkOverlayLayerState = {};
+    for (const row of taggableFrameworkRows) {
+      init[row.id] = row.overlay.enabled !== false;
+    }
+    setFwOverlayLayers(init);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap overlay toggles when profile changes
+  }, [fwOverlayBootstrapSig]);
+
+  const wheelAreaLabel = useMemo(() => {
+    const m = new Map((wheelAreas ?? []).map((a) => [a.id, a.label] as const));
+    return (id: string) => m.get(id) ?? id;
+  }, [wheelAreas]);
 
   const proposedSig = useMemo(
     () =>
@@ -122,9 +164,17 @@ export function RangeToggleCalendar({
 
   const handleProposedDragCommit = (updates: Record<string, { startMs: number; endMs: number }>) => {
     setTimePatch((prev) => ({ ...prev, ...updates }));
-    startTransition(() => {
-      router.refresh();
+    scheduleStaleDataRefresh();
+  };
+
+  const handleProposedDragOverridesCleared = (dragKeys: string[]) => {
+    setTimePatch((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      const next = { ...prev };
+      for (const k of dragKeys) delete next[k];
+      return next;
     });
+    scheduleStaleDataRefresh();
   };
 
   useEffect(() => {
@@ -235,6 +285,34 @@ export function RangeToggleCalendar({
         >
           Next 7 days
         </button>
+      </div>
+      {rollingSpansTwoIsoWeeks ? (
+        <p className="px-1 text-[11px] leading-snug text-ink-500 dark:text-ink-400">
+          This rolling view can show two ISO weeks at once. Each week is still planned as a full
+          Mon–Sun: goals may sit on days that are off-screen here. Switch to{" "}
+          <span className="font-medium text-ink-700 dark:text-ink-200">Calendar week</span> to see
+          the whole board for one week.
+        </p>
+      ) : null}
+      <WeekCalendar
+        weekStartMs={weekStartMs}
+        timezone={timezone}
+        busy={busy}
+        daySheetGoalBusy={daySheetGoalBusy}
+        system={visibleSystem}
+        proposed={displayProposed}
+        compact={compact}
+        dayIndices={dayOffsets}
+        onProposedDragCommit={handleProposedDragCommit}
+        onProposedDragOverridesCleared={handleProposedDragOverridesCleared}
+        weeklyGoalsForFrameworkOverlays={schedulingGoals}
+        frameworkRegistryForOverlays={taggableFrameworkRows}
+        frameworkOverlayLayerState={
+          taggableFrameworkRows.length && schedulingGoals?.length ? fwOverlayLayers : undefined
+        }
+        wheelAreaLabel={wheelAreas?.length ? wheelAreaLabel : undefined}
+      />
+      <div className="mt-1 flex flex-wrap items-center gap-1 px-1 text-xs">
         <button
           type="button"
           onClick={() => setWeatherAndPersist(!showWeather)}
@@ -250,8 +328,7 @@ export function RangeToggleCalendar({
         {invertedGoals.map(({ goalId, title }) => {
           const on = isInvertedGoalShown(invertedVisibility, goalId);
           const swatch = goalColorFromKey(goalId);
-          const short =
-            title.length > 22 ? `${title.slice(0, 20).trimEnd()}…` : title;
+          const short = title.length > 22 ? `${title.slice(0, 20).trimEnd()}…` : title;
           return (
             <button
               key={goalId}
@@ -277,25 +354,37 @@ export function RangeToggleCalendar({
           );
         })}
       </div>
-      {rollingSpansTwoIsoWeeks ? (
-        <p className="px-1 text-[11px] leading-snug text-ink-500 dark:text-ink-400">
-          This rolling view can show two ISO weeks at once. Each week is still planned as a full
-          Mon–Sun: goals may sit on days that are off-screen here. Switch to{" "}
-          <span className="font-medium text-ink-700 dark:text-ink-200">Calendar week</span> to see
-          the whole board for one week.
-        </p>
+      {taggableFrameworkRows.length > 0 && schedulingGoals?.length ? (
+        <div className="flex flex-wrap items-center gap-1 px-1 text-xs">
+          {taggableFrameworkRows.map((row) => {
+            const defaultOn = row.overlay.enabled !== false;
+            const layerOn = fwOverlayLayers[row.id] ?? defaultOn;
+            const label = FRAMEWORK_REGISTRY_DEFAULT_LABELS[row.id as FrameworkRegistryId] ?? row.id;
+            const shortLabel = label.length > 14 ? `${label.slice(0, 12)}…` : label;
+            return (
+              <button
+                key={row.id}
+                type="button"
+                onClick={() =>
+                  setFwOverlayLayers((prev) => ({
+                    ...prev,
+                    [row.id]: !layerOn
+                  }))
+                }
+                aria-pressed={layerOn}
+                title={`Framework tags on calendar: ${label}`}
+                className={`rounded border px-2 py-1 ${
+                  layerOn
+                    ? "border-violet-400/70 bg-violet-500/15 text-violet-900 dark:text-violet-100"
+                    : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+                }`}
+              >
+                {layerOn ? "Hide" : "Show"} {shortLabel}
+              </button>
+            );
+          })}
+        </div>
       ) : null}
-      <WeekCalendar
-        weekStartMs={weekStartMs}
-        timezone={timezone}
-        busy={busy}
-        daySheetGoalBusy={daySheetGoalBusy}
-        system={visibleSystem}
-        proposed={displayProposed}
-        compact={compact}
-        dayIndices={dayOffsets}
-        onProposedDragCommit={handleProposedDragCommit}
-      />
     </div>
   );
 }

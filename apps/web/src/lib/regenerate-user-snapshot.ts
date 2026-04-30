@@ -12,7 +12,7 @@ import {
 import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
-import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
+import { getCachedPlanWeekAllocationInputs } from "@/lib/cached-plan-week-allocation-inputs";
 import { invertedCalendarTimemapEvents } from "./inverted-timemap-ics-events";
 import { loadSettings } from "./settings-store";
 import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
@@ -127,7 +127,7 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     return { eventCount: 0 };
   }
 
-  const ctx = await loadPlanWeekAllocationInputs({
+  const ctx = await getCachedPlanWeekAllocationInputs({
     userId,
     plan,
     settings,

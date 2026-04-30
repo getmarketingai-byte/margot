@@ -50,6 +50,16 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 | `availableFromNowMinutes` | After Pass 3, clipped at `nowMs`. |
 | `scheduledMinutes` | Sum of non-segment goal **block** minutes (PPF / mix calculations). |
 
+## Personal energy (battery) mode
+
+- **When off** (`UserSettings.personalSystem.energyBatterySchedulingEnabled === false`, default): Pass 3 gap scoring is unchanged from the historic allocator.
+- **When on**: an extra additive score is applied in `pickGapForGoal` (on top of existing `energyMode` + framework suggestion signals):
+  - **Day load:** `computeDayCalendarDrainScores` from busy intervals vs a ~14h reference day.
+  - **Goal shape:** `effectiveEnergyBatteryProfile(goal)` — explicit `energyChargeImpact` / `energyDrainImpact` on `WeeklyGoal`, else `focusAffinity`, else inferred tags (`attentionMode`, `energyMode`, `energyPolarity`, `workLayer`).
+  - **Transitions:** penalises adjacent high-drain blocks; bonuses high-charge goals after high-drain neighbours and when the day is already calendar-heavy (guided scale knobs in `personalSystem.guided`).
+  - **Advanced rules:** optional weighted rule cards (`personalSystem.advancedRules`) further nudge placement when their conditions match.
+- **`WeekMetrics.personalEnergyPlan`:** populated only when battery mode is on — returns the seven day drain estimates used for the run and UI **tuning hints** (non-binding suggestions).
+
 ## Catch-up (web layer)
 
 Baseline allocation used to compute automated catch-up floors typically runs **without** `nowMs`, so floors stay comparable to a full-week plan; the main interactive run may pass `nowMs` for placement.

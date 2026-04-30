@@ -520,13 +520,13 @@ export type SchedulerFrameworkInclusionKey = (typeof schedulerFrameworkInclusion
  * sync on read/write via helpers below.
  */
 export const schedulerFrameworkInclusionSchema = z.object({
-  commitment: z.boolean().default(true),
-  polarity: z.boolean().default(true),
-  attention: z.boolean().default(true),
-  workLayer: z.boolean().default(true),
+  commitment: z.boolean().default(false),
+  polarity: z.boolean().default(false),
+  attention: z.boolean().default(false),
+  workLayer: z.boolean().default(false),
   wheel: z.boolean().default(false),
   ppfPillar: z.boolean().default(false),
-  ppfHorizon: z.boolean().default(true),
+  ppfHorizon: z.boolean().default(false),
   hp6: z.boolean().default(false)
 });
 export type SchedulerFrameworkInclusion = z.infer<typeof schedulerFrameworkInclusionSchema>;
@@ -545,10 +545,10 @@ export function defaultSchedulerFrameworkInclusionFromLegacy(
   const p = raw.ppf?.enabled ?? false;
   const h = raw.hpp?.enabled ?? false;
   return {
-    commitment: true,
-    polarity: true,
-    attention: true,
-    workLayer: true,
+    commitment: false,
+    polarity: false,
+    attention: false,
+    workLayer: false,
     wheel: w,
     ppfPillar: p,
     /** Legacy had a single PPF toggle covering both pillar rules and horizon tagging. */
@@ -601,6 +601,175 @@ export function coerceSettingsAfterSchedulerFrameworkInclusionPatch(
   return syncLegacyFrameworkFlagsFromInclusion(settings);
 }
 
+/* ─────────────────────────── 14. Personal Perfect Week profile ───────────── */
+
+/**
+ * Optional rule cards for energy-aware and transition-aware placement.
+ * Only applied when `energyBatterySchedulingEnabled` is true.
+ */
+export const personalSystemAdvancedRuleSchema = z.object({
+  id: z.string().min(1),
+  enabled: z.boolean().default(true),
+  label: z.string().max(200).optional(),
+  condition: z
+    .enum(["after_drain_block", "after_focus_block", "morning_low_battery", "always"])
+    .default("always"),
+  prefer: z
+    .enum(["prefer_hyperfocus_goal", "prefer_recovery_play", "avoid_back_to_back_drain"])
+    .default("avoid_back_to_back_drain"),
+  priority: z.number().int().min(0).max(100).default(50)
+});
+export type PersonalSystemAdvancedRule = z.infer<typeof personalSystemAdvancedRuleSchema>;
+
+export const personalSystemGuidedSchema = z.object({
+  /**
+   * Multiplier on drain-to-drain adjacency penalty in battery mode (1 = default strength).
+   */
+  drainTransitionPenaltyScale: z.number().min(0).max(3).default(1),
+  /**
+   * How strongly calendar-heavy days bias placement toward charging / focus-shaped goals (0 disables).
+   */
+  calendarDrainRecoveryBias: z.number().min(0).max(2).default(1)
+});
+export type PersonalSystemGuided = z.infer<typeof personalSystemGuidedSchema>;
+
+export const personalSystemSchema = z.object({
+  /** Persists “Build your system” UX; allocator only reacts to sub-flags below. */
+  enabled: z.boolean().default(false),
+  /**
+   * When true, allocator adds battery / calendar-aware transition scoring on top of existing rules.
+   * When false, scheduling matches historic behavior (no extra scoring).
+   */
+  energyBatterySchedulingEnabled: z.boolean().default(false),
+  guided: personalSystemGuidedSchema.default({} as never),
+  advancedRules: z.array(personalSystemAdvancedRuleSchema).default([]),
+  profileVersion: positiveInt.default(1),
+  updatedAtMs: z.number().int().optional()
+});
+export type PersonalSystem = z.infer<typeof personalSystemSchema>;
+
+/* ─────────────────── Unified framework registry (Planning + calendar UI) ─── */
+
+export const frameworkRegistryIdSchema = z.enum([...schedulerFrameworkInclusionKeys]);
+export type FrameworkRegistryId = z.infer<typeof frameworkRegistryIdSchema>;
+
+export const frameworkOverlaySchema = z.object({
+  enabled: z.boolean().default(true),
+  colorToken: z.string().max(32).optional()
+});
+export type FrameworkOverlay = z.infer<typeof frameworkOverlaySchema>;
+
+export const frameworkRegistryEntrySchema = z.object({
+  id: frameworkRegistryIdSchema,
+  label: z.string().max(120).optional(),
+  enabled: z.boolean().default(true),
+  sortOrder: z.number().int().min(0).max(99).default(0),
+  overlay: frameworkOverlaySchema.default({ enabled: true })
+});
+export type FrameworkRegistryEntry = z.infer<typeof frameworkRegistryEntrySchema>;
+
+export const methodModuleIdSchema = z.enum(["energy_transitions"]);
+export type MethodModuleId = z.infer<typeof methodModuleIdSchema>;
+
+export const methodModuleSchema = z.object({
+  id: methodModuleIdSchema,
+  enabled: z.boolean().default(false),
+  metadata: z.record(z.string(), z.unknown()).optional()
+});
+export type MethodModule = z.infer<typeof methodModuleSchema>;
+
+export const frameworkSystemSchema = z.object({
+  version: z.number().int().positive().default(1),
+  frameworks: z.array(frameworkRegistryEntrySchema).default([]),
+  methodModules: z
+    .array(methodModuleSchema)
+    .default([{ id: "energy_transitions", enabled: false }]),
+  placementSignalsOrder: z.array(placementSignalKey).optional()
+});
+export type FrameworkSystem = z.infer<typeof frameworkSystemSchema>;
+
+export const FRAMEWORK_REGISTRY_DEFAULT_LABELS: Record<FrameworkRegistryId, string> = {
+  commitment: "Commitment",
+  polarity: "Energy polarity",
+  attention: "Attention",
+  workLayer: "Work layer",
+  wheel: "Wheel of Life",
+  ppfPillar: "PPF pillar",
+  ppfHorizon: "PPF horizon",
+  hp6: "HP6"
+};
+
+/** Short onboarding copy for the Planning Hub framework picker (blank-canvas UX). */
+export const FRAMEWORK_REGISTRY_DESCRIPTIONS: Record<FrameworkRegistryId, string> = {
+  commitment:
+    "Non-negotiable vs nice-to-have tiers so true priorities reserve time before everything else.",
+  polarity:
+    "Energising vs draining goals so draining work is spaced and recovery can cluster.",
+  attention:
+    "Deep hyper-focus vs reactive hyper-awareness so gaps match cognitive mode.",
+  workLayer:
+    "Needle-moving vs ops vs play so the allocator can balance workload shape.",
+  wheel:
+    "Life-area tags with optional weekly minimums from scheduling outcomes.",
+  ppfPillar:
+    "Personal / professional / financial mix and touch targets when PPF rules are enabled.",
+  ppfHorizon:
+    "1y / 3y / 5y horizon tagging that pairs with PPF scheduling rules.",
+  hp6:
+    "Brendon Burchard’s six habits — pairs with habit minimum touches in scheduling outcomes."
+};
+
+const INCLUSION_KEY_BY_REGISTRY_ID: Partial<
+  Record<FrameworkRegistryId, SchedulerFrameworkInclusionKey>
+> = {
+  commitment: "commitment",
+  polarity: "polarity",
+  attention: "attention",
+  workLayer: "workLayer",
+  wheel: "wheel",
+  ppfPillar: "ppfPillar",
+  ppfHorizon: "ppfHorizon",
+  hp6: "hp6"
+};
+
+const FRAMEWORK_REGISTRY_DEFAULT_SORT: Record<FrameworkRegistryId, number> = {
+  commitment: 0,
+  polarity: 1,
+  attention: 2,
+  workLayer: 3,
+  wheel: 4,
+  ppfPillar: 5,
+  ppfHorizon: 6,
+  hp6: 7
+};
+
+/** Full registry IDs in deterministic order (matches `frameworkRegistryIdSchema`). */
+const FRAMEWORK_IDS_ALL = [...schedulerFrameworkInclusionKeys] as const satisfies readonly FrameworkRegistryId[];
+
+const PLACEMENT_SIGNAL_KEYS_ALL: PlacementSignalKey[] = [
+  "energyMode",
+  "attentionMode",
+  "workLayer",
+  "energyPolarity"
+];
+
+function placementSignalsOrderComplete(order: readonly string[]): boolean {
+  if (order.length !== PLACEMENT_SIGNAL_KEYS_ALL.length) return false;
+  const set = new Set(order);
+  return PLACEMENT_SIGNAL_KEYS_ALL.every((k) => set.has(k));
+}
+
+export function defaultFrameworkRegistryFromInclusion(
+  inclusion: SchedulerFrameworkInclusion
+): FrameworkRegistryEntry[] {
+  return FRAMEWORK_IDS_ALL.map((id) => ({
+    id,
+    enabled: inclusion[INCLUSION_KEY_BY_REGISTRY_ID[id]!] ?? false,
+    sortOrder: FRAMEWORK_REGISTRY_DEFAULT_SORT[id],
+    overlay: { enabled: true }
+  }));
+}
+
 /* ──────────────────────────── Composite ─────────────────────────────────── */
 
 export const userSettingsSchema = z.object({
@@ -635,9 +804,171 @@ export const userSettingsSchema = z.object({
   allocator: allocatorSettingsSchema.default({} as never),
   travelCache: travelCacheSchema.default({} as never),
   /** Which Planning Hub framework dimensions participate in allocator behavior. */
-  schedulerFrameworkInclusion: schedulerFrameworkInclusionSchema.default({} as never)
+  schedulerFrameworkInclusion: schedulerFrameworkInclusionSchema.default({} as never),
+  /**
+   * Personal “perfect week” profile: guided knobs + optional rule cards.
+   * Additive; allocator uses only when `energyBatterySchedulingEnabled` is true.
+   */
+  personalSystem: personalSystemSchema.default({} as never),
+  /**
+   * Unified registry mirrors scheduler inclusion plus optional calendar/UI metadata.
+   * Hydrated from canonical fields on load; callers that edit registry toggles must
+   * run `applyCanonicalFromFrameworkSystem` before save — see hydrate helper below.
+   */
+  frameworkSystem: frameworkSystemSchema.default({} as never)
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
+
+/**
+ * When turning allocator inclusion off for a registry-backed framework row, disable its
+ * Perfect Week overlay too (avoids “Cal on but scheduler off” after reconcile hydrate).
+ */
+export function applyFrameworkOverlayOffForSchedulerPatch(
+  settings: UserSettings,
+  inclusionPatch: Partial<SchedulerFrameworkInclusion>
+): UserSettings {
+  const patchKeys = schedulerFrameworkInclusionKeys.filter((k) => inclusionPatch[k] === false);
+  if (patchKeys.length === 0) return settings;
+
+  const fs = frameworkSystemSchema.parse(settings.frameworkSystem ?? {});
+  const disabledIds = new Set(
+    FRAMEWORK_IDS_ALL.filter((fid) => {
+      const rk = INCLUSION_KEY_BY_REGISTRY_ID[fid];
+      return rk != null && patchKeys.includes(rk);
+    })
+  );
+
+  let changed = false;
+  const frameworks = fs.frameworks.map((row) => {
+    if (!disabledIds.has(row.id)) return row;
+    const cur = row.overlay ?? { enabled: true };
+    if (cur.enabled === false) return row;
+    changed = true;
+    return { ...row, overlay: { ...cur, enabled: false } };
+  });
+  return changed ? { ...settings, frameworkSystem: { ...fs, frameworks } } : settings;
+}
+
+/**
+ * Hydrate `frameworkSystem` from canonical allocator fields (inclusion, energy module,
+ * placement). Safe on every load/save — call after merges.
+ */
+export function reconcileFrameworkSystemFromCanonical(settings: UserSettings): UserSettings {
+  const inc = settings.schedulerFrameworkInclusion;
+  let frameworks = [...(settings.frameworkSystem?.frameworks ?? [])];
+
+  if (frameworks.length === 0) {
+    frameworks = defaultFrameworkRegistryFromInclusion(inc);
+  }
+
+  const byId = new Map(frameworks.map((r) => [r.id, { ...r }] as const));
+
+  for (const id of FRAMEWORK_IDS_ALL) {
+    const incKey = INCLUSION_KEY_BY_REGISTRY_ID[id];
+    if (!incKey) continue;
+    const existing = byId.get(id);
+    const enabled = inc[incKey];
+    if (!existing) {
+      byId.set(id, {
+        id,
+        label: FRAMEWORK_REGISTRY_DEFAULT_LABELS[id],
+        enabled,
+        sortOrder: FRAMEWORK_REGISTRY_DEFAULT_SORT[id],
+        overlay: { enabled: true }
+      });
+    } else {
+      byId.set(id, {
+        ...existing,
+        enabled,
+        label: existing.label ?? FRAMEWORK_REGISTRY_DEFAULT_LABELS[id],
+        sortOrder: existing.sortOrder ?? FRAMEWORK_REGISTRY_DEFAULT_SORT[id]
+      });
+    }
+  }
+
+  frameworks = FRAMEWORK_IDS_ALL.map((id) => byId.get(id)!).sort(
+    (a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)
+  );
+
+  const energyTransitionsEnabled = settings.personalSystem.energyBatterySchedulingEnabled === true;
+  const methodModules: MethodModule[] = [...(settings.frameworkSystem?.methodModules ?? [])];
+  const mmIdx = methodModules.findIndex((m) => m.id === "energy_transitions");
+  if (mmIdx < 0) {
+    methodModules.push({ id: "energy_transitions", enabled: energyTransitionsEnabled });
+  } else {
+    methodModules[mmIdx] = { ...methodModules[mmIdx]!, enabled: energyTransitionsEnabled };
+  }
+
+  let placementSignalsOrder = settings.frameworkSystem?.placementSignalsOrder;
+  const rootOrder = settings.placementPriority.order;
+  if (!placementSignalsOrder || !placementSignalsOrderComplete(placementSignalsOrder)) {
+    placementSignalsOrder = [...rootOrder];
+  }
+
+  const frameworkSystem = frameworkSystemSchema.parse({
+    version: settings.frameworkSystem?.version ?? 1,
+    frameworks,
+    methodModules,
+    placementSignalsOrder
+  });
+
+  return { ...settings, frameworkSystem };
+}
+
+/**
+ * Push registry toggles into canonical allocator fields — call before `saveSettings`
+ * when edits originated from framework registry UI.
+ */
+export function applyCanonicalFromFrameworkSystem(settings: UserSettings): UserSettings {
+  const fsRow = frameworkSystemSchema.parse(settings.frameworkSystem ?? {});
+  const inc = { ...settings.schedulerFrameworkInclusion };
+
+  for (const row of fsRow.frameworks) {
+    const incKey = INCLUSION_KEY_BY_REGISTRY_ID[row.id];
+    if (incKey) (inc as Record<string, boolean>)[incKey] = row.enabled;
+  }
+
+  const parsedInc = schedulerFrameworkInclusionSchema.parse(inc);
+
+  const energyModule = fsRow.methodModules.find((m) => m.id === "energy_transitions");
+  const energyBatterySchedulingEnabled =
+    energyModule !== undefined
+      ? energyModule.enabled
+      : settings.personalSystem.energyBatterySchedulingEnabled;
+
+  let placementPriority = settings.placementPriority;
+  if (
+    fsRow.placementSignalsOrder &&
+    placementSignalsOrderComplete(fsRow.placementSignalsOrder as string[])
+  ) {
+    placementPriority = { order: [...fsRow.placementSignalsOrder] };
+  }
+
+  const nextBase: UserSettings = {
+    ...settings,
+    schedulerFrameworkInclusion: parsedInc,
+    personalSystem: {
+      ...settings.personalSystem,
+      energyBatterySchedulingEnabled
+    },
+    placementPriority,
+    frameworkSystem: fsRow
+  };
+  return syncLegacyFrameworkFlagsFromInclusion(nextBase);
+}
+
+/** Load/save hydrate — keeps registry overlays in sync with canonical planning state. */
+export function hydrateFrameworkSystemMirrors(settings: UserSettings): UserSettings {
+  return reconcileFrameworkSystemFromCanonical(settings);
+}
+
+/**
+ * Settings snapshot for allocator: canonical fields refreshed from hydration,
+ * optionally after registry-authored edits (caller should applyCanonical first).
+ */
+export function resolveSettingsForAllocation(settings: UserSettings): UserSettings {
+  return hydrateFrameworkSystemMirrors(settings);
+}
 
 /* ───────────────── Migration helper (forward-compatible) ─────────────────── */
 
@@ -658,6 +989,19 @@ function coerceSchedulerFrameworkInclusionForParse(raw: Record<string, unknown>)
   }
 }
 
+function coerceFrameworkSystemForParse(raw: Record<string, unknown>): void {
+  const candidate = raw.frameworkSystem;
+  if (!candidate || typeof candidate !== "object") return;
+  const asObj = candidate as Record<string, unknown>;
+  const frameworks = asObj.frameworks;
+  if (!Array.isArray(frameworks)) return;
+  asObj.frameworks = frameworks.filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const id = (entry as Record<string, unknown>).id;
+    return typeof id === "string" && schedulerFrameworkInclusionKeys.includes(id as SchedulerFrameworkInclusionKey);
+  });
+}
+
 /**
  * Given a possibly-untyped settings JSON pulled from the database, parse it through
  * the current schema. Older versions can be upgraded here as new versions land.
@@ -668,11 +1012,13 @@ export function migrateSettings(raw: unknown): UserSettings {
       ? { ...(raw as object) }
       : {};
   coerceSchedulerFrameworkInclusionForParse(coerced);
+  coerceFrameworkSystemForParse(coerced);
   let parsed = userSettingsSchema.parse({
     ...coerced,
     schemaVersion: SETTINGS_SCHEMA_VERSION
   });
   parsed.calendars.sources = parsed.calendars.sources.map((source) => normaliseCalendarSource(source));
   parsed = syncLegacyFrameworkFlagsFromInclusion(parsed);
+  parsed = hydrateFrameworkSystemMirrors(parsed);
   return parsed;
 }

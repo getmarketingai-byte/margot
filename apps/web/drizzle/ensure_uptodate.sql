@@ -1,5 +1,13 @@
 -- Idempotent schema sync for Calendar Automations (Postgres/Neon).
 -- Safe to run multiple times.
+--
+-- JSON document evolution (Planning Hub, framework registry, weekly intent, etc.)
+-- lives inside jsonb columns (`user_settings.data`, `weekly_plan.data`, …).
+-- Those blobs are upgraded at read time by `migrateSettings()` in
+-- `packages/schema`. New keys such as `schedulerFrameworkInclusion`,
+-- `frameworkSystem`, and placement flags do not require SQL migrations.
+-- When you introduce breaking *structural* defaults, bump `SETTINGS_SCHEMA_VERSION`
+-- in `packages/schema/src/settings.ts` — still no DDL unless you add new tables/columns here.
 
 BEGIN;
 
@@ -348,5 +356,11 @@ BEGIN
       ON DELETE cascade ON UPDATE no action;
   END IF;
 END$$;
+
+COMMENT ON COLUMN "user_settings"."data" IS
+  'UserSettings JSON; parsed and upgraded by migrateSettings() in @calendar-automations/schema (SETTINGS_SCHEMA_VERSION).';
+
+COMMENT ON COLUMN "weekly_plan"."data" IS
+  'WeeklyPlan JSON (goals, overrides, weeklyIntent); shape versioned in packages/schema.';
 
 COMMIT;

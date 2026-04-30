@@ -7,8 +7,12 @@ import {
 } from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
+import {
+  getCachedPlanWeekAllocationInputs,
+  invalidateUserAllocationCache
+} from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";
-import { loadPlanWeekAllocationInputs } from "@/lib/allocation-run-context";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
 import { gymGoalTravelBlocksFromProposed, sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
@@ -16,11 +20,12 @@ import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
 import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
+import { updateWeeklyIntent } from "./actions";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
+import { WeeklyIntentCard } from "./weekly-intent-card";
 import { WeekCalendar } from "../week-calendar";
 import { RangeToggleCalendar } from "./range-toggle-calendar";
-import { revalidatePath } from "next/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -65,45 +70,6 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   };
 }
 
-async function updateRoutines(formData: FormData): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const morningEnabled = formData.get("morning_enabled") === "on";
-  const shutdownEnabled = formData.get("shutdown_enabled") === "on";
-  const morningMinutes = Math.max(
-    0,
-    Math.min(180, Number(formData.get("morning_minutes") ?? settings.timemap.morningRoutine.minutes))
-  );
-  const shutdownMinutes = Math.max(
-    0,
-    Math.min(180, Number(formData.get("shutdown_minutes") ?? settings.timemap.shutdownRoutine.minutes))
-  );
-
-  await saveSettings(userId, {
-    ...settings,
-    timemap: {
-      ...settings.timemap,
-      morningRoutine: {
-        ...settings.timemap.morningRoutine,
-        enabled: morningEnabled,
-        minutes: morningMinutes
-      },
-      shutdownRoutine: {
-        ...settings.timemap.shutdownRoutine,
-        enabled: shutdownEnabled,
-        minutes: shutdownMinutes
-      }
-    }
-  });
-
-  revalidatePath("/dashboard/plan");
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/energy");
-}
-
 export default async function PlanPage() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
@@ -111,7 +77,7 @@ export default async function PlanPage() {
   const plan = await loadPlan(userId, settings.timezone);
   const catchUpMode = settings.allocator.catchUpMode;
   const nowMs = Date.now();
-  const ctx = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
   const schedulingGoals = filterSchedulingGoals(plan.goals);
   const resolvedCatchUpFloors = ctx.catchUpFloors;
   const {
@@ -165,7 +131,6 @@ export default async function PlanPage() {
     sleepIntervals: sleepIntervalsFromSystemBlocks(nextWeekSystemBlocks)
   });
 
-  const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
   const daySheetGoalBusyForCalendar = [...daySheetGoalBusyThisWeek, ...daySheetGoalBusyNextWeek];
   const weatherPreviewBlocks = weatherTimemapEvents
@@ -267,17 +232,15 @@ export default async function PlanPage() {
         <h1 className="text-2xl font-semibold">My Perfect Week</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
           List the things you want each week. Type a goal and press Enter — we&apos;ll find the
-          time.
+          time. Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
+          <Link className="underline" href="/dashboard/energy#framework-methods">
+            Planning
+          </Link>{" "}
+          with your frameworks.
         </p>
       </header>
 
-      {catchUpActive && (
-        <CatchUpBanner
-          adjustments={resolvedCatchUpFloors}
-          goals={schedulingGoals}
-          mode={catchUpMode}
-        />
-      )}
+      <WeeklyIntentCard initial={plan.weeklyIntent} save={updateWeeklyIntent} />
 
       {allocation.metrics.overcommitted ? (
         <Overcommitted
@@ -302,72 +265,13 @@ export default async function PlanPage() {
               paceByGoal={paceByGoal}
             />
 
-            <section className="card">
-              <div className="text-sm font-semibold">Daily routines</div>
-              <p className="mt-1 text-xs text-ink-400">
-                Morning and shutdown routines are reserved around sleep and block planner time-map
-                slots from being placed in the same window.
-              </p>
-              <form action={updateRoutines} className="mt-3 grid gap-4 sm:grid-cols-2">
-                <div className="flex min-w-0 flex-col gap-3">
-                  <label className="flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      name="morning_enabled"
-                      defaultChecked={settings.timemap.morningRoutine.enabled}
-                    />
-                    <span>Enable morning routine</span>
-                  </label>
-                  <label className="flex min-w-0 flex-col gap-1 text-xs">
-                    Morning minutes
-                    <input
-                      type="number"
-                      name="morning_minutes"
-                      min={0}
-                      max={180}
-                      step={5}
-                      defaultValue={settings.timemap.morningRoutine.minutes}
-                      className="field w-full"
-                    />
-                  </label>
-                </div>
-                <div className="flex min-w-0 flex-col gap-3">
-                  <label className="flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      name="shutdown_enabled"
-                      defaultChecked={settings.timemap.shutdownRoutine.enabled}
-                    />
-                    <span>Enable shutdown routine</span>
-                  </label>
-                  <label className="flex min-w-0 flex-col gap-1 text-xs">
-                    Shutdown minutes
-                    <input
-                      type="number"
-                      name="shutdown_minutes"
-                      min={0}
-                      max={180}
-                      step={5}
-                      defaultValue={settings.timemap.shutdownRoutine.minutes}
-                      className="field w-full"
-                    />
-                  </label>
-                </div>
-                <div className="sm:col-span-2">
-                  <button type="submit" className="btn-primary w-full text-xs">
-                    Save routines
-                  </button>
-                </div>
-              </form>
-            </section>
-
             {allocation.metrics.notScheduled.length > 0 && (
               <section className="card border-amber-300/40">
                 <h2 className="text-sm font-semibold">Not scheduled this week</h2>
                 <p className="text-xs text-ink-400">
                   With strict mode on, these goals didn&apos;t fit. Either soften their floors or
                   switch to proportional under{" "}
-                  <Link className="underline" href="/dashboard/energy#scheduling-constraints">
+                  <Link className="underline" href="/dashboard/energy#scheduling-outcomes">
                     Scheduling rules
                   </Link>{" "}
                   on Planning.
@@ -398,6 +302,9 @@ export default async function PlanPage() {
                   system={systemBlocksForCalendar}
                   proposed={proposedForCalendar}
                   compact
+                  schedulingGoals={schedulingGoals}
+                  frameworkSystem={settings.frameworkSystem}
+                  wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
                 />
               </div>
               <details className="card lg:hidden" open>
@@ -410,6 +317,9 @@ export default async function PlanPage() {
                     daySheetGoalBusy={daySheetGoalBusyForCalendar}
                     system={systemBlocksForCalendar}
                     proposed={proposedForCalendar}
+                    schedulingGoals={schedulingGoals}
+                    frameworkSystem={settings.frameworkSystem}
+                    wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
                   />
                 </div>
               </details>
@@ -428,7 +338,10 @@ function CalendarPreview({
   daySheetGoalBusy,
   system,
   proposed,
-  compact
+  compact,
+  schedulingGoals,
+  frameworkSystem,
+  wheelAreas
 }: {
   weekStartMs: number;
   timezone: string;
@@ -437,6 +350,9 @@ function CalendarPreview({
   system: Parameters<typeof WeekCalendar>[0]["system"];
   proposed: Parameters<typeof WeekCalendar>[0]["proposed"];
   compact: boolean;
+  schedulingGoals: Parameters<typeof RangeToggleCalendar>[0]["schedulingGoals"];
+  frameworkSystem: Parameters<typeof RangeToggleCalendar>[0]["frameworkSystem"];
+  wheelAreas: Parameters<typeof RangeToggleCalendar>[0]["wheelAreas"];
 }) {
   return (
     <RangeToggleCalendar
@@ -447,47 +363,10 @@ function CalendarPreview({
       system={system ?? []}
       proposed={proposed}
       compact={compact}
+      schedulingGoals={schedulingGoals}
+      frameworkSystem={frameworkSystem}
+      wheelAreas={wheelAreas}
     />
-  );
-}
-
-function CatchUpBanner({
-  adjustments,
-  goals,
-  mode
-}: {
-  adjustments: Record<string, number>;
-  goals: WeeklyPlan["goals"];
-  mode: "automated" | "manual";
-}) {
-  const titleById = new Map(goals.map((g) => [g.id, g.title] as const));
-  const entries = Object.entries(adjustments).filter(([, mins]) => mins !== 0);
-  const summary = entries
-    .map(([id, mins]) => {
-      const title = titleById.get(id) ?? id;
-      const sign = mins > 0 ? "+" : "";
-      return `${title} ${sign}${mins}m`;
-    })
-    .join(", ");
-  const secondaryHref =
-    mode === "automated" ? "/dashboard/energy#scheduling-constraints" : "/dashboard/week-review";
-  const secondaryLabel = mode === "automated" ? "Catch-up settings" : "Adjust catch-up";
-  const blurb =
-    mode === "automated"
-      ? `Based on your day sheet vs baseline targets, extra weekly floors are applied for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`
-      : `Allocator is reserving extra time for ${entries.length} ${entries.length === 1 ? "goal" : "goals"}: ${summary}.`;
-  return (
-    <section className="card border-amber-300/40 bg-amber-50/30 dark:bg-amber-900/10">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-semibold">Catch-up active</div>
-          <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">{blurb}</p>
-        </div>
-        <Link href={secondaryHref} className="btn-secondary text-xs">
-          {secondaryLabel}
-        </Link>
-      </div>
-    </section>
   );
 }
 

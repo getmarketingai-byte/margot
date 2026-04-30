@@ -9,7 +9,7 @@ import "server-only";
 import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
 import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent } from "@calendar-automations/planner";
-import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+import { allocateWeek, buildStableUid, computeDayCalendarDrainScores, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { isoCalendarDay, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
@@ -31,6 +31,21 @@ import {
 import { daySheetGoalBusyEvents } from "@/lib/day-sheet-goal-busy";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Blend logged day-sheet energy (slot-level) into the coarse calendar drain score. */
+function reviewEnergyDrainBump(review: DailyReview | undefined): number {
+  const slots = review?.slots;
+  if (!slots?.length) return 0;
+  let drain = 0;
+  let energise = 0;
+  for (const s of slots) {
+    if (s.energy === "drain") drain++;
+    if (s.energy === "energise") energise++;
+  }
+  if (drain > energise) return 0.06;
+  if (energise > drain) return -0.04;
+  return 0;
+}
 
 export interface PlanWeekAllocationInputs {
   nowMs: number;
@@ -58,6 +73,11 @@ export interface PlanWeekAllocationInputs {
   /** Goal log slots → busy intervals for the visible ISO week (merge into real allocateWeek only). */
   daySheetGoalBusyThisWeek: BusyEvent[];
   daySheetGoalBusyNextWeek: BusyEvent[];
+  /**
+   * Mon–Sun coarse calendar load (0–1) for the visible week when personal/energy
+   * UI is enabled; blends same-day daily review energy when present.
+   */
+  dayCalendarDrainThisWeek?: number[];
 }
 
 export async function loadPlanWeekAllocationInputs(options: {
@@ -229,6 +249,26 @@ export async function loadPlanWeekAllocationInputs(options: {
     goalTitleById
   });
 
+  const showEnergyPreview =
+    settings.personalSystem.enabled || settings.personalSystem.energyBatterySchedulingEnabled;
+  const dayWindows = Array.from({ length: 7 }, (_, i) => ({
+    startMs: weekStartMs + i * DAY_MS,
+    endMs: weekStartMs + (i + 1) * DAY_MS
+  }));
+  let dayCalendarDrainThisWeek: number[] | undefined;
+  if (showEnergyPreview) {
+    const raw = computeDayCalendarDrainScores(
+      [...busy, ...daySheetGoalBusyThisWeek, ...systemBlocks],
+      dayWindows
+    );
+    dayCalendarDrainThisWeek = raw.map((d, i) => {
+      const iso = weekDates[i];
+      const r = iso ? reviewsByDate.get(iso) : undefined;
+      const bump = reviewEnergyDrainBump(r);
+      return Math.max(0, Math.min(1, d + bump));
+    });
+  }
+
   return {
     nowMs,
     fetchStartMs,
@@ -252,6 +292,7 @@ export async function loadPlanWeekAllocationInputs(options: {
     dayIndex,
     nextWeekAnchor,
     daySheetGoalBusyThisWeek,
-    daySheetGoalBusyNextWeek
+    daySheetGoalBusyNextWeek,
+    dayCalendarDrainThisWeek
   };
 }

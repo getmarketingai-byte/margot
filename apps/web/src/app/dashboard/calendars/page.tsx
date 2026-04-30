@@ -1,4 +1,6 @@
 import { authOrPreview } from "@/lib/auth";
+import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";
 import { generateFeedToken } from "@/lib/feed-token";
 import { ensureFeedToken, type FeedKind } from "@/lib/feeds";
@@ -74,6 +76,8 @@ async function toggleCalendar(formData: FormData): Promise<void> {
     });
   }
   await saveSettings(userId, { ...settings, calendars: { ...settings.calendars, sources } });
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
   revalidatePath("/dashboard/calendars");
 }
 
@@ -123,7 +127,8 @@ async function updateCalendarOptions(formData: FormData): Promise<void> {
   sources[index] = normaliseCalendarSource(updated);
 
   await saveSettings(userId, { ...settings, calendars: { ...settings.calendars, sources } });
-  if (busyMode === "invert-free-busy") revalidatePath("/dashboard/plan");
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes();
   revalidatePath("/dashboard/calendars");
 }
 

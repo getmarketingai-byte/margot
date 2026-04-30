@@ -9,7 +9,6 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import { useRouter } from "next/navigation";
 import type {
   DayOfWeek,
   EnergyMode,
@@ -25,8 +24,10 @@ import {
   formatMinutes,
   summariseAllocation
 } from "./goal-helpers";
+import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
+import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
 import { addGoal, removeGoal, reorderGoals, updateGoal } from "./actions";
 
 type GoalDraft = Omit<WeeklyGoal, "id" | "title">;
@@ -131,7 +132,7 @@ export function PlanClient({
   effectiveTargetByGoal,
   paceByGoal
 }: PlanClientProps) {
-  const router = useRouter();
+  const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(850);
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
   const [, startTransition] = useTransition();
@@ -182,12 +183,16 @@ export function PlanClient({
       commitmentLevel: draft.commitmentLevel ?? "committed"
     };
     setGoals((prev) => [...prev, optimistic]);
+    const actionId = `goal-add-${tempId}`;
+    reportPerceivedInteraction("goal_add", actionId);
     const payload = ensureGoalShape({ title, ...draft });
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         const { id } = await addGoal(payload);
         setGoals((prev) => prev.map((g) => (g.id === tempId ? { ...g, id } : g)));
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("addGoal failed", err);
         setGoals((prev) => prev.filter((g) => g.id !== tempId));
@@ -196,11 +201,15 @@ export function PlanClient({
   };
 
   const handleUpdate = (id: string, next: GoalInput) => {
+    const actionId = `goal-update-${id}-${crypto.randomUUID().slice(0, 8)}`;
+    reportPerceivedInteraction("goal_update", actionId);
     setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, ...next, id } : g)));
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         await updateGoal(id, ensureGoalShape(next));
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("updateGoal failed", err);
       }
@@ -208,12 +217,16 @@ export function PlanClient({
   };
 
   const handleDelete = (id: string) => {
+    const actionId = `goal-delete-${id}`;
+    reportPerceivedInteraction("goal_delete", actionId);
     const snapshot = goals;
     setGoals((prev) => prev.filter((g) => g.id !== id));
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         await removeGoal(id);
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("removeGoal failed", err);
         setGoals(snapshot);
@@ -223,6 +236,8 @@ export function PlanClient({
 
   const handleReorder = (fromIdx: number, toIdx: number) => {
     if (fromIdx === toIdx) return;
+    const actionId = `goal-reorder-${fromIdx}-${toIdx}-${crypto.randomUUID().slice(0, 6)}`;
+    reportPerceivedInteraction("goal_reorder", actionId);
     const next = [...goals];
     const [moved] = next.splice(fromIdx, 1);
     if (!moved) return;
@@ -230,9 +245,11 @@ export function PlanClient({
     setGoals(next);
     const ids = next.map((g) => g.id);
     startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
         await reorderGoals(ids);
-        router.refresh();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
       } catch (err) {
         console.error("reorderGoals failed", err);
       }
@@ -700,6 +717,9 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.specialGoalType !== undefined) draft.specialGoalType = goal.specialGoalType;
   if (goal.allocationSharePercent !== undefined) draft.allocationSharePercent = goal.allocationSharePercent;
   if (goal.scheduleInNiceWeather === true) draft.scheduleInNiceWeather = true;
+  if (goal.focusAffinity !== undefined) draft.focusAffinity = goal.focusAffinity;
+  if (goal.energyChargeImpact !== undefined) draft.energyChargeImpact = goal.energyChargeImpact;
+  if (goal.energyDrainImpact !== undefined) draft.energyDrainImpact = goal.energyDrainImpact;
   return draft;
 }
 
@@ -722,6 +742,9 @@ type ConstraintId =
   | "days"
   | "nice-weather"
   | "energy"
+  | "focus-affinity"
+  | "energy-charge"
+  | "energy-drain"
   | "special"
   | "wheel"
   | "pillar";
@@ -815,6 +838,27 @@ function OptionsEditor({
       isSet: (d) => d.energyMode !== undefined && d.energyMode !== "neutral",
       initialise: () => ({ energyMode: "hyperfocus" }),
       clear: () => ({ energyMode: "neutral" })
+    },
+    {
+      id: "focus-affinity",
+      label: "Focus affinity (battery)",
+      isSet: (d) => d.focusAffinity !== undefined,
+      initialise: () => ({ focusAffinity: "hyperfocus" }),
+      clear: () => ({ focusAffinity: undefined })
+    },
+    {
+      id: "energy-charge",
+      label: "Battery charge (0–1)",
+      isSet: (d) => d.energyChargeImpact !== undefined,
+      initialise: () => ({ energyChargeImpact: 0.7 }),
+      clear: () => ({ energyChargeImpact: undefined })
+    },
+    {
+      id: "energy-drain",
+      label: "Battery drain (0–1)",
+      isSet: (d) => d.energyDrainImpact !== undefined,
+      initialise: () => ({ energyDrainImpact: 0.65 }),
+      clear: () => ({ energyDrainImpact: undefined })
     },
     {
       id: "special",
@@ -1061,6 +1105,72 @@ function ConstraintBody({
           <option value="neutral">Neutral</option>
           <option value="hyperaware">Scanning (afternoon)</option>
         </select>
+      );
+    case "focus-affinity":
+      return (
+        <select
+          value={draft.focusAffinity ?? ""}
+          onChange={(e) =>
+            update({
+              focusAffinity:
+                e.target.value === ""
+                  ? undefined
+                  : (e.target.value as "hyperfocus" | "hyperaware" | "mixed")
+            })
+          }
+          className="field"
+        >
+          <option value="">—</option>
+          <option value="hyperfocus">Hyper focus (charges)</option>
+          <option value="hyperaware">Hyper aware (drains)</option>
+          <option value="mixed">Mixed</option>
+        </select>
+      );
+    case "energy-charge":
+      return (
+        <label className="flex flex-col gap-1 text-xs">
+          <span>0 = low, 1 = strong recharge for scheduling</span>
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={draft.energyChargeImpact ?? ""}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                update({ energyChargeImpact: undefined });
+                return;
+              }
+              const n = Number(e.target.value);
+              if (!Number.isFinite(n)) return;
+              update({ energyChargeImpact: Math.min(1, Math.max(0, n)) });
+            }}
+            className="field"
+          />
+        </label>
+      );
+    case "energy-drain":
+      return (
+        <label className="flex flex-col gap-1 text-xs">
+          <span>0 = low, 1 = heavy awareness / social drain</span>
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={draft.energyDrainImpact ?? ""}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                update({ energyDrainImpact: undefined });
+                return;
+              }
+              const n = Number(e.target.value);
+              if (!Number.isFinite(n)) return;
+              update({ energyDrainImpact: Math.min(1, Math.max(0, n)) });
+            }}
+            className="field"
+          />
+        </label>
       );
     case "special":
       return (

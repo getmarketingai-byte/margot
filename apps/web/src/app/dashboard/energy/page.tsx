@@ -2,34 +2,30 @@
  * Planning hub (the "second page" of the dashboard).
  *
  * The hub is the strategic surface that pairs framework-aware classification
- * boards with weekly intentions and a long-horizon vision. The Perfect Week
- * page handles when things land on the calendar; the planning hub handles
- * why each goal exists, which framework lens applies, and how non-negotiable
- * each commitment is. All edits flow through the same goal/plan server
- * actions so the allocator stays single-source-of-truth.
+ * boards with weekly intentions and long-horizon vision, optional scheduling methods
+ * (Build your system), and global allocator rules. My Perfect Week lists concrete
+ * goals and calendar preview.
  */
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import {
-  coerceSettingsAfterSchedulerFrameworkInclusionPatch,
-  filterSchedulingGoals,
-  type PlacementSignalKey,
-  type SchedulerFrameworkInclusion,
-  type VisionSettings,
-  type WeeklyPlan,
-  placementPrioritySettingsSchema,
-  schedulerFrameworkInclusionSchema,
-  visionSettingsSchema,
-  weeklyIntentSchema
-} from "@calendar-automations/schema";
+import { filterSchedulingGoals, type VisionSettings, type WeeklyPlan, visionSettingsSchema, weeklyIntentSchema } from "@calendar-automations/schema";
+import { allocateWeek, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
+import {
+  getCachedPlanWeekAllocationInputs,
+  invalidateUserAllocationCache
+} from "@/lib/cached-plan-week-allocation-inputs";
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
+import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 import { updateWeeklyIntent } from "../plan/actions";
+import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ConstraintsSection } from "./constraints-section";
+import { updatePlacementSignalsFromFramework } from "./framework-system-actions";
 import { PlanningHubClient } from "./planning-hub-client";
+import { WhyWeeklyIntentSection } from "./why-weekly-intent-section";
 
 export const dynamic = "force-dynamic";
 
@@ -84,47 +80,8 @@ async function updateVision(input: VisionSettings): Promise<void> {
     ...settings,
     vision: visionSettingsSchema.parse(input)
   });
+  invalidateUserAllocationCache(userId);
   revalidatePath("/dashboard/energy");
-}
-
-async function updatePlacementPriority(
-  order: readonly PlacementSignalKey[]
-): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const parsed = placementPrioritySettingsSchema.parse({ order });
-  await saveSettings(userId, {
-    ...settings,
-    placementPriority: parsed
-  });
-  revalidatePath("/dashboard/energy");
-  revalidatePath("/dashboard/plan");
-}
-
-async function patchSchedulerFrameworkInclusion(
-  patch: Partial<SchedulerFrameworkInclusion>
-): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const schedulerFrameworkInclusion = schedulerFrameworkInclusionSchema.parse({
-    ...settings.schedulerFrameworkInclusion,
-    ...patch
-  });
-  await saveSettings(
-    userId,
-    coerceSettingsAfterSchedulerFrameworkInclusionPatch({
-      ...settings,
-      schedulerFrameworkInclusion
-    })
-  );
-  revalidatePath("/dashboard/energy");
-  revalidatePath("/dashboard/plan");
 }
 
 export default async function PlanningHubPage() {
@@ -134,30 +91,105 @@ export default async function PlanningHubPage() {
   const plan = await loadPlan(userId, settings.timezone);
   const schedulingGoals = filterSchedulingGoals(plan.goals);
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
+  const nowMs = Date.now();
+  const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const {
+    busyFetch,
+    weekStartMs,
+    weekEndMs,
+    busy,
+    systemBlocks,
+    niceWeatherThisWeek,
+    daySheetGoalBusyThisWeek,
+    dayCalendarDrainThisWeek
+  } = ctx;
+  const resolvedCatchUpFloors = ctx.catchUpFloors;
+
+  const allocation = allocateWeek({
+    plan,
+    busy: [...busy, ...daySheetGoalBusyThisWeek, ...systemBlocks],
+    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+    niceWeatherWindows: niceWeatherThisWeek,
+    settings,
+    weekStartMs,
+    weekEndMs,
+    catchUpFloors: resolvedCatchUpFloors,
+    weekAnchorDate: plan.weekStart,
+    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+    nowMs,
+    sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+  });
+  const tuningHints = allocation.metrics.personalEnergyPlan?.tuningHints ?? [];
 
   return (
     <div className="flex flex-col gap-5">
       <header>
         <h1 className="text-2xl font-semibold">Planning</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Set the week&apos;s intentions, classify each goal across the frameworks you trust, tune
-          allocator rules at the bottom, and decide which framework wins when they disagree.
-          Everything here feeds the Perfect Week calendar.
+          Three layers on this page:{" "}
+          <a className="underline" href="#why-weekly-intent-heading">
+            Why &amp; weekly intent
+          </a>
+          , your unified{" "}
+          <a className="underline" href="#framework-system-heading">
+            Framework system
+          </a>{" "}
+          (registry, goal boards, optional methods), then{" "}
+          <a className="underline" href="#scheduling-outcomes-heading">
+            Scheduling outcomes
+          </a>
+          . Together they feed{" "}
+          <a className="underline" href="/dashboard/plan">
+            My Perfect Week
+          </a>
+          .
         </p>
       </header>
 
-      <PlanningHubClient
-        initialGoals={schedulingGoals}
-        initialIntent={plan.weeklyIntent}
+      <WhyWeeklyIntentSection
+        initialWeeklyIntent={plan.weeklyIntent}
         initialVision={settings.vision}
-        initialPlacementOrder={settings.placementPriority.order}
-        wheelAreas={wheelAreas}
-        schedulerFrameworkInclusion={settings.schedulerFrameworkInclusion}
-        saveVision={updateVision}
-        savePlacementOrder={updatePlacementPriority}
         saveWeeklyIntent={updateWeeklyIntent}
-        patchSchedulerFrameworkInclusion={patchSchedulerFrameworkInclusion}
+        saveVision={updateVision}
       />
+
+      <section
+        className="card flex flex-col gap-6 scroll-mt-6"
+        id="framework-system"
+        aria-labelledby="framework-system-heading"
+      >
+        <header>
+          <h2 id="framework-system-heading" className="text-lg font-semibold">
+            Framework system
+          </h2>
+          <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
+            Enable frameworks and calendar overlays, classify goals on boards, optionally turn on
+            advanced placement methods, then set placement tie-breaks. Rule floors and mix targets live
+            under scheduling outcomes.
+          </p>
+        </header>
+
+        <PlanningHubClient
+          initialGoals={schedulingGoals}
+          initialFrameworkSystem={settings.frameworkSystem}
+          initialPlacementOrder={settings.placementPriority.order}
+          wheelAreas={wheelAreas}
+          schedulerFrameworkInclusion={settings.schedulerFrameworkInclusion}
+          savePlacementOrder={updatePlacementSignalsFromFramework}
+        />
+
+        <div
+          id="framework-methods"
+          className="scroll-mt-6 border-t border-ink-200 pt-6 dark:border-ink-600"
+        >
+          <BuildYourSystemPanel
+            variant="embedded"
+            initial={settings.personalSystem}
+            dayDrain={dayCalendarDrainThisWeek}
+            tuningHints={tuningHints}
+          />
+        </div>
+      </section>
 
       <ConstraintsSection />
     </div>

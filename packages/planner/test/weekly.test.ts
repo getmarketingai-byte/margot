@@ -3,7 +3,8 @@ import {
   achievedMinutesForGoal,
   allocateWeek,
   buildGoalDragKey,
-  computeAllocationRemainderFractions
+  computeAllocationRemainderFractions,
+  computeDayCalendarDrainScores
 } from "../src/weekly";
 import type { AllocatedBlock } from "../src/weekly";
 import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
@@ -1598,7 +1599,12 @@ describe("allocateWeek energy-aware suggestion pass", () => {
         ]
       },
       busy,
-      settings: buildSettings(),
+      settings: buildSettings({
+        schedulerFrameworkInclusion: {
+          ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
+          workLayer: true
+        }
+      }),
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
@@ -1661,10 +1667,18 @@ describe("allocateWeek energy-aware suggestion pass", () => {
       expect(startHour).toBeLessThan(11);
     }
 
+    const mixedSettings = {
+      schedulerFrameworkInclusion: {
+        ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
+        workLayer: true
+      }
+    } as const;
+
     const layerFirst = allocateWeek({
       plan: planForGoal,
       busy,
       settings: buildSettings({
+        ...mixedSettings,
         placementPriority: {
           order: ["workLayer", "energyMode", "attentionMode", "energyPolarity"]
         }
@@ -1740,13 +1754,17 @@ describe("allocateWeek energy-aware suggestion pass", () => {
         ]
       },
       busy,
-      settings: buildSettings(),
+      settings: buildSettings({
+        schedulerFrameworkInclusion: {
+          ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
+          commitment: true
+        }
+      }),
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
 
     // The non-negotiable goal lands first, so its block sits in the very
-    // first available 9am gap (Monday) while the nice-to-have falls to a
     // later day.
     const mustBlocks = result.blocks.filter((b) => b.goalId === "must");
     const niceBlocks = result.blocks.filter((b) => b.goalId === "nice");
@@ -1854,6 +1872,79 @@ describe("allocateWeek energy-aware suggestion pass", () => {
     const mustEarliest = Math.min(...result.blocks.filter((b) => b.goalId === "must_second").map((b) => b.startMs));
     /** Without commitment tiers, nicer goal (list index 0) should allocate before non-negotiable at index 1. */
     expect(niceEarliest).toBeLessThan(mustEarliest);
+  });
+
+  it("matches baseline allocation when personal energy battery scheduling is disabled", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const base = allocateWeek({
+      plan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const withProfileOff = allocateWeek({
+      plan,
+      busy: [],
+      settings: buildSettings({
+        personalSystem: {
+          ...DEFAULT_USER_SETTINGS.personalSystem,
+          enabled: true,
+          energyBatterySchedulingEnabled: false
+        }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(withProfileOff.blocks).toEqual(base.blocks);
+    expect(withProfileOff.metrics.utilisation).toEqual(base.metrics.utilisation);
+    expect(withProfileOff.metrics.personalEnergyPlan).toBeUndefined();
+  });
+
+  it("exposes personalEnergyPlan when energy battery scheduling is enabled", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan,
+      busy: [],
+      settings: buildSettings({
+        personalSystem: {
+          ...DEFAULT_USER_SETTINGS.personalSystem,
+          energyBatterySchedulingEnabled: true
+        }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.personalEnergyPlan).toBeDefined();
+    expect(result.metrics.personalEnergyPlan!.dayCalendarDrain).toHaveLength(7);
+    expect(result.metrics.personalEnergyPlan!.tuningHints.length).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("computeDayCalendarDrainScores", () => {
+  it("returns seven scores in 0–1 range", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const days = Array.from({ length: 7 }, (_, i) => ({
+      startMs: weekStartMs + i * DAY_MS,
+      endMs: weekStartMs + (i + 1) * DAY_MS
+    }));
+    const busy: BusyEvent[] = [
+      {
+        startMs: days[0]!.startMs,
+        endMs: days[0]!.startMs + 10 * 60 * 60 * 1000,
+        title: "Busy",
+        busy: true,
+        source: "google",
+        sourceId: "evt1"
+      }
+    ];
+    const scores = computeDayCalendarDrainScores(busy, days);
+    expect(scores).toHaveLength(7);
+    for (const s of scores) {
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThanOrEqual(1);
+    }
+    expect(scores[0]).toBeGreaterThan(0.5);
   });
 });
 

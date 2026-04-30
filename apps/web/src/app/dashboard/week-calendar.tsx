@@ -5,7 +5,11 @@
  * planning surfaces can pass drag callbacks for optimistic UI.
  */
 
+import { useMemo } from "react";
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
+import type { WeeklyGoal, FrameworkRegistryEntry } from "@calendar-automations/schema";
+import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
+import { overlayTagsForGoal } from "@/lib/framework-calendar-overlay-tags";
 import type { SystemBlock } from "@/lib/week-blocks";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
@@ -48,9 +52,18 @@ interface WeekCalendarProps {
   title?: string;
   /**
    * Called after a proposed block drag is saved so the parent can apply
-   * optimistic times before `router.refresh()` completes.
+   * optimistic times. Server actions already persist; use debounced soft refresh
+   * to reconcile metrics without blocking each drag.
    */
   onProposedDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
+  /** When goal drag overrides are cleared (reset), parent can drop optimistic patches. */
+  onProposedDragOverridesCleared?: (dragKeys: string[]) => void;
+  /** Goals used to render framework abbreviation chips on proposed blocks. */
+  weeklyGoalsForFrameworkOverlays?: readonly WeeklyGoal[];
+  /** Registry rows (`frameworkSystem.frameworks`). */
+  frameworkRegistryForOverlays?: readonly FrameworkRegistryEntry[];
+  frameworkOverlayLayerState?: FrameworkOverlayLayerState;
+  wheelAreaLabel?: (wheelAreaId: string) => string;
 }
 
 const PX_PER_HOUR = 30;
@@ -299,9 +312,26 @@ type ProposedPositioned = PositionedBlock & {
   isSegment: boolean;
   color: string;
   goalId?: string;
-  /** Present when the allocator attached drag keys (merged bars concatenate slices). */
   goalSlices?: GoalCalendarSlice[];
+  frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
 };
+
+function mergeOverlayChips(
+  a: ReadonlyArray<{ abbr: string; title: string }> | undefined,
+  b: ReadonlyArray<{ abbr: string; title: string }> | undefined
+): ReadonlyArray<{ abbr: string; title: string }> | undefined {
+  const merged = [...(a ?? []), ...(b ?? [])];
+  if (merged.length === 0) return undefined;
+  const seen = new Set<string>();
+  const out: { abbr: string; title: string }[] = [];
+  for (const c of merged) {
+    const k = `${c.abbr}:${c.title}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(c);
+  }
+  return out;
+}
 
 /**
  * The allocator may emit several back-to-back blocks for one goal on the same
@@ -334,12 +364,17 @@ function mergeAdjacentProposedSameGoal(blocks: ProposedPositioned[]): ProposedPo
           cur.goalSlices || next.goalSlices
             ? [...(cur.goalSlices ?? []), ...(next.goalSlices ?? [])]
             : undefined;
+        const mergedChips =
+          mergeOverlayChips(cur.frameworkOverlayChips, next.frameworkOverlayChips) ??
+          cur.frameworkOverlayChips ??
+          next.frameworkOverlayChips;
         cur = {
           ...cur,
           heightPx: next.topPx + next.heightPx - cur.topPx,
           clippedBottom: next.clippedBottom,
           isSegment: cur.isSegment || next.isSegment,
-          goalSlices: mergedSlices
+          goalSlices: mergedSlices,
+          frameworkOverlayChips: mergedChips
         };
       } else {
         out.push(cur);
@@ -363,7 +398,12 @@ export function WeekCalendar({
   compact = false,
   dayIndices,
   title = "This week",
-  onProposedDragCommit
+  onProposedDragCommit,
+  onProposedDragOverridesCleared,
+  weeklyGoalsForFrameworkOverlays,
+  frameworkRegistryForOverlays,
+  frameworkOverlayLayerState,
+  wheelAreaLabel
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
@@ -383,115 +423,183 @@ export function WeekCalendar({
   const nowMinuteClamped = Math.max(windowStart, Math.min(windowEnd, nowMinuteOfDay));
   const elapsedTodayPx = ((nowMinuteClamped - windowStart) / 60) * PX_PER_HOUR;
 
-  // Build positioned arrays once, dropping events outside the window.
-  const busyPositions: PositionedBlock[] = [];
-  for (const b of busy) {
-    busyPositions.push(
-      ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title)
-    );
-  }
-
-  const daySheetPositions: Array<PositionedBlock & { sourceId: string; goalId?: string }> = [];
-  for (const b of daySheetGoalBusy) {
-    const gid = goalIdFromDaySheetSourceId(b.sourceId);
-    for (const slice of position(
-      b.startMs,
-      b.endMs,
-      weekStartMs,
-      timezone,
-      startHour,
-      endHour,
-      b.title
-    )) {
-      daySheetPositions.push({ ...slice, sourceId: b.sourceId, goalId: gid });
+  const overlayChipsByGoalId = useMemo(() => {
+    const m = new Map<string, ReadonlyArray<{ abbr: string; title: string }>>();
+    const rows = frameworkRegistryForOverlays;
+    const goals = weeklyGoalsForFrameworkOverlays;
+    const layerState = frameworkOverlayLayerState ?? {};
+    if (!goals?.length || !rows?.length) return m;
+    for (const g of goals) {
+      const chips = overlayTagsForGoal(g, rows, layerState, wheelAreaLabel);
+      if (chips.length > 0) m.set(g.id, chips);
     }
-  }
+    return m;
+  }, [
+    weeklyGoalsForFrameworkOverlays,
+    frameworkRegistryForOverlays,
+    frameworkOverlayLayerState,
+    wheelAreaLabel
+  ]);
 
-  const invertedGoalIdsSorted = [
-    ...new Set(
-      system
-        .filter((b) => b.system === "inverted-timemap" && b.invertedGoalId)
-        .map((b) => b.invertedGoalId!)
-    )
-  ].sort();
-  const invertedBarOffsetByGoalId = new Map(invertedGoalIdsSorted.map((id, i) => [id, i]));
-
-  const systemPositions: Array<
-    PositionedBlock & {
-      kind: SystemBlock["system"];
-      override?: SystemBlock["override"];
-      sourceStartMs: number;
-      sourceEndMs: number;
-      invertedGoalId?: string;
-      invertedBarOffsetIndex?: number;
+  const {
+    busyByDay,
+    daySheetByDay,
+    systemByDay,
+    proposedByDay,
+    reservedForGoalDrag,
+    hasSleep,
+    hasTravel,
+    hasRoutine,
+    hasWeather,
+    hasDaySheetLog,
+    invertedLegend
+  } = useMemo(() => {
+    function groupPositionsByDay<T extends { dayIndex: number }>(
+      positions: readonly T[]
+    ): Map<number, T[]> {
+      const map = new Map<number, T[]>();
+      for (const p of positions) {
+        const bucket = map.get(p.dayIndex);
+        if (bucket) bucket.push(p);
+        else map.set(p.dayIndex, [p]);
+      }
+      return map;
     }
-  > = [];
-  for (const b of system) {
-    const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
-    const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
-    const invertedBarOffsetIndex =
-      invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
-    for (const s of slices) {
-      systemPositions.push({
-        ...s,
-        kind: b.system,
-        override: b.override,
-        sourceStartMs: b.startMs,
-        sourceEndMs: b.endMs,
-        invertedGoalId,
-        invertedBarOffsetIndex
-      });
-    }
-  }
 
-  const proposedPositionsRaw: ProposedPositioned[] = [];
-  for (const b of proposed) {
-    const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
-    const gid = b.goalId;
-    const canDragSlices =
-      Boolean(b.dragKey) &&
-      !b.segment &&
-      Boolean(gid) &&
-      !String(gid).startsWith("segment:");
-    for (const s of slices) {
-      proposedPositionsRaw.push({
-        ...s,
-        isSegment: Boolean(b.segment),
-        color: goalColorFromKey(gid || b.title),
-        goalId: gid,
-        goalSlices:
-          canDragSlices && b.dragKey
-            ? [
-                {
-                  dragKey: b.dragKey,
-                  startMs: b.startMs,
-                  endMs: b.endMs,
-                  dragOverrideSaved: b.dragOverrideSaved,
-                  overrideSource: b.overrideSource,
-                  pinnedFromOverride: b.pinnedFromOverride
-                }
-              ]
-            : undefined
-      });
+    const busyPositions: PositionedBlock[] = [];
+    for (const b of busy) {
+      busyPositions.push(
+        ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title)
+      );
     }
-  }
-  const proposedPositions = mergeAdjacentProposedSameGoal(proposedPositionsRaw);
 
-  const hasSleep = systemPositions.some((p) => p.kind === "sleep");
-  const hasTravel = systemPositions.some((p) => p.kind === "travel");
-  const hasRoutine = systemPositions.some((p) => p.kind === "routine");
-  const hasWeather = systemPositions.some((p) => p.kind === "weather");
-  const hasDaySheetLog = daySheetGoalBusy.length > 0;
-  const invertedLegend: { goalId: string; title: string }[] = [];
-  const invertedLegendSeen = new Set<string>();
-  for (const s of system) {
-    if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
-    if (invertedLegendSeen.has(s.invertedGoalId)) continue;
-    invertedLegendSeen.add(s.invertedGoalId);
-    invertedLegend.push({ goalId: s.invertedGoalId, title: s.title });
-  }
-  invertedLegend.sort((a, b) => a.goalId.localeCompare(b.goalId));
-  const reservedForGoalDrag = buildReservedIntervalsForGoalDrag(busy, system, daySheetGoalBusy);
+    const daySheetPositions: Array<PositionedBlock & { sourceId: string; goalId?: string }> = [];
+    for (const b of daySheetGoalBusy) {
+      const gid = goalIdFromDaySheetSourceId(b.sourceId);
+      for (const slice of position(
+        b.startMs,
+        b.endMs,
+        weekStartMs,
+        timezone,
+        startHour,
+        endHour,
+        b.title
+      )) {
+        daySheetPositions.push({ ...slice, sourceId: b.sourceId, goalId: gid });
+      }
+    }
+
+    const invertedGoalIdsSorted = [
+      ...new Set(
+        system
+          .filter((b) => b.system === "inverted-timemap" && b.invertedGoalId)
+          .map((b) => b.invertedGoalId!)
+      )
+    ].sort();
+    const invertedBarOffsetByGoalId = new Map(invertedGoalIdsSorted.map((id, i) => [id, i]));
+
+    const systemPositions: Array<
+      PositionedBlock & {
+        kind: SystemBlock["system"];
+        override?: SystemBlock["override"];
+        sourceStartMs: number;
+        sourceEndMs: number;
+        invertedGoalId?: string;
+        invertedBarOffsetIndex?: number;
+      }
+    > = [];
+    for (const b of system) {
+      const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+      const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
+      const invertedBarOffsetIndex =
+        invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
+      for (const s of slices) {
+        systemPositions.push({
+          ...s,
+          kind: b.system,
+          override: b.override,
+          sourceStartMs: b.startMs,
+          sourceEndMs: b.endMs,
+          invertedGoalId,
+          invertedBarOffsetIndex
+        });
+      }
+    }
+
+    const proposedPositionsRaw: ProposedPositioned[] = [];
+    for (const b of proposed) {
+      const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+      const gid = b.goalId;
+      const canDragSlices =
+        Boolean(b.dragKey) &&
+        !b.segment &&
+        Boolean(gid) &&
+        !String(gid).startsWith("segment:");
+      for (const s of slices) {
+        const chipList = gid ? overlayChipsByGoalId.get(gid) : undefined;
+        proposedPositionsRaw.push({
+          ...s,
+          isSegment: Boolean(b.segment),
+          color: goalColorFromKey(gid || b.title),
+          goalId: gid,
+          goalSlices:
+            canDragSlices && b.dragKey
+              ? [
+                  {
+                    dragKey: b.dragKey,
+                    startMs: b.startMs,
+                    endMs: b.endMs,
+                    dragOverrideSaved: b.dragOverrideSaved,
+                    overrideSource: b.overrideSource,
+                    pinnedFromOverride: b.pinnedFromOverride
+                  }
+                ]
+              : undefined,
+          frameworkOverlayChips: chipList && chipList.length > 0 ? chipList : undefined
+        });
+      }
+    }
+    const proposedPositions = mergeAdjacentProposedSameGoal(proposedPositionsRaw);
+
+    const hasSleepInner = systemPositions.some((p) => p.kind === "sleep");
+    const hasTravelInner = systemPositions.some((p) => p.kind === "travel");
+    const hasRoutineInner = systemPositions.some((p) => p.kind === "routine");
+    const hasWeatherInner = systemPositions.some((p) => p.kind === "weather");
+
+    const invertedLegendInner: { goalId: string; title: string }[] = [];
+    const invertedLegendSeen = new Set<string>();
+    for (const s of system) {
+      if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
+      if (invertedLegendSeen.has(s.invertedGoalId)) continue;
+      invertedLegendSeen.add(s.invertedGoalId);
+      invertedLegendInner.push({ goalId: s.invertedGoalId, title: s.title });
+    }
+    invertedLegendInner.sort((a, b) => a.goalId.localeCompare(b.goalId));
+
+    return {
+      busyByDay: groupPositionsByDay(busyPositions),
+      daySheetByDay: groupPositionsByDay(daySheetPositions),
+      systemByDay: groupPositionsByDay(systemPositions),
+      proposedByDay: groupPositionsByDay(proposedPositions),
+      reservedForGoalDrag: buildReservedIntervalsForGoalDrag(busy, system, daySheetGoalBusy),
+      hasSleep: hasSleepInner,
+      hasTravel: hasTravelInner,
+      hasRoutine: hasRoutineInner,
+      hasWeather: hasWeatherInner,
+      hasDaySheetLog: daySheetGoalBusy.length > 0,
+      invertedLegend: invertedLegendInner
+    };
+  }, [
+    busy,
+    daySheetGoalBusy,
+    proposed,
+    system,
+    weekStartMs,
+    timezone,
+    startHour,
+    endHour,
+    overlayChipsByGoalId
+  ]);
 
   return (
     <div className="card p-3">
@@ -558,30 +666,23 @@ export function WeekCalendar({
                   style={{ height: Math.min(gridHeight, Math.max(0, elapsedTodayPx)) }}
                 />
               ) : null}
-              {busyPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
-                  <BusyBlock key={`b${i}`} block={p} />
+              {(busyByDay.get(dayIdx) ?? []).map((p, i) => (
+                  <BusyBlock key={`b${dayIdx}-${i}`} block={p} />
                 ))}
-              {daySheetPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
-                  <DaySheetLoggedBlock key={`d${p.sourceId}-${i}`} block={p} goalId={p.goalId} />
+              {(daySheetByDay.get(dayIdx) ?? []).map((p, i) => (
+                  <DaySheetLoggedBlock key={`d${p.sourceId}-${dayIdx}-${i}`} block={p} goalId={p.goalId} />
                 ))}
-              {systemPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
-                  <SystemBlockSlice key={`s${i}`} block={p} pxPerHour={PX_PER_HOUR} />
+              {(systemByDay.get(dayIdx) ?? []).map((p, i) => (
+                  <SystemBlockSlice key={`s${dayIdx}-${i}`} block={p} pxPerHour={PX_PER_HOUR} />
                 ))}
-              {proposedPositions
-                .filter((p) => p.dayIndex === dayIdx)
-                .map((p, i) => (
+              {(proposedByDay.get(dayIdx) ?? []).map((p, i) => (
                   <ProposedBlock
-                    key={`p${i}`}
+                    key={`p${dayIdx}-${i}`}
                     block={p}
                     pxPerHour={PX_PER_HOUR}
                     reservedForGoalDrag={reservedForGoalDrag}
                     onDragCommit={onProposedDragCommit}
+                    onDragOverridesCleared={onProposedDragOverridesCleared}
                   />
                 ))}
             </div>
@@ -890,23 +991,31 @@ function ProposedBlock({
   block,
   pxPerHour,
   reservedForGoalDrag,
-  onDragCommit
+  onDragCommit,
+  onDragOverridesCleared
 }: {
   block: PositionedBlock & {
     isSegment: boolean;
     color: string;
     goalId?: string;
     goalSlices?: GoalCalendarSlice[];
+    frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
   };
   pxPerHour: number;
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
   onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
+  onDragOverridesCleared?: (dragKeys: string[]) => void;
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
   const slices = block.goalSlices;
   const draggable =
     Boolean(selectable && goalId && slices && slices.length > 0 && !block.isSegment && !goalId.startsWith("segment:"));
+
+  const chipHint =
+    block.frameworkOverlayChips && block.frameworkOverlayChips.length > 0
+      ? ` · ${block.frameworkOverlayChips.map((c) => c.title).join(" · ")}`
+      : "";
 
   if (draggable && goalId && slices) {
     return (
@@ -922,19 +1031,23 @@ function ProposedBlock({
         dayIndex={block.dayIndex}
         reservedForGoalDrag={reservedForGoalDrag}
         onDragCommit={onDragCommit}
+        onDragOverridesCleared={onDragOverridesCleared}
+        frameworkOverlayChips={block.frameworkOverlayChips}
       />
     );
   }
 
   return (
     <div
-      title={`${block.title} (proposed)`}
+      title={`${block.title} (proposed)${chipHint}`}
       className={`absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         selectable ? "cursor-pointer" : ""
       }`}
       role={selectable ? "button" : undefined}
       tabIndex={selectable ? 0 : undefined}
-      aria-label={selectable ? `${block.title}. Open matching goal.` : undefined}
+      aria-label={
+        selectable ? `${block.title}. Open matching goal.${chipHint ? ` Tags:${chipHint}` : ""}` : undefined
+      }
       onClick={
         selectable && goalId ? () => dispatchGoalFocus(goalId) : undefined
       }
@@ -955,7 +1068,22 @@ function ProposedBlock({
         opacity: block.isSegment ? 0.72 : 1
       }}
     >
-      <span className="line-clamp-2 leading-tight">{block.title}</span>
+      <div className="flex flex-col gap-0.5">
+        <span className="line-clamp-2 leading-tight">{block.title}</span>
+        {block.frameworkOverlayChips && block.frameworkOverlayChips.length > 0 ? (
+          <div className="pointer-events-none flex flex-wrap gap-0.5">
+            {block.frameworkOverlayChips.map((c, idx) => (
+              <span
+                key={`${c.abbr}-${idx}`}
+                title={c.title}
+                className="rounded bg-black/35 px-1 text-[7px] font-semibold uppercase leading-none text-white/95 backdrop-blur-sm"
+              >
+                {c.abbr}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

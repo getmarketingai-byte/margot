@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { blockOverrideSchema, normaliseGoalTime, weeklyGoalSchema } from "../src/goals";
+import {
+  blockOverrideSchema,
+  effectiveEnergyBatteryProfile,
+  normaliseGoalTime,
+  weeklyGoalSchema
+} from "../src/goals";
 
 describe("WeeklyGoal energy classification fields", () => {
+  it("effectiveEnergyBatteryProfile uses explicit charge/drain when set", () => {
+    const g = weeklyGoalSchema.parse({
+      id: "g1",
+      title: "Focus block",
+      energyChargeImpact: 0.9,
+      energyDrainImpact: 0.1
+    });
+    const p = effectiveEnergyBatteryProfile(g);
+    expect(p.charge).toBe(0.9);
+    expect(p.drain).toBe(0.1);
+  });
+
   it("defaults the new energy/attention/workLayer fields when omitted", () => {
     const parsed = weeklyGoalSchema.parse({ id: "g1", title: "Deep work" });
     expect(parsed.energyPolarity).toBe("neutral");

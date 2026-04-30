@@ -33,7 +33,10 @@ export type ChipKind =
   | "layer"
   | "wheel"
   | "ppf"
-  | "special";
+  | "special"
+  | "focus-aff"
+  | "battery-charge"
+  | "battery-drain";
 
 export interface Chip {
   /** Stable identifier used as React key and for drawer focus. */
@@ -182,6 +185,27 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   }
   if (goal.workLayer && goal.workLayer !== "unspecified") {
     chips.push({ key: "layer", label: WORK_LAYER_LABELS[goal.workLayer] });
+  }
+  if (goal.focusAffinity && goal.focusAffinity !== "unspecified") {
+    const lab =
+      goal.focusAffinity === "hyperfocus"
+        ? "Focus affinity · deep"
+        : goal.focusAffinity === "hyperaware"
+          ? "Focus affinity · aware"
+          : "Focus affinity · mixed";
+    chips.push({ key: "focus-aff", label: lab });
+  }
+  if (goal.energyChargeImpact !== undefined) {
+    chips.push({
+      key: "battery-charge",
+      label: `Charge ${goal.energyChargeImpact.toFixed(2)}`
+    });
+  }
+  if (goal.energyDrainImpact !== undefined) {
+    chips.push({
+      key: "battery-drain",
+      label: `Drain ${goal.energyDrainImpact.toFixed(2)}`
+    });
   }
   if (goal.wheelAreaId) {
     const label = wheelLabel?.(goal.wheelAreaId) ?? goal.wheelAreaId;

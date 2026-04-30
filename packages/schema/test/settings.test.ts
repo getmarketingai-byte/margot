@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyCanonicalFromFrameworkSystem,
   DEFAULT_USER_SETTINGS,
-  SETTINGS_SCHEMA_VERSION,
+  frameworkSystemSchema,
   migrateSettings,
   settingsNeedHomeAddress,
+  SETTINGS_SCHEMA_VERSION,
   userSettingsSchema
 } from "../src/index";
 
@@ -14,7 +16,8 @@ describe("UserSettings schema", () => {
     expect(parsed.timemap.bands).toHaveLength(4);
     expect(parsed.wheel.areas).toHaveLength(8);
     expect(parsed.ppf.targets).toHaveLength(3);
-    expect(parsed.calendars.schedulingWindowDays).toBe(60);
+    expect(parsed.schedulerFrameworkInclusion.commitment).toBe(false);
+    expect(parsed.schedulerFrameworkInclusion.workLayer).toBe(false);
     expect(parsed.allocator.starvationMode).toBe("proportional");
     expect(parsed.allocator.allocationMode).toBe("even");
     expect(parsed.allocator.catchUpMode).toBe("automated");
@@ -89,7 +92,70 @@ describe("UserSettings schema", () => {
     expect(migrated.schedulerFrameworkInclusion.wheel).toBe(true);
     expect(migrated.schedulerFrameworkInclusion.ppfPillar).toBe(true);
     expect(migrated.schedulerFrameworkInclusion.hp6).toBe(false);
+    expect(migrated.schedulerFrameworkInclusion.commitment).toBe(false);
+    expect(migrated.schedulerFrameworkInclusion.workLayer).toBe(false);
     expect(migrated.wheel.enabled).toBe(true);
     expect(migrated.ppf.enabled).toBe(true);
+  });
+
+  it("defaults personalSystem with energy scheduling off", () => {
+    const parsed = userSettingsSchema.parse({ schemaVersion: SETTINGS_SCHEMA_VERSION });
+    expect(parsed.personalSystem.enabled).toBe(false);
+    expect(parsed.personalSystem.energyBatterySchedulingEnabled).toBe(false);
+    expect(parsed.personalSystem.advancedRules).toEqual([]);
+    expect(parsed.personalSystem.guided.drainTransitionPenaltyScale).toBe(1);
+  });
+
+  it("migrateSettings hydrates frameworkSystem registry rows from canonical inclusion", () => {
+    const migrated = migrateSettings({
+      timezone: "UTC",
+      schedulerFrameworkInclusion: {
+        commitment: true,
+        polarity: false,
+        attention: true,
+        workLayer: true,
+        wheel: true,
+        ppfPillar: false,
+        ppfHorizon: true,
+        hp6: false
+      }
+    } as Parameters<typeof migrateSettings>[0]);
+
+    expect(migrated.frameworkSystem.frameworks.length).toBeGreaterThanOrEqual(8);
+    const wheel = migrated.frameworkSystem.frameworks.find((f) => f.id === "wheel");
+    expect(wheel?.enabled).toBe(true);
+    expect(wheel?.overlay.enabled !== false).toBe(true);
+
+    const polar = migrated.frameworkSystem.frameworks.find((f) => f.id === "polarity");
+    expect(polar?.enabled).toBe(false);
+    const mods = migrated.frameworkSystem.methodModules.find((m) => m.id === "energy_transitions");
+    expect(mods).toBeTruthy();
+    expect(mods!.enabled).toBe(migrated.personalSystem.energyBatterySchedulingEnabled === true);
+  });
+
+  it("applyCanonicalFromFrameworkSystem syncs scheduler inclusion from registry and placement signals", () => {
+    const base = migrateSettings({ timezone: "UTC" } as Parameters<typeof migrateSettings>[0]);
+    const fs = frameworkSystemSchema.parse(base.frameworkSystem);
+    let frameworks = fs.frameworks.map((row) =>
+      row.id === "wheel" ? { ...row, enabled: false } : row
+    );
+    frameworks = [...frameworks].sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)
+    );
+    const reorder: Array<
+      typeof base.placementPriority.order[number]
+    > = ["energyPolarity", "attentionMode", "workLayer", "energyMode"];
+    const edited = applyCanonicalFromFrameworkSystem({
+      ...base,
+      frameworkSystem: {
+        ...fs,
+        frameworks,
+        placementSignalsOrder: reorder
+      }
+    });
+
+    expect(edited.schedulerFrameworkInclusion.wheel).toBe(false);
+    expect(edited.placementPriority.order).toEqual(reorder);
+    expect(edited.frameworkSystem.placementSignalsOrder).toEqual(reorder);
   });
 });

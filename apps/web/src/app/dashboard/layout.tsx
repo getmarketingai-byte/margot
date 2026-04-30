@@ -4,6 +4,8 @@ import { authOrPreview, signOut } from "@/lib/auth";
 import { loadBillingState } from "@/lib/billing-state-server";
 import { AccountMenu } from "./account-menu";
 import { BillingBanner } from "./billing-banner";
+import { DashboardPerfListener } from "./dashboard-perf-listener";
+import { DashboardRoutePrefetch } from "./dashboard-route-prefetch";
 import { DashboardPrimaryNav } from "./dashboard-primary-nav";
 
 const ACCOUNT_LINKS = [
@@ -34,9 +36,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
       <DashboardPrimaryNav />
 
-      <BillingBanner state={billing} />
+      <DashboardPerfListener />
+
+      <DashboardRoutePrefetch />
+
+      {billing.mode !== "bypass" ? <BillingBanner state={billing} className="mb-4" /> : null}
 
       <main className="flex-1">{children}</main>
+
+      {billing.mode === "bypass" ? (
+        <BillingBanner state={billing} className="mt-6 border-emerald-200/70 bg-emerald-50/70" />
+      ) : null}
     </div>
   );
 }

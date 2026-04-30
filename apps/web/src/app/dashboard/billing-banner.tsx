@@ -11,14 +11,20 @@ import type { BillingState } from "@/lib/subscription";
  *   - subscription: paid, healthy state; banner is suppressed to stay out of
  *                   the way of the actual dashboard content.
  */
-export function BillingBanner({ state }: { state: BillingState }) {
+export function BillingBanner({
+  state,
+  className
+}: {
+  state: BillingState;
+  className?: string;
+}) {
   if (state.mode === "subscription") return null;
 
   if (state.mode === "bypass") {
     return (
       <div
         role="status"
-        className="mb-4 flex flex-col gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-700/60 dark:bg-emerald-900/30 dark:text-emerald-100"
+        className={`flex flex-col gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-700/60 dark:bg-emerald-900/30 dark:text-emerald-100${className ? ` ${className}` : ""}`}
       >
         <div className="flex items-center justify-between gap-3">
           <strong className="text-sm font-semibold">Payment gate bypassed</strong>
@@ -37,7 +43,7 @@ export function BillingBanner({ state }: { state: BillingState }) {
     return (
       <div
         role="status"
-        className="mb-4 flex flex-col gap-2 rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-ink-900 dark:text-ink-100"
+        className={`flex flex-col gap-2 rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-ink-900 dark:text-ink-100${className ? ` ${className}` : ""}`}
       >
         <div className="flex items-center justify-between gap-3">
           <strong className="text-sm font-semibold">
@@ -61,7 +67,7 @@ export function BillingBanner({ state }: { state: BillingState }) {
   return (
     <div
       role="alert"
-      className="mb-4 flex flex-col gap-2 rounded-md border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-600/70 dark:bg-amber-900/30 dark:text-amber-100"
+      className={`flex flex-col gap-2 rounded-md border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-600/70 dark:bg-amber-900/30 dark:text-amber-100${className ? ` ${className}` : ""}`}
     >
       <div className="flex items-center justify-between gap-3">
         <strong className="text-sm font-semibold">Subscription required</strong>
