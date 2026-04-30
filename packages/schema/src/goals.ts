@@ -174,9 +174,65 @@ export const weeklyGoalSchema = z.object({
    * `allocateWeek({ niceWeatherWindows })`. If that list is empty (weather
    * disabled, no overlap, etc.), the flag is ignored so goals are not starved.
    */
-  scheduleInNiceWeather: z.boolean().optional()
+  scheduleInNiceWeather: z.boolean().optional(),
+  /**
+   * Optional explicit 0–1 “recharges focus battery” strength for personal energy scheduling.
+   * When omitted, inferred from attention/energy/polarity tags.
+   */
+  energyChargeImpact: z.number().min(0).max(1).optional(),
+  /**
+   * Optional explicit 0–1 “drains awareness / social battery” strength for personal energy scheduling.
+   */
+  energyDrainImpact: z.number().min(0).max(1).optional(),
+  /**
+   * Shortcut affinity when explicit charge/drain impacts are omitted.
+   */
+  focusAffinity: z.enum(["hyperfocus", "hyperaware", "mixed", "unspecified"]).optional()
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
+
+function inferChargeFromTags(goal: WeeklyGoal): number {
+  let c = 0.2;
+  if (goal.attentionMode === "hyperfocus") c += 0.45;
+  if (goal.energyMode === "hyperfocus") c += 0.25;
+  if (goal.energyPolarity === "energise") c += 0.2;
+  if (goal.workLayer === "needle-mover") c += 0.1;
+  return Math.min(1, c);
+}
+
+function inferDrainFromTags(goal: WeeklyGoal): number {
+  let d = 0.2;
+  if (goal.attentionMode === "hyperaware") d += 0.45;
+  if (goal.energyMode === "hyperaware") d += 0.25;
+  if (goal.energyPolarity === "drain") d += 0.25;
+  if (goal.workLayer === "ops") d += 0.1;
+  return Math.min(1, d);
+}
+
+/**
+ * Resolved charge/drain profile for battery-style scheduling (0–1 each).
+ */
+export function effectiveEnergyBatteryProfile(goal: WeeklyGoal): { charge: number; drain: number } {
+  if (goal.energyChargeImpact !== undefined || goal.energyDrainImpact !== undefined) {
+    return {
+      charge: goal.energyChargeImpact ?? inferChargeFromTags(goal),
+      drain: goal.energyDrainImpact ?? inferDrainFromTags(goal)
+    };
+  }
+  if (goal.focusAffinity === "hyperfocus") {
+    return { charge: 0.75, drain: 0.15 };
+  }
+  if (goal.focusAffinity === "hyperaware") {
+    return { charge: 0.15, drain: 0.75 };
+  }
+  if (goal.focusAffinity === "mixed") {
+    return { charge: 0.45, drain: 0.45 };
+  }
+  return {
+    charge: inferChargeFromTags(goal),
+    drain: inferDrainFromTags(goal)
+  };
+}
 
 /** Calendar invert-free-busy rows: time-map readout, not a scheduling commitment. */
 export function isInvertedTimemapGoal(goal: Pick<WeeklyGoal, "specialGoalType">): boolean {

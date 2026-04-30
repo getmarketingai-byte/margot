@@ -54,17 +54,25 @@ import type {
   DayOfWeek,
   EnergyMode,
   NormalisedGoalTime,
+  PersonalSystem,
   WeeklyGoal,
   WeeklyPlan,
   WorkLayer
 } from "@calendar-automations/schema";
-import { isInvertedTimemapGoal, normaliseGoalTime } from "@calendar-automations/schema";
+import {
+  effectiveEnergyBatteryProfile,
+  filterSchedulingGoals,
+  isInvertedTimemapGoal,
+  normaliseGoalTime
+} from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps } from "./intervals";
 import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Reference waking-day busy proxy (14h) for normalising calendar load to 0–1. */
+const DRAIN_REF_MS = 14 * 60 * MS_PER_MIN;
 /** Round all minute decisions to a 15-minute grid. */
 const QUANTUM = 15;
 
@@ -77,6 +85,25 @@ const DAY_INDEX: Record<DayOfWeek, number> = {
   saturday: 5,
   sunday: 6
 };
+
+/**
+ * Per ISO week day (Mon = index 0): ratio of busy time to a reference ~14h waking day.
+ * Used for personal energy / battery placement when enabled in settings.
+ */
+export function computeDayCalendarDrainScores(
+  busy: readonly BusyEvent[],
+  days: readonly { startMs: number; endMs: number }[]
+): number[] {
+  return days.map((day) => {
+    let busyMs = 0;
+    for (const ev of busy) {
+      const start = Math.max(ev.startMs, day.startMs);
+      const end = Math.min(ev.endMs, day.endMs);
+      if (end > start) busyMs += end - start;
+    }
+    return Math.min(1, busyMs / DRAIN_REF_MS);
+  });
+}
 
 /** Stable drag override key for week-scoped goal blocks (calendar DnD). */
 export function buildGoalDragKey(goalId: string, weekAnchorDate: string, slotIndex: number): string {
@@ -160,6 +187,14 @@ export interface WeekMetrics {
   };
   /** Goals that received zero minutes (only populated under "strict" mode). */
   notScheduled: Array<{ goalId: string; title: string; reason: "starved" }>;
+  /**
+   * Present when `UserSettings.personalSystem.energyBatterySchedulingEnabled` is true:
+   * coarse calendar load per day + iterative tuning hints for the planning UI.
+   */
+  personalEnergyPlan?: {
+    dayCalendarDrain: number[];
+    tuningHints: string[];
+  };
 }
 
 export interface AllocateInput {
@@ -295,6 +330,17 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
   const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel, fw.wheel);
   const goalsForAllocation = [...schedulingGoals, ...wheelTopUps];
+
+  const batteryOn = settings.personalSystem.energyBatterySchedulingEnabled === true;
+  const dayDrainScores = batteryOn ? computeDayCalendarDrainScores(busy, days) : undefined;
+  const batteryContext =
+    batteryOn && dayDrainScores
+      ? {
+          goalsById: new Map(goalsForAllocation.map((g) => [g.id, g] as const)),
+          dayDrainScores,
+          personalSystem: settings.personalSystem
+        }
+      : undefined;
 
   // Pass 1+2: full ISO-week free gap total after segments (Mon–Sun window).
   // Pass 3 still respects `nowMs`; weekly *targets* must not shrink mid-week.
@@ -437,7 +483,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       goalOverrides,
       goalOverrideSources,
       allocationNowMs,
-      sleepIntervals
+      sleepIntervals,
+      batteryContext
     );
   }
 
@@ -476,6 +523,12 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   );
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
+  if (batteryOn && dayDrainScores) {
+    metrics.personalEnergyPlan = {
+      dayCalendarDrain: [...dayDrainScores],
+      tuningHints: buildPersonalEnergyTuningHints(plan, dayDrainScores)
+    };
+  }
   return { blocks, metrics };
 }
 
@@ -1014,7 +1067,12 @@ function allocateGoal(
   goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
   goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
   nowMs: number | undefined,
-  sleepIntervals: readonly Interval[] | undefined
+  sleepIntervals: readonly Interval[] | undefined,
+  battery?: {
+    goalsById: ReadonlyMap<string, WeeklyGoal>;
+    dayDrainScores: number[];
+    personalSystem: PersonalSystem;
+  }
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
@@ -1245,7 +1303,15 @@ function allocateGoal(
         frameworkInclusion,
         tz,
         placedToday,
-        gymTravelPadMin
+        gymTravelPadMin,
+        battery
+          ? {
+              goalsById: battery.goalsById,
+              dayDrainScores: battery.dayDrainScores,
+              dayIdx,
+              personalSystem: battery.personalSystem
+            }
+          : undefined
       );
       if (!slot) continue;
       // First pass aims for an even spread. If some days cannot fit that budget,
@@ -1374,6 +1440,113 @@ function intersectWithAvailability(
   return out;
 }
 
+const BATTERY_PLACEMENT_WEIGHTS = {
+  drainDrainPenalty: 3,
+  chargeAfterDrainBonus: 2,
+  calendarRecoveryBonus: 2,
+  ruleBonus: 1.5
+} as const;
+
+function buildPersonalEnergyTuningHints(plan: WeeklyPlan, dayDrain: number[]): string[] {
+  const hints: string[] = [];
+  const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  dayDrain.forEach((d, i) => {
+    if (d >= 0.72) {
+      const label = labels[i] ?? `Day ${i + 1}`;
+      hints.push(
+        `${label} looks calendar-heavy (~${Math.round(d * 100)}% vs reference day) — favour deep-focus or recovery blocks after heavy external time.`
+      );
+    }
+  });
+  const sched = filterSchedulingGoals(plan.goals);
+  const untagged = sched.filter(
+    (g) =>
+      g.energyChargeImpact === undefined &&
+      g.energyDrainImpact === undefined &&
+      g.focusAffinity === undefined &&
+      g.attentionMode === "unspecified"
+  );
+  if (untagged.length >= 3) {
+    hints.push(
+      `${untagged.length} goals still use default energy tags — set charge/drain or focus affinity on key goals for a tighter personal fit.`
+    );
+  }
+  return hints.slice(0, 6);
+}
+
+function scoreBatteryPlacement(
+  gap: Interval,
+  goal: WeeklyGoal,
+  tz: string,
+  placedToday: readonly AllocatedBlock[],
+  battery: {
+    goalsById: ReadonlyMap<string, WeeklyGoal>;
+    dayDrainScores: readonly number[];
+    dayIdx: number;
+    personalSystem: PersonalSystem;
+  }
+): number {
+  const profile = effectiveEnergyBatteryProfile(goal);
+  const scale = battery.personalSystem.guided.drainTransitionPenaltyScale;
+  const calBias = battery.personalSystem.guided.calendarDrainRecoveryBias;
+  let score = 0;
+
+  const dayDrain = battery.dayDrainScores[battery.dayIdx] ?? 0;
+  if (calBias > 0 && dayDrain >= 0.55 && profile.charge >= 0.5) {
+    score += BATTERY_PLACEMENT_WEIGHTS.calendarRecoveryBonus * calBias * (dayDrain - 0.5) * 2;
+  }
+
+  const windowMs = ENERGY_SUGGESTION_WEIGHTS.drainAdjacencyWindowMin * MS_PER_MIN;
+  let adjacentDrain = false;
+  let adjacentCharge = false;
+  for (const placed of placedToday) {
+    if (placed.segment) continue;
+    const pg = battery.goalsById.get(placed.goalId);
+    if (!pg) continue;
+    const pp = effectiveEnergyBatteryProfile(pg);
+    const closeBefore = gap.startMs - placed.endMs;
+    const closeAfter = placed.startMs - gap.endMs;
+    const isAdjacent =
+      (closeBefore >= 0 && closeBefore <= windowMs) ||
+      (closeAfter >= 0 && closeAfter <= windowMs);
+    if (!isAdjacent) continue;
+    if (pp.drain >= 0.5) adjacentDrain = true;
+    if (pp.charge >= 0.5) adjacentCharge = true;
+    if (profile.drain >= 0.5 && pp.drain >= 0.5) {
+      score -= BATTERY_PLACEMENT_WEIGHTS.drainDrainPenalty * scale;
+    }
+    if (pp.drain >= 0.55 && profile.charge >= 0.55) {
+      score += BATTERY_PLACEMENT_WEIGHTS.chargeAfterDrainBonus;
+    }
+  }
+
+  for (const rule of battery.personalSystem.advancedRules) {
+    if (!rule.enabled) continue;
+    const ok =
+      rule.condition === "always" ||
+      (rule.condition === "after_drain_block" && adjacentDrain) ||
+      (rule.condition === "after_focus_block" && adjacentCharge) ||
+      (rule.condition === "morning_low_battery" &&
+        (battery.dayDrainScores[battery.dayIdx] ?? 0) > 0.55 &&
+        hourInTz(gap.startMs, tz) < 12);
+    if (!ok) continue;
+    const w = (rule.priority / 100) * BATTERY_PLACEMENT_WEIGHTS.ruleBonus;
+    switch (rule.prefer) {
+      case "avoid_back_to_back_drain":
+        if (profile.drain >= 0.5 && adjacentDrain) score -= 2 * w;
+        break;
+      case "prefer_hyperfocus_goal":
+        if (profile.charge >= 0.45 || goal.attentionMode === "hyperfocus") score += 2 * w;
+        break;
+      case "prefer_recovery_play":
+        if (goal.workLayer === "play" || goal.specialGoalType === "morning-routine") score += 1.5 * w;
+        break;
+    }
+  }
+
+  return score;
+}
+
 function pickGapForGoal(
   gaps: readonly Interval[],
   goal: WeeklyGoal,
@@ -1383,7 +1556,13 @@ function pickGapForGoal(
   frameworkInclusion: SchedulerFrameworkInclusion,
   tz: string,
   placedToday: readonly AllocatedBlock[] = [],
-  gymTravelPadMin = 0
+  gymTravelPadMin = 0,
+  battery?: {
+    goalsById: ReadonlyMap<string, WeeklyGoal>;
+    dayDrainScores: readonly number[];
+    dayIdx: number;
+    personalSystem: PersonalSystem;
+  }
 ): { gap: Interval; minutes: number } | null {
   const earliest = goal.earliestHour ?? 0;
   const latest = goal.latestHour ?? 24;
@@ -1403,10 +1582,11 @@ function pickGapForGoal(
       energy.mode === "ignore"
         ? 0
         : scoreEnergyAwareness(g, goal, tz, placedToday, weights, frameworkInclusion);
+    const batteryScore = battery ? scoreBatteryPlacement(g, goal, tz, placedToday, battery) : 0;
     candidates.push({
       gap: g,
       minutes: Math.min(perDay, innerMin),
-      score: energyScore + suggestionScore
+      score: energyScore + suggestionScore + batteryScore
     });
   }
   if (candidates.length === 0) return null;
@@ -1578,7 +1758,6 @@ function computeHp6Gaps(
     courage: 0
   };
   for (const b of blocks) {
-    if (b.segment) continue;
     if (b.segment) continue;
     const habitKey = b.hp6Habit as Hp6HabitKey | undefined;
     if (!habitKey) continue;

@@ -601,6 +601,53 @@ export function coerceSettingsAfterSchedulerFrameworkInclusionPatch(
   return syncLegacyFrameworkFlagsFromInclusion(settings);
 }
 
+/* ─────────────────────────── 14. Personal Perfect Week profile ───────────── */
+
+/**
+ * Optional rule cards for energy-aware and transition-aware placement.
+ * Only applied when `energyBatterySchedulingEnabled` is true.
+ */
+export const personalSystemAdvancedRuleSchema = z.object({
+  id: z.string().min(1),
+  enabled: z.boolean().default(true),
+  label: z.string().max(200).optional(),
+  condition: z
+    .enum(["after_drain_block", "after_focus_block", "morning_low_battery", "always"])
+    .default("always"),
+  prefer: z
+    .enum(["prefer_hyperfocus_goal", "prefer_recovery_play", "avoid_back_to_back_drain"])
+    .default("avoid_back_to_back_drain"),
+  priority: z.number().int().min(0).max(100).default(50)
+});
+export type PersonalSystemAdvancedRule = z.infer<typeof personalSystemAdvancedRuleSchema>;
+
+export const personalSystemGuidedSchema = z.object({
+  /**
+   * Multiplier on drain-to-drain adjacency penalty in battery mode (1 = default strength).
+   */
+  drainTransitionPenaltyScale: z.number().min(0).max(3).default(1),
+  /**
+   * How strongly calendar-heavy days bias placement toward charging / focus-shaped goals (0 disables).
+   */
+  calendarDrainRecoveryBias: z.number().min(0).max(2).default(1)
+});
+export type PersonalSystemGuided = z.infer<typeof personalSystemGuidedSchema>;
+
+export const personalSystemSchema = z.object({
+  /** Persists “Build your system” UX; allocator only reacts to sub-flags below. */
+  enabled: z.boolean().default(false),
+  /**
+   * When true, allocator adds battery / calendar-aware transition scoring on top of existing rules.
+   * When false, scheduling matches historic behavior (no extra scoring).
+   */
+  energyBatterySchedulingEnabled: z.boolean().default(false),
+  guided: personalSystemGuidedSchema.default({} as never),
+  advancedRules: z.array(personalSystemAdvancedRuleSchema).default([]),
+  profileVersion: positiveInt.default(1),
+  updatedAtMs: z.number().int().optional()
+});
+export type PersonalSystem = z.infer<typeof personalSystemSchema>;
+
 /* ──────────────────────────── Composite ─────────────────────────────────── */
 
 export const userSettingsSchema = z.object({
@@ -635,7 +682,12 @@ export const userSettingsSchema = z.object({
   allocator: allocatorSettingsSchema.default({} as never),
   travelCache: travelCacheSchema.default({} as never),
   /** Which Planning Hub framework dimensions participate in allocator behavior. */
-  schedulerFrameworkInclusion: schedulerFrameworkInclusionSchema.default({} as never)
+  schedulerFrameworkInclusion: schedulerFrameworkInclusionSchema.default({} as never),
+  /**
+   * Personal “perfect week” profile: guided knobs + optional rule cards.
+   * Additive; allocator uses only when `energyBatterySchedulingEnabled` is true.
+   */
+  personalSystem: personalSystemSchema.default({} as never)
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 

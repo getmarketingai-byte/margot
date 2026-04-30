@@ -17,6 +17,7 @@ import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
 import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
 import { PlanClient } from "./plan-client";
+import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ResizableColumns } from "./resizable-columns";
 import { WeekCalendar } from "../week-calendar";
 import { RangeToggleCalendar } from "./range-toggle-calendar";
@@ -132,7 +133,8 @@ export default async function PlanPage() {
     dayIndex,
     nextWeekAnchor,
     daySheetGoalBusyThisWeek,
-    daySheetGoalBusyNextWeek
+    daySheetGoalBusyNextWeek,
+    dayCalendarDrainThisWeek
   } = ctx;
 
   const allocation = allocateWeek({
@@ -165,6 +167,7 @@ export default async function PlanPage() {
     sleepIntervals: sleepIntervalsFromSystemBlocks(nextWeekSystemBlocks)
   });
 
+  const tuningHints = allocation.metrics.personalEnergyPlan?.tuningHints ?? [];
   const catchUpActive = Object.entries(resolvedCatchUpFloors).some(([, mins]) => mins !== 0);
   const busyForCalendar = [...busy, ...busyNextWeek];
   const daySheetGoalBusyForCalendar = [...daySheetGoalBusyThisWeek, ...daySheetGoalBusyNextWeek];
@@ -290,6 +293,12 @@ export default async function PlanPage() {
       <ResizableColumns
         left={
           <div className="flex flex-col gap-5">
+            <BuildYourSystemPanel
+              initial={settings.personalSystem}
+              dayDrain={dayCalendarDrainThisWeek}
+              tuningHints={tuningHints}
+            />
+
             <PlanClient
               initialGoals={schedulingGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}

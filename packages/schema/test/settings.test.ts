@@ -92,4 +92,12 @@ describe("UserSettings schema", () => {
     expect(migrated.wheel.enabled).toBe(true);
     expect(migrated.ppf.enabled).toBe(true);
   });
+
+  it("defaults personalSystem with energy scheduling off", () => {
+    const parsed = userSettingsSchema.parse({ schemaVersion: SETTINGS_SCHEMA_VERSION });
+    expect(parsed.personalSystem.enabled).toBe(false);
+    expect(parsed.personalSystem.energyBatterySchedulingEnabled).toBe(false);
+    expect(parsed.personalSystem.advancedRules).toEqual([]);
+    expect(parsed.personalSystem.guided.drainTransitionPenaltyScale).toBe(1);
+  });
 });
