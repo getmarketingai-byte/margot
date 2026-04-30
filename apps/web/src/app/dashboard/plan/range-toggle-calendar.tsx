@@ -116,7 +116,7 @@ export function RangeToggleCalendar({
   const taggableFrameworkRows = useMemo(
     () =>
       (frameworkSystem?.frameworks ?? [])
-        .filter((f) => f.enabled && f.id !== "consistency" && f.id !== "routines")
+        .filter((f) => f.enabled)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)),
     [frameworkSystem?.frameworks]
   );
