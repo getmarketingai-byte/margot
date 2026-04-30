@@ -5,7 +5,11 @@
  * planning surfaces can pass drag callbacks for optimistic UI.
  */
 
+import { useMemo } from "react";
 import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
+import type { WeeklyGoal, FrameworkRegistryEntry } from "@calendar-automations/schema";
+import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
+import { overlayTagsForGoal } from "@/lib/framework-calendar-overlay-tags";
 import type { SystemBlock } from "@/lib/week-blocks";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
@@ -51,6 +55,12 @@ interface WeekCalendarProps {
    * optimistic times before `router.refresh()` completes.
    */
   onProposedDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
+  /** Goals used to render framework abbreviation chips on proposed blocks. */
+  weeklyGoalsForFrameworkOverlays?: readonly WeeklyGoal[];
+  /** Registry rows (`frameworkSystem.frameworks`). */
+  frameworkRegistryForOverlays?: readonly FrameworkRegistryEntry[];
+  frameworkOverlayLayerState?: FrameworkOverlayLayerState;
+  wheelAreaLabel?: (wheelAreaId: string) => string;
 }
 
 const PX_PER_HOUR = 30;
@@ -299,9 +309,26 @@ type ProposedPositioned = PositionedBlock & {
   isSegment: boolean;
   color: string;
   goalId?: string;
-  /** Present when the allocator attached drag keys (merged bars concatenate slices). */
   goalSlices?: GoalCalendarSlice[];
+  frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
 };
+
+function mergeOverlayChips(
+  a: ReadonlyArray<{ abbr: string; title: string }> | undefined,
+  b: ReadonlyArray<{ abbr: string; title: string }> | undefined
+): ReadonlyArray<{ abbr: string; title: string }> | undefined {
+  const merged = [...(a ?? []), ...(b ?? [])];
+  if (merged.length === 0) return undefined;
+  const seen = new Set<string>();
+  const out: { abbr: string; title: string }[] = [];
+  for (const c of merged) {
+    const k = `${c.abbr}:${c.title}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(c);
+  }
+  return out;
+}
 
 /**
  * The allocator may emit several back-to-back blocks for one goal on the same
@@ -334,12 +361,17 @@ function mergeAdjacentProposedSameGoal(blocks: ProposedPositioned[]): ProposedPo
           cur.goalSlices || next.goalSlices
             ? [...(cur.goalSlices ?? []), ...(next.goalSlices ?? [])]
             : undefined;
+        const mergedChips =
+          mergeOverlayChips(cur.frameworkOverlayChips, next.frameworkOverlayChips) ??
+          cur.frameworkOverlayChips ??
+          next.frameworkOverlayChips;
         cur = {
           ...cur,
           heightPx: next.topPx + next.heightPx - cur.topPx,
           clippedBottom: next.clippedBottom,
           isSegment: cur.isSegment || next.isSegment,
-          goalSlices: mergedSlices
+          goalSlices: mergedSlices,
+          frameworkOverlayChips: mergedChips
         };
       } else {
         out.push(cur);
@@ -363,7 +395,11 @@ export function WeekCalendar({
   compact = false,
   dayIndices,
   title = "This week",
-  onProposedDragCommit
+  onProposedDragCommit,
+  weeklyGoalsForFrameworkOverlays,
+  frameworkRegistryForOverlays,
+  frameworkOverlayLayerState,
+  wheelAreaLabel
 }: WeekCalendarProps) {
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
@@ -382,6 +418,24 @@ export function WeekCalendar({
   const nowMinuteOfDay = nowParts.hour * 60 + nowParts.minute;
   const nowMinuteClamped = Math.max(windowStart, Math.min(windowEnd, nowMinuteOfDay));
   const elapsedTodayPx = ((nowMinuteClamped - windowStart) / 60) * PX_PER_HOUR;
+
+  const overlayChipsByGoalId = useMemo(() => {
+    const m = new Map<string, ReadonlyArray<{ abbr: string; title: string }>>();
+    const rows = frameworkRegistryForOverlays;
+    const goals = weeklyGoalsForFrameworkOverlays;
+    const layerState = frameworkOverlayLayerState ?? {};
+    if (!goals?.length || !rows?.length) return m;
+    for (const g of goals) {
+      const chips = overlayTagsForGoal(g, rows, layerState, wheelAreaLabel);
+      if (chips.length > 0) m.set(g.id, chips);
+    }
+    return m;
+  }, [
+    weeklyGoalsForFrameworkOverlays,
+    frameworkRegistryForOverlays,
+    frameworkOverlayLayerState,
+    wheelAreaLabel
+  ]);
 
   // Build positioned arrays once, dropping events outside the window.
   const busyPositions: PositionedBlock[] = [];
@@ -454,6 +508,7 @@ export function WeekCalendar({
       Boolean(gid) &&
       !String(gid).startsWith("segment:");
     for (const s of slices) {
+      const chipList = gid ? overlayChipsByGoalId.get(gid) : undefined;
       proposedPositionsRaw.push({
         ...s,
         isSegment: Boolean(b.segment),
@@ -471,7 +526,8 @@ export function WeekCalendar({
                   pinnedFromOverride: b.pinnedFromOverride
                 }
               ]
-            : undefined
+            : undefined,
+        frameworkOverlayChips: chipList && chipList.length > 0 ? chipList : undefined
       });
     }
   }
@@ -897,6 +953,7 @@ function ProposedBlock({
     color: string;
     goalId?: string;
     goalSlices?: GoalCalendarSlice[];
+    frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
   };
   pxPerHour: number;
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
@@ -907,6 +964,11 @@ function ProposedBlock({
   const slices = block.goalSlices;
   const draggable =
     Boolean(selectable && goalId && slices && slices.length > 0 && !block.isSegment && !goalId.startsWith("segment:"));
+
+  const chipHint =
+    block.frameworkOverlayChips && block.frameworkOverlayChips.length > 0
+      ? ` · ${block.frameworkOverlayChips.map((c) => c.title).join(" · ")}`
+      : "";
 
   if (draggable && goalId && slices) {
     return (
@@ -922,19 +984,22 @@ function ProposedBlock({
         dayIndex={block.dayIndex}
         reservedForGoalDrag={reservedForGoalDrag}
         onDragCommit={onDragCommit}
+        frameworkOverlayChips={block.frameworkOverlayChips}
       />
     );
   }
 
   return (
     <div
-      title={`${block.title} (proposed)`}
+      title={`${block.title} (proposed)${chipHint}`}
       className={`absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         selectable ? "cursor-pointer" : ""
       }`}
       role={selectable ? "button" : undefined}
       tabIndex={selectable ? 0 : undefined}
-      aria-label={selectable ? `${block.title}. Open matching goal.` : undefined}
+      aria-label={
+        selectable ? `${block.title}. Open matching goal.${chipHint ? ` Tags:${chipHint}` : ""}` : undefined
+      }
       onClick={
         selectable && goalId ? () => dispatchGoalFocus(goalId) : undefined
       }
@@ -955,7 +1020,22 @@ function ProposedBlock({
         opacity: block.isSegment ? 0.72 : 1
       }}
     >
-      <span className="line-clamp-2 leading-tight">{block.title}</span>
+      <div className="flex flex-col gap-0.5">
+        <span className="line-clamp-2 leading-tight">{block.title}</span>
+        {block.frameworkOverlayChips && block.frameworkOverlayChips.length > 0 ? (
+          <div className="pointer-events-none flex flex-wrap gap-0.5">
+            {block.frameworkOverlayChips.map((c, idx) => (
+              <span
+                key={`${c.abbr}-${idx}`}
+                title={c.title}
+                className="rounded bg-black/35 px-1 text-[7px] font-semibold uppercase leading-none text-white/95 backdrop-blur-sm"
+              >
+                {c.abbr}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

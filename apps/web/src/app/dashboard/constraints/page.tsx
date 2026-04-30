@@ -4,5 +4,5 @@ export const dynamic = "force-dynamic";
 
 /** @deprecated Scheduling rules now live on Planning (`/dashboard/energy`). */
 export default function ConstraintsRedirectPage() {
-  redirect("/dashboard/energy#scheduling-constraints");
+  redirect("/dashboard/energy#scheduling-outcomes");
 }

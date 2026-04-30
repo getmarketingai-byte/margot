@@ -159,18 +159,20 @@ export async function ConstraintsSection() {
   const settings = await loadSettings(userId);
 
   return (
-    <div id="scheduling-constraints" className="scroll-mt-6 flex flex-col gap-4">
+    <div id="scheduling-outcomes" className="scroll-mt-6 flex flex-col gap-4">
       <header>
-        <h2 className="text-lg font-semibold">Scheduling rules</h2>
+        <h2 id="scheduling-outcomes-heading" className="text-lg font-semibold">
+          Scheduling outcomes
+        </h2>
         <p className="text-sm text-ink-600 dark:text-ink-200">
           Global allocator mechanics: catch-up, how the day&apos;s <strong>energy curve</strong>{" "}
           biases gap choice (morning vs afternoon), starvation when you&apos;re overcommitted, and
           wheel / PPF / HP6 targets. Distinct from optional{" "}
-          <a className="underline" href="#personal-scheduling">
+          <a className="underline" href="#framework-methods">
             scheduling methods
           </a>{" "}
-          above (e.g. energy + transition scoring)—use both only if you want both layers. Routines
-          live on{" "}
+          in the framework system card (e.g. energy + transition scoring)—use both only if you want
+          both layers. Routines live on{" "}
           <a className="underline" href="/dashboard/plan">
             My Perfect Week
           </a>

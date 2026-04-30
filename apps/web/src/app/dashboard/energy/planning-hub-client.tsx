@@ -25,18 +25,19 @@ import type {
   AttentionMode,
   CommitmentLevel,
   EnergyPolarity,
+  FrameworkSystem,
   Hp6HabitKey,
   PlacementSignalKey,
   PpfHorizonKey,
   PpfPillarKey,
-  SchedulerFrameworkInclusion,
   VisionSettings,
   WeeklyGoal,
-  WeeklyIntent,
-  WorkLayer
+  WorkLayer,
+  SchedulerFrameworkInclusion
 } from "@calendar-automations/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { patchGoal } from "../plan/actions";
+import { FrameworkRegistryPanel } from "./framework-registry-panel";
 
 const HP6_LABELS: Record<Hp6HabitKey, string> = {
   clarity: "Clarity",
@@ -100,41 +101,29 @@ interface BoardConfig {
 
 interface PlanningHubClientProps {
   initialGoals: WeeklyGoal[];
-  initialIntent: WeeklyIntent;
-  initialVision: VisionSettings;
+  /** Hydrated unified registry rows (mirror of scheduler inclusion + overlay metadata). */
+  initialFrameworkSystem: FrameworkSystem;
   initialPlacementOrder: readonly PlacementSignalKey[];
   wheelAreas: ReadonlyArray<{ id: string; label: string }>;
   schedulerFrameworkInclusion: SchedulerFrameworkInclusion;
-  saveVision: (input: VisionSettings) => Promise<void>;
   savePlacementOrder: (order: readonly PlacementSignalKey[]) => Promise<void>;
-  saveWeeklyIntent: (input: WeeklyIntent) => Promise<void>;
   patchSchedulerFrameworkInclusion: (
     patch: Partial<SchedulerFrameworkInclusion>
   ) => Promise<void>;
 }
 
 /**
- * Top-level planning hub. Down the page:
- *
- *   1. Weekly intentions — anchor the week.
- *   2. Long-horizon vision — PPF-aligned text on user settings.
- *   3. Framework boards — classify goals; toggles choose which dimensions feed the allocator.
- *   4. Active board — drag goals between columns for tags.
- *   5. Placement tie-break — rank the four placement signals when tags disagree on ideal timing.
- *
- * Parent page then adds Build your system (optional scheduling methods) and Scheduling rules.
+ * Framework system workbench (inside the unified Framework system card on Planning):
+ * registry + boards + active tagging surface + placement tie-breaks.
  */
 export function PlanningHubClient(props: PlanningHubClientProps) {
   const {
     initialGoals,
-    initialIntent,
-    initialVision,
+    initialFrameworkSystem,
     initialPlacementOrder,
     wheelAreas,
     schedulerFrameworkInclusion: initialInclusion,
-    saveVision,
     savePlacementOrder,
-    saveWeeklyIntent,
     patchSchedulerFrameworkInclusion
   } = props;
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
@@ -204,10 +193,8 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
   };
 
   return (
-    <div className="flex flex-col gap-5">
-      <WeeklyIntentCard initial={initialIntent} save={saveWeeklyIntent} />
-
-      <VisionCard initial={initialVision} save={saveVision} />
+    <div className="flex flex-col gap-6">
+      <FrameworkRegistryPanel initial={initialFrameworkSystem} />
 
       <FrameworkBoardsPlanningSection
         boards={boards}
@@ -236,48 +223,6 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
   );
 }
 
-/* ─────────────────────────── Weekly intent card ──────────────────────────── */
-
-interface IntentField {
-  key: keyof WeeklyIntent;
-  label: string;
-  hint: string;
-  rows?: number;
-}
-
-const INTENT_TEXT_FIELDS: ReadonlyArray<IntentField> = [
-  {
-    key: "mainOutcomes",
-    label: "Main outcomes",
-    hint: "1–3 things that would make this week a win.",
-    rows: 3
-  },
-  {
-    key: "mustWins",
-    label: "Must-wins vs stretch",
-    hint: "What absolutely has to land — and what would be a bonus.",
-    rows: 3
-  },
-  {
-    key: "people",
-    label: "People & relationships",
-    hint: "Who do you want to show up for this week?",
-    rows: 2
-  },
-  {
-    key: "energyNote",
-    label: "Energy & recovery",
-    hint: "How will you protect or generate energy?",
-    rows: 2
-  },
-  {
-    key: "mindsetNote",
-    label: "Mindset & standard",
-    hint: "What standard are you holding yourself to?",
-    rows: 2
-  }
-];
-
 const HP6_KEYS: readonly Hp6HabitKey[] = [
   "clarity",
   "energy",
@@ -286,127 +231,6 @@ const HP6_KEYS: readonly Hp6HabitKey[] = [
   "influence",
   "courage"
 ];
-
-function WeeklyIntentCard({
-  initial,
-  save
-}: {
-  initial: WeeklyIntent;
-  save: (input: WeeklyIntent) => Promise<void>;
-}) {
-  const [intent, setIntent] = useState<WeeklyIntent>(initial);
-  const [open, setOpen] = useState(false);
-  const [, startTransition] = useTransition();
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Re-sync from the server when an external change happens.
-  const externalSig = useMemo(() => JSON.stringify(initial), [initial]);
-  useEffect(() => {
-    setIntent(initial);
-  }, [externalSig, initial]);
-
-  const persist = (next: WeeklyIntent) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      startTransition(async () => {
-        try {
-          await save(next);
-        } catch (err) {
-          console.error("saveWeeklyIntent failed", err);
-        }
-      });
-    }, 400);
-  };
-
-  const updateField = (key: keyof WeeklyIntent, value: string) => {
-    const next = { ...intent, [key]: value };
-    setIntent(next);
-    persist(next);
-  };
-
-  const toggleHabit = (habit: Hp6HabitKey) => {
-    const current = intent.hp6Focus ?? [];
-    const has = current.includes(habit);
-    const nextHabits = has ? current.filter((h) => h !== habit) : [...current, habit];
-    const next = { ...intent, hp6Focus: nextHabits };
-    setIntent(next);
-    persist(next);
-  };
-
-  const filledCount = INTENT_TEXT_FIELDS.filter(
-    (f) => ((intent[f.key] ?? "") as string).trim().length > 0
-  ).length;
-  const habitCount = (intent.hp6Focus ?? []).length;
-
-  return (
-    <section className="card flex flex-col gap-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-start justify-between gap-2 text-left"
-        aria-expanded={open}
-      >
-        <div>
-          <h2 className="text-sm font-semibold">This week&apos;s intentions</h2>
-          <p className="text-xs text-ink-400">
-            Short prompts to anchor what matters before scheduling. Inspired by high-performance
-            weekly reviews.
-          </p>
-        </div>
-        <span className="shrink-0 text-xs text-ink-400">
-          {filledCount + (habitCount > 0 ? 1 : 0) === 0
-            ? open
-              ? "Tap to collapse"
-              : "Tap to fill"
-            : `${filledCount} filled${habitCount > 0 ? ` · ${habitCount} habits` : ""}`}
-        </span>
-      </button>
-      {open && (
-        <div className="flex flex-col gap-3 border-t border-ink-200 pt-3 dark:border-ink-600">
-          {INTENT_TEXT_FIELDS.map((field) => (
-            <label key={field.key} className="flex flex-col gap-1 text-xs">
-              <span className="font-medium">{field.label}</span>
-              <span className="text-[11px] text-ink-400">{field.hint}</span>
-              <textarea
-                rows={field.rows ?? 2}
-                className="field"
-                value={(intent[field.key] as string | undefined) ?? ""}
-                onChange={(e) => updateField(field.key, e.target.value)}
-              />
-            </label>
-          ))}
-          <fieldset className="flex flex-col gap-2 rounded-md border border-ink-200 p-2 dark:border-ink-600">
-            <legend className="px-1 text-xs font-medium">HP6 focus this week</legend>
-            <p className="text-[11px] text-ink-400">
-              Optional — pick the habits you want to double down on. The HP6 board below uses the
-              same six options.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {HP6_KEYS.map((habit) => {
-                const active = (intent.hp6Focus ?? []).includes(habit);
-                return (
-                  <button
-                    key={habit}
-                    type="button"
-                    onClick={() => toggleHabit(habit)}
-                    aria-pressed={active}
-                    className={`rounded-full border px-2.5 py-1 text-xs transition ${
-                      active
-                        ? "border-accent bg-accent text-accent-fg"
-                        : "border-ink-200 text-ink-600 hover:border-accent/40 dark:border-ink-600 dark:text-ink-200"
-                    }`}
-                  >
-                    {HP6_LABELS[habit]}
-                  </button>
-                );
-              })}
-            </div>
-          </fieldset>
-        </div>
-      )}
-    </section>
-  );
-}
 
 /* ─────────────────────────── Vision card ─────────────────────────────────── */
 
@@ -437,12 +261,15 @@ const VISION_FIELDS: ReadonlyArray<{
   }
 ];
 
-function VisionCard({
+export function VisionCard({
   initial,
-  save
+  save,
+  embedded = false
 }: {
   initial: VisionSettings;
   save: (input: VisionSettings) => Promise<void>;
+  /** When nested under &quot;Why &amp; weekly intent&quot;, avoids a second outer card chrome. */
+  embedded?: boolean;
 }) {
   const [vision, setVision] = useState<VisionSettings>(initial);
   const [open, setOpen] = useState(false);
@@ -472,8 +299,14 @@ function VisionCard({
     (f) => ((vision[f.key] ?? "") as string).trim().length > 0
   ).length;
 
+  const visionHeadingId = embedded ? "vision-nested-heading" : "vision-heading";
+
+  const rootClassName = embedded
+    ? "flex flex-col gap-3 border-t border-ink-200 pt-5 dark:border-ink-600"
+    : "card flex flex-col gap-3";
+
   return (
-    <section className="card flex flex-col gap-3">
+    <section className={rootClassName} aria-labelledby={visionHeadingId}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -481,7 +314,15 @@ function VisionCard({
         aria-expanded={open}
       >
         <div>
-          <h2 className="text-sm font-semibold">Long-horizon vision</h2>
+          {embedded ? (
+            <h3 id={visionHeadingId} className="text-sm font-semibold">
+              Long-horizon vision
+            </h3>
+          ) : (
+            <h2 id={visionHeadingId} className="text-sm font-semibold">
+              Long-horizon vision
+            </h2>
+          )}
           <p className="text-xs text-ink-400">
             Optional. Persists across weeks — Personal / Professional / Financial buckets to
             match the PPF framework.
@@ -521,19 +362,16 @@ function FrameworkBoardsPlanningSection(props: {
   onToggleFrameworkInScheduler: (key: keyof SchedulerFrameworkInclusion, enabled: boolean) => void;
 }) {
   return (
-    <section
-      className="card flex flex-col gap-3"
-      aria-labelledby="framework-boards-hub-heading"
-    >
+    <div className="flex flex-col gap-3 border-t border-ink-200 pt-6 dark:border-ink-600">
       <div>
         <h2 id="framework-boards-hub-heading" className="text-sm font-semibold">
-          Framework boards
+          Goal tagging (boards)
         </h2>
         <p className="mt-1 text-xs text-ink-400">
           Each pill is both a tagging board (right) and allocator inclusion (left checkbox). Detailed
-          floors, mix targets, and HP6 minimums stay in{" "}
-          <a className="underline" href="#scheduling-constraints">
-            Scheduling rules
+          floors, mix targets, and HP6 minimums stay under{" "}
+          <a className="underline" href="#scheduling-outcomes">
+            Scheduling outcomes
           </a>
           .
         </p>
@@ -589,13 +427,13 @@ function FrameworkBoardsPlanningSection(props: {
           })}
         </ul>
       </nav>
-    </section>
+    </div>
   );
 }
 
 function EmptyGoalsCallout() {
   return (
-    <section className="card">
+    <div className="rounded-lg border border-dashed border-ink-200 p-4 dark:border-ink-600">
       <h2 className="text-sm font-semibold">No goals yet</h2>
       <p className="mt-1 text-xs text-ink-400">
         Add your weekly goals on{" "}
@@ -604,7 +442,7 @@ function EmptyGoalsCallout() {
         </a>
         . Once you have a list, the framework boards below let you classify each one.
       </p>
-    </section>
+    </div>
   );
 }
 
@@ -965,7 +803,7 @@ function PlacementPriorityCard({
   };
 
   return (
-    <section className="card flex flex-col gap-2">
+    <div className="flex flex-col gap-2 border-t border-ink-200 pt-5 dark:border-ink-600">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -973,7 +811,7 @@ function PlacementPriorityCard({
         aria-expanded={open}
       >
         <div>
-          <h2 className="text-sm font-semibold">Placement tie-breaks</h2>
+          <h2 className="text-sm font-semibold">Placement strategy</h2>
           <p className="text-xs text-ink-400">
             When a goal&apos;s tags imply different ideal hours, the top-ranked signal wins. Goal
             list order on Perfect Week still decides who gets first pick of free time.
@@ -1008,7 +846,7 @@ function PlacementPriorityCard({
           ))}
         </ol>
       )}
-    </section>
+    </div>
   );
 }
 

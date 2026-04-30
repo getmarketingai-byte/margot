@@ -16,8 +16,10 @@ import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
 import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
+import { updateWeeklyIntent } from "./actions";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
+import { WeeklyIntentCard } from "./weekly-intent-card";
 import { WeekCalendar } from "../week-calendar";
 import { RangeToggleCalendar } from "./range-toggle-calendar";
 import { revalidatePath } from "next/cache";
@@ -268,12 +270,14 @@ export default async function PlanPage() {
         <p className="text-sm text-ink-600 dark:text-ink-200">
           List the things you want each week. Type a goal and press Enter — we&apos;ll find the
           time. Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
-          <Link className="underline" href="/dashboard/energy#personal-scheduling">
+          <Link className="underline" href="/dashboard/energy#framework-methods">
             Planning
           </Link>{" "}
           with your frameworks.
         </p>
       </header>
+
+      <WeeklyIntentCard initial={plan.weeklyIntent} save={updateWeeklyIntent} />
 
       {catchUpActive && (
         <CatchUpBanner
@@ -371,7 +375,7 @@ export default async function PlanPage() {
                 <p className="text-xs text-ink-400">
                   With strict mode on, these goals didn&apos;t fit. Either soften their floors or
                   switch to proportional under{" "}
-                  <Link className="underline" href="/dashboard/energy#scheduling-constraints">
+                  <Link className="underline" href="/dashboard/energy#scheduling-outcomes">
                     Scheduling rules
                   </Link>{" "}
                   on Planning.
@@ -402,6 +406,9 @@ export default async function PlanPage() {
                   system={systemBlocksForCalendar}
                   proposed={proposedForCalendar}
                   compact
+                  schedulingGoals={schedulingGoals}
+                  frameworkSystem={settings.frameworkSystem}
+                  wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
                 />
               </div>
               <details className="card lg:hidden" open>
@@ -414,6 +421,9 @@ export default async function PlanPage() {
                     daySheetGoalBusy={daySheetGoalBusyForCalendar}
                     system={systemBlocksForCalendar}
                     proposed={proposedForCalendar}
+                    schedulingGoals={schedulingGoals}
+                    frameworkSystem={settings.frameworkSystem}
+                    wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
                   />
                 </div>
               </details>
@@ -432,7 +442,10 @@ function CalendarPreview({
   daySheetGoalBusy,
   system,
   proposed,
-  compact
+  compact,
+  schedulingGoals,
+  frameworkSystem,
+  wheelAreas
 }: {
   weekStartMs: number;
   timezone: string;
@@ -441,6 +454,9 @@ function CalendarPreview({
   system: Parameters<typeof WeekCalendar>[0]["system"];
   proposed: Parameters<typeof WeekCalendar>[0]["proposed"];
   compact: boolean;
+  schedulingGoals: Parameters<typeof RangeToggleCalendar>[0]["schedulingGoals"];
+  frameworkSystem: Parameters<typeof RangeToggleCalendar>[0]["frameworkSystem"];
+  wheelAreas: Parameters<typeof RangeToggleCalendar>[0]["wheelAreas"];
 }) {
   return (
     <RangeToggleCalendar
@@ -451,6 +467,9 @@ function CalendarPreview({
       system={system ?? []}
       proposed={proposed}
       compact={compact}
+      schedulingGoals={schedulingGoals}
+      frameworkSystem={frameworkSystem}
+      wheelAreas={wheelAreas}
     />
   );
 }
@@ -474,7 +493,7 @@ function CatchUpBanner({
     })
     .join(", ");
   const secondaryHref =
-    mode === "automated" ? "/dashboard/energy#scheduling-constraints" : "/dashboard/week-review";
+    mode === "automated" ? "/dashboard/energy#scheduling-outcomes" : "/dashboard/week-review";
   const secondaryLabel = mode === "automated" ? "Catch-up settings" : "Adjust catch-up";
   const blurb =
     mode === "automated"

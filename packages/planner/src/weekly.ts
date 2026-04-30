@@ -62,6 +62,7 @@ import type {
 import {
   effectiveEnergyBatteryProfile,
   filterSchedulingGoals,
+  hydrateFrameworkSystemMirrors,
   isInvertedTimemapGoal,
   normaliseGoalTime
 } from "@calendar-automations/schema";
@@ -293,7 +294,8 @@ function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTim
 }
 
 export function allocateWeek(input: AllocateInput): AllocateResult {
-  const { plan, busy, settings, sleepIntervals } = input;
+  const { plan, busy, settings: incomingSettings, sleepIntervals } = input;
+  const settings = hydrateFrameworkSystemMirrors(incomingSettings);
   const tz = plan.timezone || settings.timezone;
   const weekStartMs = input.weekStartMs ?? parseLocalDateMs(plan.weekStart, tz);
   const weekEndMs = input.weekEndMs ?? weekStartMs + 7 * DAY_MS;

@@ -84,6 +84,8 @@ interface DraggableProposedGoalBlockProps {
    * Parent should apply optimistic UI and call `router.refresh()` (e.g. inside `startTransition`).
    */
   onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
+  /** Tiny framework chips under the goal title (Perfect Week overlays). */
+  frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
 }
 
 export function DraggableProposedGoalBlock({
@@ -97,7 +99,8 @@ export function DraggableProposedGoalBlock({
   slices,
   dayIndex,
   reservedForGoalDrag,
-  onDragCommit
+  onDragCommit,
+  frameworkOverlayChips,
 }: DraggableProposedGoalBlockProps) {
   const router = useRouter();
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -273,10 +276,15 @@ export function DraggableProposedGoalBlock({
       : {})
   };
 
+  const overlayHint =
+    frameworkOverlayChips && frameworkOverlayChips.length > 0
+      ? ` · Frameworks: ${frameworkOverlayChips.map((c) => c.title).join(" · ")}`
+      : "";
+
   return (
     <div
       ref={elRef}
-      title={`${title}${isLocked ? " (locked)" : " (proposed)"}`}
+      title={`${title}${isLocked ? " (locked)" : " (proposed)"}${overlayHint}`}
       role="button"
       tabIndex={0}
       aria-label={`${title}. ${isLocked ? "Locked time from your plan or day sheet — drag to adjust." : "Drag to move within the week."}`}
@@ -299,23 +307,38 @@ export function DraggableProposedGoalBlock({
         }
       }}
     >
-      <div className="flex items-start justify-between gap-1">
-        <span className="line-clamp-2 leading-tight">{title}</span>
-        {isLocked && (
-          <span
-            aria-label={
-              slices.some((s) => s.overrideSource === "actual")
-                ? "From day sheet"
-                : "Locked on calendar"
-            }
-            title={
-              slices.some((s) => s.overrideSource === "actual")
-                ? "Day-sheet actual — reset in day sheet or drag to change"
-                : "Locked — click reset to restore auto time"
-            }
-            className="mt-0.5 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-white"
-          />
-        )}
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-start justify-between gap-1">
+          <span className="line-clamp-2 leading-tight">{title}</span>
+          {isLocked && (
+            <span
+              aria-label={
+                slices.some((s) => s.overrideSource === "actual")
+                  ? "From day sheet"
+                  : "Locked on calendar"
+              }
+              title={
+                slices.some((s) => s.overrideSource === "actual")
+                  ? "Day-sheet actual — reset in day sheet or drag to change"
+                  : "Locked — click reset to restore auto time"
+              }
+              className="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-white"
+            />
+          )}
+        </div>
+        {frameworkOverlayChips && frameworkOverlayChips.length > 0 ? (
+          <div className="pointer-events-none flex flex-wrap gap-0.5 pb-4">
+            {frameworkOverlayChips.map((c, idx) => (
+              <span
+                key={`${c.abbr}-${idx}`}
+                title={c.title}
+                className="rounded bg-black/35 px-1 text-[7px] font-semibold uppercase leading-none text-white/95 backdrop-blur-sm"
+              >
+                {c.abbr}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
       {isLocked && (
         <button

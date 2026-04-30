@@ -21,11 +21,13 @@ function makeRule(): PersonalSystemAdvancedRule {
 export function BuildYourSystemPanel({
   initial,
   dayDrain,
-  tuningHints
+  tuningHints,
+  variant = "standalone"
 }: {
   initial: PersonalSystem;
   dayDrain?: number[];
   tuningHints: string[];
+  variant?: "standalone" | "embedded";
 }) {
   const router = useRouter();
   const [sys, setSys] = useState(initial);
@@ -41,10 +43,23 @@ export function BuildYourSystemPanel({
     });
   }
 
+  const rootSectionClass =
+    variant === "embedded" ? "flex flex-col gap-4" : "card flex flex-col gap-4";
+  const mainTitleClass =
+    variant === "embedded" ? "text-base font-semibold" : "text-sm font-semibold";
+
   return (
-    <section className="card flex flex-col gap-4">
+    <section className={rootSectionClass} aria-labelledby="build-system-methods-heading">
       <div>
-        <h2 className="text-sm font-semibold">Build your system</h2>
+        {variant === "embedded" ? (
+          <h3 id="build-system-methods-heading" className={mainTitleClass}>
+            Optional scheduling methods
+          </h3>
+        ) : (
+          <h2 id="build-system-methods-heading" className={mainTitleClass}>
+            Build your system
+          </h2>
+        )}
         <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">
           Turn on only the scheduling methods you want—mix ideas from different sources and tune
           them for your week. What you enable here adds on top of the default allocator; with

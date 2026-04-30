@@ -9,18 +9,7 @@
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import {
-  coerceSettingsAfterSchedulerFrameworkInclusionPatch,
-  filterSchedulingGoals,
-  type PlacementSignalKey,
-  type SchedulerFrameworkInclusion,
-  type VisionSettings,
-  type WeeklyPlan,
-  placementPrioritySettingsSchema,
-  schedulerFrameworkInclusionSchema,
-  visionSettingsSchema,
-  weeklyIntentSchema
-} from "@calendar-automations/schema";
+import { filterSchedulingGoals, type VisionSettings, type WeeklyPlan, visionSettingsSchema, weeklyIntentSchema } from "@calendar-automations/schema";
 import { allocateWeek, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
@@ -31,7 +20,12 @@ import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
 import { updateWeeklyIntent } from "../plan/actions";
 import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ConstraintsSection } from "./constraints-section";
+import {
+  persistSchedulerFrameworkInclusion,
+  updatePlacementSignalsFromFramework
+} from "./framework-system-actions";
 import { PlanningHubClient } from "./planning-hub-client";
+import { WhyWeeklyIntentSection } from "./why-weekly-intent-section";
 
 export const dynamic = "force-dynamic";
 
@@ -89,46 +83,6 @@ async function updateVision(input: VisionSettings): Promise<void> {
   revalidatePath("/dashboard/energy");
 }
 
-async function updatePlacementPriority(
-  order: readonly PlacementSignalKey[]
-): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const parsed = placementPrioritySettingsSchema.parse({ order });
-  await saveSettings(userId, {
-    ...settings,
-    placementPriority: parsed
-  });
-  revalidatePath("/dashboard/energy");
-  revalidatePath("/dashboard/plan");
-}
-
-async function patchSchedulerFrameworkInclusion(
-  patch: Partial<SchedulerFrameworkInclusion>
-): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const schedulerFrameworkInclusion = schedulerFrameworkInclusionSchema.parse({
-    ...settings.schedulerFrameworkInclusion,
-    ...patch
-  });
-  await saveSettings(
-    userId,
-    coerceSettingsAfterSchedulerFrameworkInclusionPatch({
-      ...settings,
-      schedulerFrameworkInclusion
-    })
-  );
-  revalidatePath("/dashboard/energy");
-  revalidatePath("/dashboard/plan");
-}
-
 export default async function PlanningHubPage() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
@@ -171,11 +125,19 @@ export default async function PlanningHubPage() {
       <header>
         <h1 className="text-2xl font-semibold">Planning</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Start with why (intentions, vision), then <strong>classify goals</strong> with the frameworks
-          you actually use. Turn on optional <strong>scheduling methods</strong> in the middle when you
-          want extra nuance—otherwise the built-in allocator stays the same. Finish with{" "}
-          <strong>scheduling rules</strong> at the bottom for catch-up, energy curve, and caps. All of
-          this feeds{" "}
+          Three layers on this page:{" "}
+          <a className="underline" href="#why-weekly-intent-heading">
+            Why &amp; weekly intent
+          </a>
+          , your unified{" "}
+          <a className="underline" href="#framework-system-heading">
+            Framework system
+          </a>{" "}
+          (registry, goal boards, optional methods), then{" "}
+          <a className="underline" href="#scheduling-outcomes-heading">
+            Scheduling outcomes
+          </a>
+          . Together they feed{" "}
           <a className="underline" href="/dashboard/plan">
             My Perfect Week
           </a>
@@ -183,26 +145,51 @@ export default async function PlanningHubPage() {
         </p>
       </header>
 
-      <PlanningHubClient
-        initialGoals={schedulingGoals}
-        initialIntent={plan.weeklyIntent}
+      <WhyWeeklyIntentSection
+        initialWeeklyIntent={plan.weeklyIntent}
         initialVision={settings.vision}
-        initialPlacementOrder={settings.placementPriority.order}
-        wheelAreas={wheelAreas}
-        schedulerFrameworkInclusion={settings.schedulerFrameworkInclusion}
-        saveVision={updateVision}
-        savePlacementOrder={updatePlacementPriority}
         saveWeeklyIntent={updateWeeklyIntent}
-        patchSchedulerFrameworkInclusion={patchSchedulerFrameworkInclusion}
+        saveVision={updateVision}
       />
 
-      <div id="personal-scheduling" className="scroll-mt-6">
-        <BuildYourSystemPanel
-          initial={settings.personalSystem}
-          dayDrain={dayCalendarDrainThisWeek}
-          tuningHints={tuningHints}
+      <section
+        className="card flex flex-col gap-6 scroll-mt-6"
+        id="framework-system"
+        aria-labelledby="framework-system-heading"
+      >
+        <header>
+          <h2 id="framework-system-heading" className="text-lg font-semibold">
+            Framework system
+          </h2>
+          <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
+            Enable frameworks and calendar overlays, classify goals on boards, optionally turn on
+            advanced placement methods, then set placement tie-breaks. Rule floors and mix targets live
+            under scheduling outcomes.
+          </p>
+        </header>
+
+        <PlanningHubClient
+          initialGoals={schedulingGoals}
+          initialFrameworkSystem={settings.frameworkSystem}
+          initialPlacementOrder={settings.placementPriority.order}
+          wheelAreas={wheelAreas}
+          schedulerFrameworkInclusion={settings.schedulerFrameworkInclusion}
+          savePlacementOrder={updatePlacementSignalsFromFramework}
+          patchSchedulerFrameworkInclusion={persistSchedulerFrameworkInclusion}
         />
-      </div>
+
+        <div
+          id="framework-methods"
+          className="scroll-mt-6 border-t border-ink-200 pt-6 dark:border-ink-600"
+        >
+          <BuildYourSystemPanel
+            variant="embedded"
+            initial={settings.personalSystem}
+            dayDrain={dayCalendarDrainThisWeek}
+            tuningHints={tuningHints}
+          />
+        </div>
+      </section>
 
       <ConstraintsSection />
     </div>

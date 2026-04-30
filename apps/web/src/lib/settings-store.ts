@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import {
   DEFAULT_USER_SETTINGS,
   SETTINGS_SCHEMA_VERSION,
+  hydrateFrameworkSystemMirrors,
   migrateSettings,
   userSettingsSchema,
   type UserSettings
@@ -32,7 +33,7 @@ export async function saveSettings(
   userId: string,
   next: UserSettings
 ): Promise<UserSettings> {
-  const validated = userSettingsSchema.parse(next);
+  const validated = userSettingsSchema.parse(hydrateFrameworkSystemMirrors(next));
   if (!db) return validated;
   await db
     .insert(schema.userSettings)
