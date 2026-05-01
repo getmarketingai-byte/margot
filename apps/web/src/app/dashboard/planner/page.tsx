@@ -5,7 +5,13 @@
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { filterSchedulingGoals, type VisionSettings, type WeeklyPlan, visionSettingsSchema, weeklyIntentSchema } from "@calendar-automations/schema";
+import {
+  filterSchedulingGoals,
+  type VisionSettings,
+  type WeeklyPlan,
+  visionSettingsSchema,
+  weeklyIntentSchema
+} from "@calendar-automations/schema";
 import { allocateWeek, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import {
@@ -90,7 +96,9 @@ export default async function PlannerHubPage() {
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
-  const schedulingGoals = filterSchedulingGoals(plan.goals);
+  const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
+    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+  );
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
   const nowMs = Date.now();
   const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
@@ -182,7 +190,7 @@ export default async function PlannerHubPage() {
         </header>
 
         <PlanningHubClient
-          initialGoals={schedulingGoals}
+          initialGoals={perfectWeekAuthoringGoals}
           initialFrameworkSystem={settings.frameworkSystem}
           initialPlacementOrder={settings.placementPriority.order}
           wheelAreas={wheelAreas}

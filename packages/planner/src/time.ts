@@ -60,6 +60,12 @@ export function hourInTz(ms: number, timeZone: string): number {
   return parts(ms, timeZone).hour;
 }
 
+/** Local wall clock as minutes since midnight (0–1439) in `timeZone`. */
+export function clockMinutesInTz(ms: number, timeZone: string): number {
+  const p = parts(ms, timeZone);
+  return p.hour * 60 + p.minute;
+}
+
 /**
  * Returns the UTC epoch ms of midnight (00:00:00) on the given local date in tz.
  * Iterates a candidate guess until the formatted local date matches; safe across

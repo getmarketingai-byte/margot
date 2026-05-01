@@ -3,6 +3,8 @@ import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import type { UserSettings } from "@calendar-automations/schema";
+import { PhysicalActivityRoutineForm } from "./physical-activity-routine-form";
+import { WeeklyErrandsRoutineForm } from "./weekly-errands-routine-form";
 
 function afterConstraintsSave(userId: string): void {
   invalidateUserAllocationCache(userId);
@@ -173,6 +175,8 @@ export async function ConstraintsSection() {
             </button>
           </div>
         </form>
+        <PhysicalActivityRoutineForm initial={settings.gym} />
+        <WeeklyErrandsRoutineForm initial={settings.weeklyErrands} />
       </details>
 
       <details className="card" open>

@@ -4,4 +4,5 @@ export * from "./time";
 export * from "./timemap";
 export * from "./sleep";
 export * from "./weekly";
+export * from "./weekly-routines";
 export * from "./ics";

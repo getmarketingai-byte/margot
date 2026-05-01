@@ -7,6 +7,7 @@ import {
   allocateWeek,
   buildStableUid,
   goalOverrideSourcesFromPlan,
+  schedulingGoalsWithWeeklyRoutines,
   type AllocatedBlock
 } from "@calendar-automations/planner";
 import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
@@ -161,7 +162,7 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
   const events = proposedBlocks.map((b) => toGeneratedEvent(userId, plan, b));
   const gymTravelBlocks = gymGoalTravelBlocksFromProposed(
     proposedBlocks,
-    plan.goals,
+    schedulingGoalsWithWeeklyRoutines(plan.goals, settings),
     settings.travel,
     settings.gym
   );

@@ -9,15 +9,9 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import type {
-  DayOfWeek,
-  EnergyMode,
-  PpfPillarKey,
-  SpecialGoalType,
-  WeeklyGoal
-} from "@calendar-automations/schema";
+import type { DayOfWeek, WeeklyGoal } from "@calendar-automations/schema";
+import Link from "next/link";
 import {
-  SPECIAL_GOAL_PRESETS,
   STARTER_GOALS,
   chipsForGoal,
   summaryChipsForGoal,
@@ -101,23 +95,6 @@ function ensureGoalShape(input: GoalInput): GoalInput {
     workLayer: input.workLayer ?? "unspecified",
     ppfHorizon: input.ppfHorizon ?? "unspecified",
     commitmentLevel: input.commitmentLevel ?? "committed"
-  };
-}
-
-function applySpecialGoalPreset(current: GoalDraft, type?: SpecialGoalType): GoalDraft {
-  const withoutPreset: GoalDraft = {
-    ...current,
-    specialGoalType: undefined,
-    anchor: undefined,
-    earliestHour: undefined,
-    latestHour: undefined
-  };
-  if (!type) return withoutPreset;
-  const preset = SPECIAL_GOAL_PRESETS.find((p) => p.type === type);
-  if (!preset) return withoutPreset;
-  return {
-    ...withoutPreset,
-    ...preset.draft
   };
 }
 
@@ -381,7 +358,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Title-only add row; special types and other constraints live under each goal’s scheduling options. */
+/** Title-only add row; time budgets and cadence live under each goal’s scheduling options. */
 function AddGoalTitle({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => void }) {
   const [title, setTitle] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -655,12 +632,16 @@ function GoalRow({
               className="field"
             />
           </label>
+          <p className="mt-3 text-xs leading-relaxed text-ink-500 dark:text-ink-300">
+            Framework tags (wheel, PPF pillar, attention, …),{" "}
+            <strong>energy mode</strong>, and <strong>focus battery</strong> are configured on{" "}
+            <Link className="font-medium text-accent underline" href="/dashboard/planner#battery-curve-goals">
+              Planner
+            </Link>{" "}
+            so this list stays about titles and time.
+          </p>
           <div className="mt-3">
-            <OptionsEditor
-              draft={draft}
-              onChange={commitDraft}
-              wheelAreas={wheelAreas}
-            />
+            <OptionsEditor draft={draft} onChange={commitDraft} />
           </div>
         </div>
       )}
@@ -713,8 +694,6 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.ppfPillar !== undefined) draft.ppfPillar = goal.ppfPillar;
   if (goal.earliestHour !== undefined) draft.earliestHour = goal.earliestHour;
   if (goal.latestHour !== undefined) draft.latestHour = goal.latestHour;
-  if (goal.anchor !== undefined) draft.anchor = goal.anchor;
-  if (goal.specialGoalType !== undefined) draft.specialGoalType = goal.specialGoalType;
   if (goal.allocationSharePercent !== undefined) draft.allocationSharePercent = goal.allocationSharePercent;
   if (goal.scheduleInNiceWeather === true) draft.scheduleInNiceWeather = true;
   if (goal.focusAffinity !== undefined) draft.focusAffinity = goal.focusAffinity;
@@ -740,14 +719,7 @@ type ConstraintId =
   | "share-remainder"
   | "frequency"
   | "days"
-  | "nice-weather"
-  | "energy"
-  | "focus-affinity"
-  | "energy-charge"
-  | "energy-drain"
-  | "special"
-  | "wheel"
-  | "pillar";
+  | "nice-weather";
 
 interface ConstraintDef {
   id: ConstraintId;
@@ -763,18 +735,15 @@ function isDaySet(d: GoalDraft): boolean {
 
 function OptionsEditor({
   draft,
-  onChange,
-  wheelAreas
+  onChange
 }: {
   draft: GoalDraft;
   onChange: (draft: GoalDraft) => void;
-  wheelAreas: WheelOption[];
 }) {
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
 
   // Order matters: this is the order rows appear, both as set rows and as
-  // "+ Add X" buttons. Keep the high-impact constraints (time, cadence) on
-  // top and the categorisation tags (energy, wheel, pillar) at the bottom.
+  // "+ Add X" buttons. Time and cadence only — framework-linked signals live on Planner.
   const constraints: ConstraintDef[] = [
     {
       id: "min-week",
@@ -831,64 +800,11 @@ function OptionsEditor({
       isSet: (d) => d.scheduleInNiceWeather === true,
       initialise: () => ({ scheduleInNiceWeather: true }),
       clear: () => ({ scheduleInNiceWeather: undefined })
-    },
-    {
-      id: "energy",
-      label: "Energy mode",
-      isSet: (d) => d.energyMode !== undefined && d.energyMode !== "neutral",
-      initialise: () => ({ energyMode: "hyperfocus" }),
-      clear: () => ({ energyMode: "neutral" })
-    },
-    {
-      id: "focus-affinity",
-      label: "Focus affinity (battery)",
-      isSet: (d) => d.focusAffinity !== undefined,
-      initialise: () => ({ focusAffinity: "hyperfocus" }),
-      clear: () => ({ focusAffinity: undefined })
-    },
-    {
-      id: "energy-charge",
-      label: "Battery charge (0–1)",
-      isSet: (d) => d.energyChargeImpact !== undefined,
-      initialise: () => ({ energyChargeImpact: 0.7 }),
-      clear: () => ({ energyChargeImpact: undefined })
-    },
-    {
-      id: "energy-drain",
-      label: "Battery drain (0–1)",
-      isSet: (d) => d.energyDrainImpact !== undefined,
-      initialise: () => ({ energyDrainImpact: 0.65 }),
-      clear: () => ({ energyDrainImpact: undefined })
-    },
-    {
-      id: "special",
-      label: "Special goal type",
-      isSet: (d) => d.specialGoalType !== undefined,
-      initialise: (d) => applySpecialGoalPreset(d, SPECIAL_GOAL_PRESETS[0]?.type),
-      clear: (d) => applySpecialGoalPreset(d, undefined)
-    },
-    {
-      id: "wheel",
-      label: "Wheel area",
-      isSet: (d) => d.wheelAreaId !== undefined,
-      initialise: () => ({ wheelAreaId: wheelAreas[0]?.id }),
-      clear: () => ({ wheelAreaId: undefined })
-    },
-    {
-      id: "pillar",
-      label: "Pillar",
-      isSet: (d) => d.ppfPillar !== undefined,
-      initialise: () => ({ ppfPillar: "personal" }),
-      clear: () => ({ ppfPillar: undefined })
     }
   ];
 
-  // Wheel area only appears when the user has any wheel areas configured.
-  const visibleConstraints = constraints.filter(
-    (c) => c.id !== "wheel" || wheelAreas.length > 0
-  );
-  const setConstraints = visibleConstraints.filter((c) => c.isSet(draft));
-  const unsetConstraints = visibleConstraints.filter((c) => !c.isSet(draft));
+  const setConstraints = constraints.filter((c) => c.isSet(draft));
+  const unsetConstraints = constraints.filter((c) => !c.isSet(draft));
   const clearAllConstraints = () => {
     const cleared = setConstraints.reduce<GoalDraft>(
       (nextDraft, constraint) => ({ ...nextDraft, ...constraint.clear(nextDraft) }),
@@ -922,12 +838,7 @@ function OptionsEditor({
                 label={c.label}
                 onRemove={() => update(c.clear(draft))}
               >
-                <ConstraintBody
-                  id={c.id}
-                  draft={draft}
-                  update={update}
-                  wheelAreas={wheelAreas}
-                />
+                <ConstraintBody id={c.id} draft={draft} update={update} />
               </ConstraintRow>
             ))}
           </div>
@@ -983,76 +894,182 @@ function ConstraintRow({
   );
 }
 
-function ConstraintBody({
-  id,
-  draft,
-  update,
-  wheelAreas
+function PercentShareField({
+  value,
+  onChange,
+  hint
 }: {
-  id: ConstraintId;
-  draft: GoalDraft;
-  update: (changes: Partial<GoalDraft>) => void;
-  wheelAreas: WheelOption[];
+  value: number | undefined;
+  onChange: (next: number | undefined) => void;
+  hint?: React.ReactNode;
 }) {
-  switch (id) {
-    case "min-week":
-      return <DurationField value={draft.minMinutesPerWeek} onChange={(v) => update({ minMinutesPerWeek: v })} hint="Reserved before equal share." />;
-    case "min-day":
-      return <DurationField value={draft.minMinutesPerDay} onChange={(v) => update({ minMinutesPerDay: v })} hint="Daily floor on scheduled days." />;
-    case "max-week":
-      return <DurationField value={draft.maxMinutesPerWeek} onChange={(v) => update({ maxMinutesPerWeek: v === undefined ? undefined : Math.max(1, v) })} hint="Weekly ceiling." />;
-    case "max-day":
-      return <DurationField value={draft.maxMinutesPerDay} onChange={(v) => update({ maxMinutesPerDay: v === undefined ? undefined : Math.max(1, v) })} hint="Daily cap so this doesn't dominate a day." />;
-    case "share-remainder":
-      return (
-        <label className="flex flex-col gap-1 text-xs">
-          <span>Percent (1–100)</span>
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={draft.allocationSharePercent ?? ""}
-            onChange={(e) => {
-              if (e.target.value === "") {
-                update({ allocationSharePercent: undefined });
-                return;
-              }
-              const n = Number(e.target.value);
-              if (!Number.isFinite(n)) return;
-              update({ allocationSharePercent: Math.min(100, Math.max(1, Math.round(n))) });
-            }}
-            placeholder="40"
-            className="field"
-          />
-          <span className="text-ink-400">
-            Share of time left after weekly mins are reserved (weights the post-floor split between
-            goals).
-          </span>
-        </label>
-      );
-    case "frequency":
-      return (
+  const clamp = (n: number) => Math.min(100, Math.max(1, Math.round(n)));
+  const sliderPos = clamp(value ?? 40);
+
+  return (
+    <div className="flex flex-col gap-2 text-xs">
+      <label className="flex flex-col gap-1">
+        <span>Percent (1–100)</span>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          value={value === undefined ? "" : value}
+          onChange={(e) => {
+            if (e.target.value === "") {
+              onChange(undefined);
+              return;
+            }
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            onChange(clamp(n));
+          }}
+          placeholder="40"
+          className="field"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="sr-only">Adjust percent with a slider</span>
+        <input
+          type="range"
+          min={1}
+          max={100}
+          step={1}
+          value={sliderPos}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            onChange(clamp(n));
+          }}
+          className="h-2 w-full cursor-pointer accent-accent"
+        />
+      </label>
+      {hint ? <span className="text-[11px] text-ink-400">{hint}</span> : null}
+    </div>
+  );
+}
+
+function FrequencyPerWeekField({
+  value,
+  onChange
+}: {
+  value: number | undefined;
+  onChange: (next: number | undefined) => void;
+}) {
+  const clamp = (n: number) => Math.min(14, Math.max(1, Math.round(n)));
+  const sliderPos = clamp(value ?? 3);
+
+  return (
+    <div className="flex flex-col gap-2 text-xs">
+      <label className="flex flex-col gap-1">
+        <span>Times per week (1–14)</span>
         <input
           type="number"
           min={1}
           max={14}
-          value={draft.frequencyPerWeek ?? ""}
-          onChange={(e) =>
-            update({
-              frequencyPerWeek: e.target.value === "" ? undefined : Number(e.target.value)
-            })
-          }
+          value={value === undefined ? "" : value}
+          onChange={(e) => {
+            if (e.target.value === "") {
+              onChange(undefined);
+              return;
+            }
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            onChange(clamp(n));
+          }}
           placeholder="3"
           className="field"
         />
-      );
-    case "nice-weather":
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="sr-only">Adjust times per week with a slider</span>
+        <input
+          type="range"
+          min={1}
+          max={14}
+          step={1}
+          value={sliderPos}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            onChange(clamp(n));
+          }}
+          className="h-2 w-full cursor-pointer accent-accent"
+        />
+      </label>
+    </div>
+  );
+}
+
+function ConstraintBody({
+  id,
+  draft,
+  update
+}: {
+  id: ConstraintId;
+  draft: GoalDraft;
+  update: (changes: Partial<GoalDraft>) => void;
+}) {
+  switch (id) {
+    case "min-week":
       return (
-        <p className="text-xs leading-relaxed text-ink-500 dark:text-ink-300">
-          Only schedule during timemap &quot;outside&quot; windows from your weather settings (same
-          layer as the green preview on the calendar). If weather is disabled or no forecast
-          overlaps your free time, this is ignored so the goal can still land.
-        </p>
+        <DurationField
+          value={draft.minMinutesPerWeek}
+          onChange={(v) => update({ minMinutesPerWeek: v })}
+          hint="Reserved before equal share."
+          sliderMinMinutes={0}
+          sliderMaxMinutes={48 * 60}
+        />
+      );
+    case "min-day":
+      return (
+        <DurationField
+          value={draft.minMinutesPerDay}
+          onChange={(v) => update({ minMinutesPerDay: v })}
+          hint="Daily floor on scheduled days."
+          sliderMinMinutes={0}
+          sliderMaxMinutes={24 * 60}
+        />
+      );
+    case "max-week":
+      return (
+        <DurationField
+          value={draft.maxMinutesPerWeek}
+          onChange={(v) => update({ maxMinutesPerWeek: v === undefined ? undefined : Math.max(1, v) })}
+          hint="Weekly ceiling."
+          sliderMinMinutes={1}
+          sliderMaxMinutes={48 * 60}
+        />
+      );
+    case "max-day":
+      return (
+        <DurationField
+          value={draft.maxMinutesPerDay}
+          onChange={(v) => update({ maxMinutesPerDay: v === undefined ? undefined : Math.max(1, v) })}
+          hint="Daily cap so this doesn't dominate a day."
+          sliderMinMinutes={1}
+          sliderMaxMinutes={24 * 60}
+        />
+      );
+    case "share-remainder":
+      return (
+        <PercentShareField
+          value={draft.allocationSharePercent}
+          onChange={(allocationSharePercent) => update({ allocationSharePercent })}
+          hint={
+            <>
+              Share of time left after weekly mins are reserved (weights the post-floor split between
+              goals).
+            </>
+          }
+        />
+      );
+    case "frequency":
+      return (
+        <FrequencyPerWeekField
+          value={draft.frequencyPerWeek}
+          onChange={(frequencyPerWeek) => update({ frequencyPerWeek })}
+        />
       );
     case "days": {
       const pinnedDays = draft.daysOfWeek?.length
@@ -1094,134 +1111,18 @@ function ConstraintBody({
         </div>
       );
     }
-    case "energy":
+    case "nice-weather":
       return (
-        <select
-          value={draft.energyMode ?? "neutral"}
-          onChange={(e) => update({ energyMode: e.target.value as EnergyMode })}
-          className="field"
-        >
-          <option value="hyperfocus">Deep focus (morning)</option>
-          <option value="neutral">Neutral</option>
-          <option value="hyperaware">Scanning (afternoon)</option>
-        </select>
-      );
-    case "focus-affinity":
-      return (
-        <select
-          value={draft.focusAffinity ?? ""}
-          onChange={(e) =>
-            update({
-              focusAffinity:
-                e.target.value === ""
-                  ? undefined
-                  : (e.target.value as "hyperfocus" | "hyperaware" | "mixed")
-            })
-          }
-          className="field"
-        >
-          <option value="">—</option>
-          <option value="hyperfocus">Hyper focus (charges)</option>
-          <option value="hyperaware">Hyper aware (drains)</option>
-          <option value="mixed">Mixed</option>
-        </select>
-      );
-    case "energy-charge":
-      return (
-        <label className="flex flex-col gap-1 text-xs">
-          <span>0 = low, 1 = strong recharge for scheduling</span>
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={draft.energyChargeImpact ?? ""}
-            onChange={(e) => {
-              if (e.target.value === "") {
-                update({ energyChargeImpact: undefined });
-                return;
-              }
-              const n = Number(e.target.value);
-              if (!Number.isFinite(n)) return;
-              update({ energyChargeImpact: Math.min(1, Math.max(0, n)) });
-            }}
-            className="field"
-          />
-        </label>
-      );
-    case "energy-drain":
-      return (
-        <label className="flex flex-col gap-1 text-xs">
-          <span>0 = low, 1 = heavy awareness / social drain</span>
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={draft.energyDrainImpact ?? ""}
-            onChange={(e) => {
-              if (e.target.value === "") {
-                update({ energyDrainImpact: undefined });
-                return;
-              }
-              const n = Number(e.target.value);
-              if (!Number.isFinite(n)) return;
-              update({ energyDrainImpact: Math.min(1, Math.max(0, n)) });
-            }}
-            className="field"
-          />
-        </label>
-      );
-    case "special":
-      return (
-        <select
-          value={draft.specialGoalType ?? ""}
-          onChange={(e) => {
-            const nextType = (e.target.value || undefined) as SpecialGoalType | undefined;
-            update(applySpecialGoalPreset(draft, nextType));
-          }}
-          className="field"
-        >
-          <option value="">— Pick a preset —</option>
-          {SPECIAL_GOAL_PRESETS.map((preset) => (
-            <option key={preset.type} value={preset.type}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-      );
-    case "wheel":
-      return (
-        <select
-          value={draft.wheelAreaId ?? ""}
-          onChange={(e) => update({ wheelAreaId: e.target.value || undefined })}
-          className="field"
-        >
-          <option value="">—</option>
-          {wheelAreas.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      );
-    case "pillar":
-      return (
-        <select
-          value={draft.ppfPillar ?? ""}
-          onChange={(e) =>
-            update({ ppfPillar: (e.target.value || undefined) as PpfPillarKey | undefined })
-          }
-          className="field"
-        >
-          <option value="">—</option>
-          <option value="personal">Personal</option>
-          <option value="professional">Professional</option>
-          <option value="financial">Financial</option>
-        </select>
+        <p className="text-xs leading-relaxed text-ink-500 dark:text-ink-300">
+          Only schedule during timemap &quot;outside&quot; windows from your weather settings (same
+          layer as the green preview on the calendar). If weather is disabled or no forecast
+          overlaps your free time, this is ignored so the goal can still land.
+        </p>
       );
   }
 }
+
+const DURATION_SLIDER_STEP = 5;
 
 /**
  * Combined number + h/m unit toggle for any "minutes" field. Stores minutes
@@ -1231,11 +1132,17 @@ function ConstraintBody({
 function DurationField({
   value,
   onChange,
-  hint
+  hint,
+  sliderMinMinutes = 0,
+  sliderMaxMinutes = 40 * 60
 }: {
   value: number | undefined;
   onChange: (next: number | undefined) => void;
   hint?: string;
+  /** Inclusive lower bound for the scrubber (minutes). */
+  sliderMinMinutes?: number;
+  /** Inclusive upper bound for the scrubber (minutes). Values above still show in the numeric field; the thumb stays at the high end until moved. */
+  sliderMaxMinutes?: number;
 }) {
   const [unit, setUnit] = useState<"hours" | "minutes">("hours");
 
@@ -1248,8 +1155,14 @@ function DurationField({
     onChange(Math.max(0, Math.round(unit === "hours" ? n * 60 : n)));
   };
 
+  const minutes = value ?? 0;
+  const sliderThumbMinutes = Math.min(
+    sliderMaxMinutes,
+    Math.max(sliderMinMinutes, minutes)
+  );
+
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center gap-1">
         <input
           type="number"
@@ -1269,6 +1182,22 @@ function DurationField({
           ]}
         />
       </div>
+      <label className="flex flex-col gap-1">
+        <span className="sr-only">Adjust duration with a slider</span>
+        <input
+          type="range"
+          min={sliderMinMinutes}
+          max={sliderMaxMinutes}
+          step={DURATION_SLIDER_STEP}
+          value={sliderThumbMinutes}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            if (!Number.isFinite(next)) return;
+            onChange(next);
+          }}
+          className="h-2 w-full cursor-pointer accent-accent"
+        />
+      </label>
       {hint ? <span className="text-[11px] text-ink-400">{hint}</span> : null}
     </div>
   );

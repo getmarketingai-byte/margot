@@ -1,11 +1,12 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
+import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema } from "@calendar-automations/schema";
 import {
-  filterSchedulingGoals,
-  type WeeklyPlan,
-  weeklyIntentSchema
-} from "@calendar-automations/schema";
-import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+  allocateWeek,
+  buildStableUid,
+  goalOverrideSourcesFromPlan,
+  schedulingGoalsWithWeeklyRoutines
+} from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import {
   getCachedPlanWeekAllocationInputs,
@@ -78,7 +79,10 @@ export default async function PlanPage() {
   const catchUpMode = settings.allocator.catchUpMode;
   const nowMs = Date.now();
   const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
-  const schedulingGoals = filterSchedulingGoals(plan.goals);
+  const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
+  const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
+    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+  );
   const resolvedCatchUpFloors = ctx.catchUpFloors;
   const {
     busyFetch,
@@ -180,7 +184,7 @@ export default async function PlanPage() {
   );
   const gymGoalTravelOverlay = gymGoalTravelBlocksFromProposed(
     proposedForCalendar,
-    plan.goals,
+    schedulingGoals,
     settings.travel,
     settings.gym
   );
@@ -254,7 +258,7 @@ export default async function PlanPage() {
         left={
           <div className="flex flex-col gap-5">
             <PlanClient
-              initialGoals={schedulingGoals}
+              initialGoals={perfectWeekAuthoringGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
               weekCapacityFromNowMinutes={allocation.metrics.utilisation.weekCapacityFromNowMinutes}
               remainingWeekMinutes={allocation.metrics.utilisation.availableMinutes}

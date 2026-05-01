@@ -37,6 +37,7 @@ import type {
 } from "@calendar-automations/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { patchGoal } from "../plan/actions";
+import { BatteryCurveGoalsPanel } from "./battery-curve-goals-panel";
 import { FrameworkRegistryPanel } from "./framework-registry-panel";
 
 const HP6_LABELS: Record<Hp6HabitKey, string> = {
@@ -202,6 +203,8 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
       >
         {boards.length === 0 ? <NoFrameworksForTaggingCallout /> : null}
       </FrameworkRegistryPanel>
+
+      <BatteryCurveGoalsPanel goals={goals} onPatch={handlePatch} />
 
       <PlacementPriorityCard
         initialOrder={initialPlacementOrder}

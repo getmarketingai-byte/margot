@@ -103,7 +103,7 @@ const PPF_LABELS: Record<PpfPillarKey, string> = {
 const SPECIAL_GOAL_LABELS: Record<SpecialGoalType, string> = {
   "morning-routine": "Morning routine",
   "shutdown-routine": "Shutdown routine",
-  gym: "Gym",
+  gym: "Physical activity",
   errands: "Errands",
   "inverted-timemap": "Calendar time map"
 };
@@ -221,42 +221,6 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
 export function summaryChipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => string): Chip[] {
   return chipsForGoal(goal, wheelLabel).filter((c) => SUMMARY_ROW_CHIP_KEYS.has(c.key));
 }
-
-export const SPECIAL_GOAL_PRESETS: ReadonlyArray<{
-  type: SpecialGoalType;
-  label: string;
-  title: string;
-  description: string;
-  draft: Pick<
-    WeeklyGoal,
-    "specialGoalType" | "anchor" | "earliestHour" | "latestHour" | "energyMode"
-  >;
-}> = [
-  {
-    type: "gym",
-    label: "Gym",
-    title: "Gym",
-    description: "Run around your preferred training windows.",
-    draft: {
-      specialGoalType: "gym",
-      anchor: "gym-preferred-window",
-      earliestHour: 6,
-      latestHour: 20,
-      energyMode: "hyperfocus"
-    }
-  },
-  {
-    type: "errands",
-    label: "Errands",
-    title: "Errands",
-    description: "Run around drive events and transitions.",
-    draft: {
-      specialGoalType: "errands",
-      anchor: "around-drive-events",
-      energyMode: "hyperaware"
-    }
-  }
-];
 
 /**
  * Live time-budget chip math, mirroring the allocator at a high level for the

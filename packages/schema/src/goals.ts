@@ -151,6 +151,20 @@ export const weeklyGoalSchema = z.object({
   /** Free-form anchor hint, e.g. "after-work", "morning". Display-only for v1. */
   anchor: z.string().optional(),
   /**
+   * Optional clock targets (local wall time) used when scoring gaps and when
+   * placing the block inside a wide free window. Used by routines-driven blocks
+   * (`specialGoalType: "gym"` or `"errands"`) from user settings.
+   */
+  placementIdealClockTimes: z
+    .array(
+      z.object({
+        hour: z.number().int().min(0).max(23),
+        minute: z.number().int().min(0).max(59)
+      })
+    )
+    .max(8)
+    .optional(),
+  /**
    * Optional semantic type used by the UI for routine presets that map to
    * existing timemap/sleep/travel patterns.
    */

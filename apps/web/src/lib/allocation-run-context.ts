@@ -9,7 +9,13 @@ import "server-only";
 import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
 import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent } from "@calendar-automations/planner";
-import { allocateWeek, buildStableUid, computeDayCalendarDrainScores, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+import {
+  allocateWeek,
+  buildStableUid,
+  computeDayCalendarDrainScores,
+  goalOverrideSourcesFromPlan,
+  schedulingGoalsWithWeeklyRoutines
+} from "@calendar-automations/planner";
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { isoCalendarDay, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
@@ -174,7 +180,10 @@ export async function loadPlanWeekAllocationInputs(options: {
   const todayIdx = weekDates.indexOf(todayIso);
   const dayIndex = todayIdx >= 0 ? todayIdx : 6;
   const nextWeekAnchor = isoCalendarDay(nextWeekStartMs, tz);
-  const schedulingGoals = filterSchedulingGoals(plan.goals);
+  const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
+  const userSchedulingGoalsNoRoutines = filterSchedulingGoals(plan.goals).filter(
+    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+  );
 
   const weekStartIso = isoCalendarDay(weekStartMs, tz);
   const weeklyReview = await loadWeeklyReview(userId, weekStartIso, tz);
@@ -211,7 +220,7 @@ export async function loadPlanWeekAllocationInputs(options: {
     catchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
     // Keep unconstrained plans truly "even": automated catch-up should not
     // turn all-but-one equal-share goals into floor-only rows.
-    const allGoalsUnconstrained = schedulingGoals.every((g) => {
+    const allGoalsUnconstrained = userSchedulingGoalsNoRoutines.every((g) => {
       const norm = normaliseGoalTime(g);
       const onlyDailyMinimum =
         norm.minMinutesPerDay !== undefined &&
