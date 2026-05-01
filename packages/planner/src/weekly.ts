@@ -69,7 +69,7 @@ import {
   normaliseGoalTime
 } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
-import { collectBusyIntervals, freeGaps } from "./intervals";
+import { collectBusyIntervals, freeGaps, mergeIntervals } from "./intervals";
 import {
   physicalActivityWeeklyGoalFromGymSettings,
   weeklyErrandsGoalFromSettings
@@ -170,11 +170,17 @@ export interface WeekMetrics {
   hp6Gaps: Array<{ habit: Hp6HabitKey; scheduledTouches: number; minTouches: number }>;
   /**
    * Capacity vs placement outcome.
-   * - `weekCapacityMinutes`: free gap total after segments, before Pass 3 (Pass 1+2 denominator, full week).
+   * - `weekCapacityMinutes`: schedulable gap total (per-day busy merged, incl. multi-day clips), after segments, before Pass 3.
    * - `weekCapacityFromNowMinutes`: same window clipped to `nowMs` before Pass 3.
    * - `availableMinutes`: free gaps left after placement, full week (no now-clip).
    * - `availableFromNowMinutes`: free gaps left after placement, clipped to `nowMs` when set.
    * - `scheduledMinutes`: sum of non-segment goal block minutes (PPF mix basis).
+   * - `grossWeekMinutes`: length of the allocation window (usually 7×24h).
+   * - `busyWeekMinutes`: time inside the window counted as busy (merged calendar
+   *   + system blocks in `allocateWeek`’s `busy` input) before consistency segments.
+   * - `consistencyReservedWeekMinutes`: minutes removed from open gaps by
+   *   non-negotiable consistency segments (before Pass 3).
+   * - `busyTrueEventCount`: `busy` events with `busy: true` in the merged feed.
    */
   utilisation: {
     weekCapacityMinutes: number;
@@ -182,6 +188,10 @@ export interface WeekMetrics {
     availableMinutes: number;
     availableFromNowMinutes: number;
     scheduledMinutes: number;
+    grossWeekMinutes: number;
+    busyWeekMinutes: number;
+    consistencyReservedWeekMinutes: number;
+    busyTrueEventCount: number;
   };
   /**
    * Set when goal floors exceed the available free time. UI surfaces this so
@@ -320,9 +330,18 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   for (let d = 0; d < 7; d++) {
     const dayStart = weekStartMs + d * DAY_MS;
     const dayEnd = dayStart + DAY_MS;
-    const dayBusy = collectBusyIntervals(busy, dayStart, dayEnd);
+    const dayBusyRaw = collectBusyIntervals(busy, dayStart, dayEnd);
+    const dayBusy = mergeIntervals(dayBusyRaw);
     days.push({ startMs: dayStart, endMs: dayEnd, gaps: freeGaps(dayStart, dayEnd, dayBusy) });
   }
+
+  const grossWeekMinutes = Math.floor((weekEndMs - weekStartMs) / MS_PER_MIN);
+  const minutesOpenBeforeConsistency = days.reduce(
+    (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFull(g), 0),
+    0
+  );
+  const busyWeekMinutes = Math.max(0, grossWeekMinutes - minutesOpenBeforeConsistency);
+  const busyTrueEventCount = busy.filter((e) => e.busy).length;
 
   const blocks: AllocatedBlock[] = [];
 
@@ -370,6 +389,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const weekCapacityMinutes = days.reduce(
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFull(g), 0),
     0
+  );
+  const consistencyReservedWeekMinutes = Math.max(
+    0,
+    minutesOpenBeforeConsistency - weekCapacityMinutes
   );
   const weekCapacityFromNowMinutes = days.reduce(
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFromNow(g, allocationNowMs), 0),
@@ -542,7 +565,13 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     goalOverrides,
     goalOverrideSources,
     weekCapacityMinutes,
-    weekCapacityFromNowMinutes
+    weekCapacityFromNowMinutes,
+    {
+      grossWeekMinutes,
+      busyWeekMinutes,
+      consistencyReservedWeekMinutes,
+      busyTrueEventCount
+    }
   );
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
@@ -2159,7 +2188,13 @@ function computeMetrics(
   goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
   goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
   weekCapacityMinutes: number,
-  weekCapacityFromNowMinutes: number
+  weekCapacityFromNowMinutes: number,
+  utilisationDiagnostics: {
+    grossWeekMinutes: number;
+    busyWeekMinutes: number;
+    consistencyReservedWeekMinutes: number;
+    busyTrueEventCount: number;
+  }
 ): WeekMetrics {
   const wheel = settings.wheel;
   const ppf = settings.ppf;
@@ -2248,7 +2283,11 @@ function computeMetrics(
       weekCapacityFromNowMinutes,
       availableMinutes,
       availableFromNowMinutes,
-      scheduledMinutes: totalScheduled
+      scheduledMinutes: totalScheduled,
+      grossWeekMinutes: utilisationDiagnostics.grossWeekMinutes,
+      busyWeekMinutes: utilisationDiagnostics.busyWeekMinutes,
+      consistencyReservedWeekMinutes: utilisationDiagnostics.consistencyReservedWeekMinutes,
+      busyTrueEventCount: utilisationDiagnostics.busyTrueEventCount
     },
     notScheduled: []
   };

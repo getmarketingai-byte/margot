@@ -243,7 +243,8 @@ export function summaryChipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) 
  * UI. The real allocator runs server-side; this client-side approximation
  * tells the user how many hours each unconstrained goal will get.
  *
- * - `freeMinutes`: full-week free gap capacity after segments (`weekCapacityMinutes`), same denominator as Pass 1+2.
+ * - `freeMinutes`: full-week **available** schedulable minutes after segments
+ *   (`weekCapacityMinutes` — calendar busy, sleep, travel, etc.), Pass 1+2 denominator.
  * - After weekly minimums are reserved, remaining minutes R are split across
  *   goals that are not already capped and are eligible for remainder share:
  *   no weekly floor, or explicit `allocationSharePercent`. `%` rows target a

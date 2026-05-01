@@ -34,7 +34,7 @@ import {
 } from "@/lib/review-rollup";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
-import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
+import { sleepIntervalsForAllocation } from "@/lib/week-blocks";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { WeeklyReviewClient } from "./weekly-review-client";
 
@@ -108,9 +108,7 @@ export default async function WeekReviewPage() {
     busy,
     overrides: overridesFromPlan(plan)
   });
-  const sleepBlockMs = systemBlocks
-    .filter((b) => b.system === "sleep")
-    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+  const sleepBlockMs = sleepIntervalsForAllocation(systemBlocks, busy);
   const weatherTimemapEvents = await buildWeatherTimemapEvents({
     userId,
     windowStartMs: weekStartMs,
@@ -148,7 +146,7 @@ export default async function WeekReviewPage() {
       catchUpFloors: resolvedAllocatorCatchUpFloors,
       weekAnchorDate: weekStart,
       goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-      sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+      sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
     });
   } else {
     const baselineAllocation = allocateWeek({
@@ -162,7 +160,7 @@ export default async function WeekReviewPage() {
       catchUpFloors: {},
       weekAnchorDate: weekStart,
       goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-      sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+      sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
     });
     const effectiveTargetBaseline: Record<string, number> = {};
     for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
@@ -187,7 +185,7 @@ export default async function WeekReviewPage() {
       catchUpFloors: resolvedAllocatorCatchUpFloors,
       weekAnchorDate: weekStart,
       goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-      sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+      sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
     });
   }
 

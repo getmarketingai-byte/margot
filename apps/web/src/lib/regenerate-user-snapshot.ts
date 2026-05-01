@@ -21,7 +21,7 @@ import { mergeOrphanGoalOverrideBlocks } from "./merge-orphan-goal-override-bloc
 import { saveSnapshot } from "./snapshots";
 import {
   gymGoalTravelBlocksFromProposed,
-  sleepIntervalsFromSystemBlocks,
+  sleepIntervalsForAllocation,
   type SystemBlock
 } from "./week-blocks";
 
@@ -149,7 +149,7 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
         weekAnchorDate: plan.weekStart,
         goalOverrideSources: goalOverrideSourcesFromPlan(plan),
         nowMs,
-        sleepIntervals: sleepIntervalsFromSystemBlocks(ctx.systemBlocks)
+        sleepIntervals: sleepIntervalsForAllocation(ctx.systemBlocks, ctx.busy)
       }).blocks,
       plan,
       [{ weekStartMs: ctx.weekStartMs, weekEndMs: ctx.weekEndMs }]

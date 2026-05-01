@@ -40,7 +40,7 @@ import {
 } from "@/lib/review-rollup";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
-import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
+import { sleepIntervalsForAllocation } from "@/lib/week-blocks";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import { DailyReviewClient } from "./daily-review-client";
 import { ReviewDatePicker } from "./date-picker";
@@ -156,9 +156,7 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           busy,
           overrides: overridesFromPlan(plan)
         });
-        const sleepBlockMs = systemBlocks
-          .filter((b) => b.system === "sleep")
-          .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+        const sleepBlockMs = sleepIntervalsForAllocation(systemBlocks, busy);
         const weatherTimemapEvents = await buildWeatherTimemapEvents({
           userId,
           windowStartMs: weekStartMs,
@@ -193,7 +191,7 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
             catchUpFloors: weeklyReview.catchUpAdjustments ?? {},
             weekAnchorDate: localMondayIso(tz),
             goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-            sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+            sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
           });
         } else {
           const baselineAllocation = allocateWeek({
@@ -207,7 +205,7 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
             catchUpFloors: {},
             weekAnchorDate: localMondayIso(tz),
             goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-            sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+            sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
           });
           const weekDates = isoDatesForWeek(weekStartMs, tz);
           const dailyReviewsRange = await loadDailyReviewsInRange(
@@ -245,7 +243,7 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
             catchUpFloors,
             weekAnchorDate: localMondayIso(tz),
             goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-            sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+            sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
           });
         }
         const titleForSnapshot = (t: string) => {

@@ -54,8 +54,8 @@ interface GoalPaceInfo {
 interface PlanClientProps {
   initialGoals: WeeklyGoal[];
   /**
-   * Full-week free gap total after routines/segments (Pass 1+2 denominator).
-   * See `WeekMetrics.utilisation.weekCapacityMinutes`.
+   * Full-week schedulable gap total (168h − busy & system blocks in each day, after
+   * consistency segments). Same as `WeekMetrics.utilisation.weekCapacityMinutes`.
    */
   freeMinutesThisWeek: number;
   /** Optional: free capacity from `now` before placement (planning horizon). */
@@ -64,6 +64,13 @@ interface PlanClientProps {
   remainingWeekMinutes?: number;
   /** Optional: remaining free minutes from now after placement. */
   remainingFromNowMinutes?: number;
+  /** Server-derived: how the week window splits into busy vs open vs consistency. */
+  capacityBreakdown?: {
+    grossWeekMinutes: number;
+    busyWeekMinutes: number;
+    consistencyReservedWeekMinutes: number;
+    busyTrueEventCount: number;
+  };
   wheelAreas: WheelOption[];
   scheduledByGoal: Record<string, number>;
   effectiveTargetByGoal: Record<string, number>;
@@ -110,6 +117,7 @@ function ensureGoalShape(input: GoalInput): GoalInput {
 export function PlanClient({
   initialGoals,
   freeMinutesThisWeek,
+  capacityBreakdown,
   weekCapacityFromNowMinutes,
   remainingWeekMinutes,
   remainingFromNowMinutes,
@@ -246,6 +254,7 @@ export function PlanClient({
     <div className="flex flex-col gap-5">
       <BudgetChip
         summary={summary}
+        capacityBreakdown={capacityBreakdown}
         weekCapacityFromNowMinutes={weekCapacityFromNowMinutes}
         remainingWeekMinutes={remainingWeekMinutes}
         remainingFromNowMinutes={remainingFromNowMinutes}
@@ -289,11 +298,13 @@ export function PlanClient({
 
 function BudgetChip({
   summary,
+  capacityBreakdown,
   weekCapacityFromNowMinutes,
   remainingWeekMinutes,
   remainingFromNowMinutes
 }: {
   summary: ReturnType<typeof summariseAllocation>;
+  capacityBreakdown?: PlanClientProps["capacityBreakdown"];
   weekCapacityFromNowMinutes?: number;
   remainingWeekMinutes?: number;
   remainingFromNowMinutes?: number;
@@ -302,7 +313,7 @@ function BudgetChip({
     return (
       <div className="card flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="text-xs uppercase tracking-wide text-ink-400">Free time this week</div>
+          <div className="text-xs uppercase tracking-wide text-ink-400">Available time this week</div>
           <div className="text-lg font-semibold">{formatMinutes(summary.freeMinutes)}</div>
         </div>
         <div className="text-sm text-ink-400">Add a goal to start filling it.</div>
@@ -313,7 +324,7 @@ function BudgetChip({
   return (
     <div className="card flex flex-col gap-3">
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Stat label="Total free (week)" value={formatMinutes(summary.freeMinutes)} />
+      <Stat label="Available time (week)" value={formatMinutes(summary.freeMinutes)} />
       <Stat
         label={
           remainingFromNowMinutes !== undefined
@@ -360,6 +371,18 @@ function BudgetChip({
           Sum of &quot;% of week&quot; constraints is {summary.allocationSharePercentSum}% (over 100%).
           The planner scales these down proportionally so the week still balances; lower some
           percentages so targets match what you intend.
+        </p>
+      ) : null}
+      {capacityBreakdown ? (
+        <p className="text-xs text-ink-500 dark:text-ink-300" aria-label="Capacity breakdown">
+          Week window {formatMinutes(capacityBreakdown.grossWeekMinutes)} · Blocked (calendar + system,
+          merged) {formatMinutes(capacityBreakdown.busyWeekMinutes)}
+          {capacityBreakdown.consistencyReservedWeekMinutes > 0
+            ? ` · Consistency segments ${formatMinutes(capacityBreakdown.consistencyReservedWeekMinutes)}`
+            : ""}
+          {" · "}
+          <span className="tabular-nums">{capacityBreakdown.busyTrueEventCount}</span> busy-tagged
+          intervals in the feed
         </p>
       ) : null}
     </div>

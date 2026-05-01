@@ -59,8 +59,10 @@ export function totalMinutes(intervals: readonly Interval[]): number {
 
 /**
  * Filters busy events to those that count for planning. Mirrors
- * `_timeMapCollectBusyIntervals`'s rules: skip all-day, skip multi-day, treat
- * `busy: false` as free.
+ * `_timeMapCollectBusyIntervals`'s rules: treat `busy: false` as free; clip each
+ * event to `[windowStart, windowEnd)` first so multi-day / long events still
+ * subtract within the window. Drops only the clipped portion if it is longer
+ * than 24h (pathological); single-day all-day blocks (≈24h in the window) stay.
  */
 export function collectBusyIntervals(
   events: readonly BusyEvent[],
@@ -71,10 +73,11 @@ export function collectBusyIntervals(
   const out: Interval[] = [];
   for (const ev of events) {
     if (!ev.busy) continue;
-    const dur = ev.endMs - ev.startMs;
-    if (dur >= multiDayThresholdMs) continue;
     const clipped = clip(ev, windowStartMs, windowEndMs);
-    if (clipped) out.push(clipped);
+    if (!clipped) continue;
+    const dur = clipped.endMs - clipped.startMs;
+    if (dur > multiDayThresholdMs) continue;
+    out.push(clipped);
   }
   out.sort((a, b) => a.startMs - b.startMs);
   return out;

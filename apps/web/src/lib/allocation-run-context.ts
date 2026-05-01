@@ -19,7 +19,7 @@ import {
 import { fetchGoogleBusy } from "@/lib/google-calendar";
 import { isoCalendarDay, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
-import { computeSystemBlocks, sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
+import { computeSystemBlocks, sleepIntervalsForAllocation } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
@@ -141,9 +141,10 @@ export async function loadPlanWeekAllocationInputs(options: {
     settings.timemap
   );
 
-  const sleepBlockMs = [...systemBlocks, ...nextWeekSystemBlocks]
-    .filter((b) => b.system === "sleep")
-    .map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
+  const sleepBlockMs = sleepIntervalsForAllocation(
+    [...systemBlocks, ...nextWeekSystemBlocks],
+    [...busy, ...busyNextWeek]
+  );
 
   const weatherWindowEnd = Math.max(fetchEndMs, nextWeekEndMs);
   const weatherTimemapEvents = await buildWeatherTimemapEvents({
@@ -204,7 +205,7 @@ export async function loadPlanWeekAllocationInputs(options: {
       catchUpFloors: {},
       weekAnchorDate: plan.weekStart,
       goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-      sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+      sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
     });
     const effectiveTargetBaseline: Record<string, number> = {};
     for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {

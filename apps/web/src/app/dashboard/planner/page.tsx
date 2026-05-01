@@ -21,7 +21,7 @@ import {
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
-import { sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
+import { sleepIntervalsForAllocation } from "@/lib/week-blocks";
 import { updateWeeklyIntent } from "../plan/actions";
 import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ConstraintsSection } from "./constraints-section";
@@ -126,7 +126,7 @@ export default async function PlannerHubPage() {
     weekAnchorDate: plan.weekStart,
     goalOverrideSources: goalOverrideSourcesFromPlan(plan),
     nowMs,
-    sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+    sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
   });
   const tuningHints = allocation.metrics.personalEnergyPlan?.tuningHints ?? [];
 

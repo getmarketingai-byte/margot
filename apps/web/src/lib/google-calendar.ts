@@ -73,9 +73,12 @@ export async function listGoogleCalendars(userId: string): Promise<
 
 /**
  * Fetch busy events for the given window from each selected calendar source.
+ * Rows titled like `[Sleep][Actual]` are ordinary busy events here; week-blocks
+ * treats them as logged sleep so modeled sleep is not stacked on top.
  * Free events (transparency: "transparent") are surfaced with `busy: false`;
- * the planner's `collectBusyIntervals` filters them out. All-day and multi-day
- * events are returned as-is and filtered by the same helper.
+ * the planner's `collectBusyIntervals` filters them out. Long events are
+ * clipped to each day window (multi-day trips still block each day) unless the
+ * clipped slice exceeds 24h.
  */
 export async function fetchGoogleBusy(
   userId: string,

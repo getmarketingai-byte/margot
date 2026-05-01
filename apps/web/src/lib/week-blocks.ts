@@ -25,9 +25,10 @@
 import {
   formatSleepBlockTitle,
   gymTravelPadMinutesForGoal,
+  mergeIntervals,
   placeSleepBlock
 } from "@calendar-automations/planner";
-import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
+import type { AllocatedBlock, BusyEvent, Interval } from "@calendar-automations/planner";
 import type {
   GymSettings,
   SleepSettings,
@@ -41,6 +42,43 @@ import { legKey, type LegResolver, type ResolveRequest } from "./routing";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
+/** Logged sleep rows must overlap the night window by at least this much to suppress modeled sleep. */
+const ACTUAL_SLEEP_NIGHT_OVERLAP_MS = 30 * MINUTE_MS;
+
+/**
+ * Calendar rows that log real sleep (e.g. `[Sleep][Actual]`) — busy intervals only.
+ * Case-insensitive; requires both `[sleep]` and `[actual]` substrings in the title.
+ */
+export function isLoggedActualSleepTitle(title: string): boolean {
+  const n = (title || "").trim().toLowerCase();
+  return n.includes("[sleep]") && n.includes("[actual]");
+}
+
+function loggedActualSleepIntervalsFromBusy(calendarBusy: readonly BusyEvent[]): Interval[] {
+  const raw: Interval[] = [];
+  for (const ev of calendarBusy) {
+    if (!ev.busy) continue;
+    if (!isLoggedActualSleepTitle(ev.title)) continue;
+    if (ev.endMs <= ev.startMs) continue;
+    raw.push({ startMs: ev.startMs, endMs: ev.endMs });
+  }
+  return mergeIntervals(raw);
+}
+
+function nightCoversLoggedActualSleep(
+  nightStartMs: number,
+  nightEndMs: number,
+  busy: readonly BusyEvent[]
+): boolean {
+  for (const ev of busy) {
+    if (!ev.busy) continue;
+    if (!isLoggedActualSleepTitle(ev.title)) continue;
+    const overlapStart = Math.max(ev.startMs, nightStartMs);
+    const overlapEnd = Math.min(ev.endMs, nightEndMs);
+    if (overlapEnd - overlapStart >= ACTUAL_SLEEP_NIGHT_OVERLAP_MS) return true;
+  }
+  return false;
+}
 
 export interface SystemBlock extends BusyEvent {
   /** Distinguishes which subsystem produced the block (for UI styling). */
@@ -403,9 +441,22 @@ export interface SleepOverride {
  *      buffer has elapsed.
  *   3. Events whose title matches `sleep.ignoreEventTitles` (e.g. "Gym")
  *      do not block sleep.
- *   4. Nights whose `targetEnd` is in the past are skipped.
+ *   4. Sleep is still placed for every night in the week window even when that
+ *      night's wake (`targetEnd`) is already past. Those intervals stay in
+ *      `busy` so full-week capacity metrics match intent (168h minus sleep,
+ *      etc.). `allocateWeek` already avoids auto-packing goals into the past
+ *      via `nowMs`; skipping nights here only inflated "available" time.
  *   5. A user-supplied override for night `d` is returned verbatim,
  *      bypassing the gap search entirely.
+ *   6. When a busy calendar row title matches {@link isLoggedActualSleepTitle}
+ *      (logged real sleep) and overlaps that night by ≥30m, modeled sleep is
+ *      omitted — the calendar interval alone reserves time (no duplicate stack).
+ *   7. When `timemap` is passed: enabled **morning routine** minutes are
+ *      subtracted from outbound drive leave times when computing the wake
+ *      target (sleep ends, then morning, then drive). Enabled **shutdown**
+ *      minutes extend busy `endMs` for sleep gap search so sleep cannot start
+ *      until after shutdown following calendar events (drive-home already
+ *      stacks `bufferAfterDriveHome` + shutdown in one bound).
  */
 export function computeSleepBlocks(
   weekStartMs: number,
@@ -413,8 +464,10 @@ export function computeSleepBlocks(
   sleep: SleepSettings,
   timezone: string,
   nowMs: number = Date.now(),
-  overrides: ReadonlyMap<number, SleepOverride> = new Map()
+  overrides: ReadonlyMap<number, SleepOverride> = new Map(),
+  timemap?: TimemapSettings
 ): SystemBlock[] {
+  void nowMs;
   const out: SystemBlock[] = [];
   const ignoreTitles = (sleep.ignoreEventTitles ?? []).map((t) => t.toLowerCase());
 
@@ -443,6 +496,10 @@ export function computeSleepBlocks(
   const wakeBufferMs = sleep.bufferBeforeLeaveMinutes * MINUTE_MS;
   const homeBufferMs = sleep.bufferAfterDriveHomeMinutes * MINUTE_MS;
   const roundMin = sleep.travelBufferRoundMinutes;
+  const morningPadMs =
+    timemap?.morningRoutine.enabled === true ? timemap.morningRoutine.minutes * MINUTE_MS : 0;
+  const shutdownPadMs =
+    timemap?.shutdownRoutine.enabled === true ? timemap.shutdownRoutine.minutes * MINUTE_MS : 0;
 
   function appendSleepForNight(
     nightIndexLabel: string,
@@ -461,24 +518,44 @@ export function computeSleepBlocks(
     const wakeDayEnd = wakeDayStart + DAY_MS;
     for (const drive of drivePre) {
       if (drive.startMs < wakeDayStart || drive.startMs >= wakeDayEnd) continue;
-      if (drive.startMs >= idealWakeMs) continue;
-      const wakeFromDrive = roundLocalMs(drive.startMs - wakeBufferMs, roundMin, timezone);
+      // Strict `>` so a drive starting exactly at ideal wake still pulls the
+      // wake target earlier (buffer / morning routine need time before `startMs`).
+      if (drive.startMs > idealWakeMs) continue;
+      const wakeFromDrive = roundLocalMs(
+        drive.startMs - wakeBufferMs - morningPadMs,
+        roundMin,
+        timezone
+      );
       if (wakeFromDrive < targetEndMs) targetEndMs = wakeFromDrive;
     }
 
-    if (!override && targetEndMs <= nowMs) return;
+    if (
+      !override &&
+      nightCoversLoggedActualSleep(nightStartMs, nightEndMs, busy)
+    ) {
+      return;
+    }
 
     const sleepBusy: BusyEvent[] = [];
     for (const ev of busy) {
       if (ev.endMs <= nightStartMs || ev.startMs >= nightEndMs) continue;
       const titleLower = (ev.title || "").toLowerCase();
       if (ignoreTitles.includes(titleLower)) continue;
-      sleepBusy.push(ev);
+      // Shutdown precedes sleep; internal travel blocks are shaped in the
+      // drive-home pass below (home buffer + optional shutdown).
+      const padShutdown = shutdownPadMs > 0 && ev.source !== "internal";
+      sleepBusy.push(
+        padShutdown ? { ...ev, endMs: ev.endMs + shutdownPadMs } : ev
+      );
     }
 
     for (const drive of driveHome) {
       if (drive.endMs <= nightStartMs || drive.startMs >= nightEndMs) continue;
-      const extendedEnd = roundLocalMs(drive.endMs + homeBufferMs, roundMin, timezone);
+      const extendedEnd = roundLocalMs(
+        drive.endMs + homeBufferMs + shutdownPadMs,
+        roundMin,
+        timezone
+      );
       sleepBusy.push({ ...drive, endMs: extendedEnd });
     }
 
@@ -594,8 +671,7 @@ export function computeRoutineBlocks(
 
   // Routine indices are tied to the sleep block's night index (extracted
   // from the sleepBlock sourceId pattern `sleep-${d}-...`). This keeps
-  // override keys stable across re-renders even if e.g. a night was
-  // skipped (past-night) earlier in the list.
+  // override keys stable across re-renders.
   for (const s of sleepBlocks) {
     if (s.system !== "sleep") continue;
     if (!s.override) continue; // split halves don't get routines wrapping them
@@ -716,6 +792,21 @@ export function sleepIntervalsFromSystemBlocks(
   return blocks.filter((b) => b.system === "sleep").map((b) => ({ startMs: b.startMs, endMs: b.endMs }));
 }
 
+/**
+ * Merges modeled sleep (`systemBlocks`) with calendar `[Sleep][Actual]` busy rows
+ * so pin overlap checks and weather sleep clipping match what blocks the week.
+ */
+export function sleepIntervalsForAllocation(
+  systemBlocks: readonly Pick<SystemBlock, "system" | "startMs" | "endMs">[],
+  calendarBusy: readonly BusyEvent[]
+): Interval[] {
+  const fromSystem = sleepIntervalsFromSystemBlocks(systemBlocks);
+  const fromCal = loggedActualSleepIntervalsFromBusy(calendarBusy);
+  if (fromCal.length === 0) return fromSystem;
+  if (fromSystem.length === 0) return fromCal;
+  return mergeIntervals([...fromSystem, ...fromCal]);
+}
+
 /* ─────────────────────────── Combined entry point ───────────────────────── */
 
 export interface SystemBlocksOverrides {
@@ -731,7 +822,10 @@ export interface SystemBlocksOverrides {
  *   1. Travel blocks are computed against the original busy stream, with
  *      the resolver providing real durations where available.
  *   2. Sleep is placed against busy + travel so it respects drive-home
- *      wind-down and gets pulled earlier by outbound drives. User
+ *      wind-down and gets pulled earlier by outbound drives. When
+ *      `timemap` is present, morning minutes shrink the wake target before
+ *      outbound drives and shutdown minutes reserve time after calendar
+ *      events (and after drive-home buffer) before sleep may start. User
  *      overrides (per-night) bypass the gap search.
  *   3. Morning / shutdown routines are anchored on the placed sleep
  *      blocks; user overrides (per routine) replace the computed time.
@@ -756,7 +850,8 @@ export async function computeSystemBlocks(
     sleep,
     timezone,
     nowMs,
-    overrides.sleep
+    overrides.sleep,
+    timemap
   );
   const routineBlocks = timemap
     ? computeRoutineBlocks(sleepBlocks, timemap, weekStartMs, undefined, overrides.routine)

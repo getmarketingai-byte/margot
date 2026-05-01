@@ -1579,6 +1579,41 @@ describe("allocateWeek", () => {
     expect(result.metrics.utilisation.availableFromNowMinutes).toBe(60 * 60);
   });
 
+  it("treats multi-day calendar busy as blocking each ISO day (was dropped before clipping)", () => {
+    const weekStartIso = "2026-04-27";
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const we = ws + 7 * DAY_MS;
+    const baseline = allocateWeek({
+      plan: { id: "p", weekStart: weekStartIso, timezone: "UTC", goals: [] },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: we,
+      weekAnchorDate: weekStartIso
+    });
+    const blocked = allocateWeek({
+      plan: { id: "p", weekStart: weekStartIso, timezone: "UTC", goals: [] },
+      busy: [
+        {
+          sourceId: "vac",
+          title: "Away",
+          startMs: ws - 2 * DAY_MS,
+          endMs: we + 2 * DAY_MS,
+          busy: true,
+          source: "google"
+        }
+      ],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: we,
+      weekAnchorDate: weekStartIso
+    });
+    expect(baseline.metrics.utilisation.weekCapacityMinutes).toBe(7 * 24 * 60);
+    expect(baseline.metrics.utilisation.busyWeekMinutes).toBe(0);
+    expect(blocked.metrics.utilisation.weekCapacityMinutes).toBeLessThan(4 * 60);
+    expect(blocked.metrics.utilisation.busyWeekMinutes).toBeGreaterThan(7 * 24 * 60 - 5);
+  });
+
   it("buildGoalDragKey scopes overrides by week anchor and slot", () => {
     expect(buildGoalDragKey("goal-id", "2026-05-04", 0)).toBe("goal:2026-05-04:0:goal-id");
     expect(buildGoalDragKey("a:b", "2026-04-27", 3)).toBe("goal:2026-04-27:3:a:b");

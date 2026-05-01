@@ -16,7 +16,7 @@ import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
-import { gymGoalTravelBlocksFromProposed, sleepIntervalsFromSystemBlocks } from "@/lib/week-blocks";
+import { gymGoalTravelBlocksFromProposed, sleepIntervalsForAllocation } from "@/lib/week-blocks";
 import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
@@ -117,7 +117,7 @@ export default async function PlanPage() {
     weekAnchorDate: plan.weekStart,
     goalOverrideSources: goalOverrideSourcesFromPlan(plan),
     nowMs,
-    sleepIntervals: sleepIntervalsFromSystemBlocks(systemBlocks)
+    sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
   });
 
   const allocationNextWeek = allocateWeek({
@@ -132,7 +132,7 @@ export default async function PlanPage() {
     weekAnchorDate: nextWeekAnchor,
     goalOverrideSources: goalOverrideSourcesFromPlan(plan),
     nowMs,
-    sleepIntervals: sleepIntervalsFromSystemBlocks(nextWeekSystemBlocks)
+    sleepIntervals: sleepIntervalsForAllocation(nextWeekSystemBlocks, busyNextWeek)
   });
 
   const busyForCalendar = [...busy, ...busyNextWeek];
@@ -260,6 +260,13 @@ export default async function PlanPage() {
             <PlanClient
               initialGoals={perfectWeekAuthoringGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
+              capacityBreakdown={{
+                grossWeekMinutes: allocation.metrics.utilisation.grossWeekMinutes,
+                busyWeekMinutes: allocation.metrics.utilisation.busyWeekMinutes,
+                consistencyReservedWeekMinutes:
+                  allocation.metrics.utilisation.consistencyReservedWeekMinutes,
+                busyTrueEventCount: allocation.metrics.utilisation.busyTrueEventCount
+              }}
               weekCapacityFromNowMinutes={allocation.metrics.utilisation.weekCapacityFromNowMinutes}
               remainingWeekMinutes={allocation.metrics.utilisation.availableMinutes}
               remainingFromNowMinutes={allocation.metrics.utilisation.availableFromNowMinutes}

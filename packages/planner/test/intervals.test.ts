@@ -39,13 +39,30 @@ describe("freeGaps", () => {
 describe("collectBusyIntervals", () => {
   const window = { start: h(0), end: h(24) };
 
-  it("excludes free events and multi-day events", () => {
+  it("clips long events to the window and excludes transparent events", () => {
     const events: BusyEvent[] = [
       { sourceId: "a", title: "Meeting", startMs: h(9), endMs: h(10), busy: true, source: "google" },
       { sourceId: "b", title: "OOO", startMs: h(0), endMs: h(48), busy: true, source: "google" },
       { sourceId: "c", title: "Tentative", startMs: h(11), endMs: h(12), busy: false, source: "google" }
     ];
     const out = collectBusyIntervals(events, window.start, window.end);
-    expect(out).toEqual([{ startMs: h(9), endMs: h(10) }]);
+    const merged = mergeIntervals(out);
+    expect(merged).toEqual([{ startMs: h(0), endMs: h(24) }]);
+  });
+
+  it("drops a clipped busy slice still longer than 24h (pathological window)", () => {
+    const w0 = 0;
+    const wEnd = 40 * 60 * 60 * 1000;
+    const events: BusyEvent[] = [
+      {
+        sourceId: "long",
+        title: "Long",
+        startMs: 0,
+        endMs: 30 * 60 * 60 * 1000,
+        busy: true,
+        source: "google"
+      }
+    ];
+    expect(collectBusyIntervals(events, w0, wEnd)).toEqual([]);
   });
 });
