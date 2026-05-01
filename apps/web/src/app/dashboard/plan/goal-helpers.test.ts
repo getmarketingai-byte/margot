@@ -32,8 +32,9 @@ describe("summariseAllocation", () => {
     const summary = summariseAllocation([floor, eq, wt], 614);
     expect(summary.reservedMinutes).toBe(120);
     expect(summary.remainingMinutes).toBe(494);
-    expect(summary.remainderHintByGoalId["wt"]).toBe(Math.round(494 * 0.4));
-    expect(summary.remainderHintByGoalId["eq"]).toBe(Math.round(494 * 0.6));
+    // 40% of full-week T=614 → 245.6; rest of R=494 to equal row
+    expect(summary.remainderHintByGoalId["wt"]).toBe(246);
+    expect(summary.remainderHintByGoalId["eq"]).toBe(248);
     expect(summary.remainderHintByGoalId["floor"]).toBeUndefined();
   });
 });
@@ -77,7 +78,7 @@ describe("goalAllocationRowDisplay", () => {
     });
     const summary = summariseAllocation([floor, eq, wt], 614);
     const wtHint = summary.remainderHintByGoalId["wt"]!;
-    expect(wtHint).toBe(198);
+    expect(wtHint).toBe(246);
     const { line } = goalAllocationRowDisplay(wt, summary, 1614);
     expect(line).toBe(`26h 54m / — - ${formatMinutes(wtHint)}`);
   });

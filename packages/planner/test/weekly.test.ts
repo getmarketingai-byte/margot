@@ -4,6 +4,7 @@ import {
   allocateWeek,
   buildGoalDragKey,
   computeAllocationRemainderFractions,
+  computePass2AllocMinutesFromShareOfWeek,
   computeDayCalendarDrainScores
 } from "../src/weekly";
 import type { AllocatedBlock } from "../src/weekly";
@@ -160,6 +161,44 @@ describe("allocateWeek", () => {
       const dayIdx = Math.floor((b.startMs - weekStartMs) / DAY_MS);
       expect(dayIdx).toBe(4); // Friday is day 4 (0=Mon)
     }
+  });
+
+  it("placement ideal clock times align block start to ideal local time", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const busy: BusyEvent[] = [];
+    for (let d = 1; d < 7; d++) {
+      const ds = weekStartMs + d * DAY_MS;
+      busy.push({ id: `block-${d}`, startMs: ds, endMs: ds + DAY_MS, busy: true });
+    }
+    const m0 = weekStartMs;
+    busy.push({ id: "m-pre", startMs: m0, endMs: m0 + 8 * HOUR_MS, busy: true });
+    busy.push({ id: "m-post", startMs: m0 + 22 * HOUR_MS, endMs: m0 + DAY_MS, busy: true });
+
+    const result = allocateWeek({
+      plan: {
+        id: "ideal-start",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "couple",
+            title: "Couple time",
+            targetMinutes: 120,
+            maxMinutesPerDay: 120,
+            dayOfWeek: "monday",
+            placementIdealClockTimes: [{ hour: 19, minute: 0 }],
+            priority: 5
+          })
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const b = result.blocks.find((x) => x.goalId === "couple");
+    expect(b).toBeDefined();
+    expect(b!.startMs).toBe(m0 + 19 * HOUR_MS);
   });
 
   it("avoids duplicate same-goal auto blocks on the same day", () => {
@@ -474,8 +513,11 @@ describe("allocateWeek", () => {
     expect(tb).toBeGreaterThan(0);
     expect(tc).toBeGreaterThan(0);
     expect(Math.abs(tb - tc)).toBeLessThanOrEqual(30);
-    expect(ta / tb).toBeGreaterThan(1.5);
-    expect(ta / tb).toBeLessThan(2.5);
+    // 50% takes half of an equal slot; B and C absorb the rest of the pool.
+    // 50% of full-week time T, then B/C split what is left of remainder R.
+    expect(ta).toBeGreaterThan(tb);
+    expect(ta / tb).toBeGreaterThan(1.2);
+    expect(ta / tb).toBeLessThan(2.2);
   });
 
   it("weights allocationSharePercent the same in finish-early packing mode as in even", () => {
@@ -1990,43 +2032,91 @@ describe("computeDayCalendarDrainScores", () => {
   });
 });
 
-describe("computeAllocationRemainderFractions", () => {
-  it("splits between explicit percent goals and equal-share goals", () => {
-    const f = computeAllocationRemainderFractions([
+describe("computePass2AllocMinutesFromShareOfWeek", () => {
+  it("allocates % of full-week time T then splits leftover among equal-share rows", () => {
+    const goals = [
       goal({ id: "a", title: "A", allocationSharePercent: 50 }),
       goal({ id: "b", title: "B" }),
       goal({ id: "c", title: "C" })
-    ]);
+    ];
+    const T = 1000;
+    const R = 1000;
+    const m = computePass2AllocMinutesFromShareOfWeek(goals, T, R);
+    expect(m[0]).toBeCloseTo(500, 5);
+    expect(m[1]).toBeCloseTo(250, 5);
+    expect(m[2]).toBeCloseTo(250, 5);
+    const f = computeAllocationRemainderFractions(goals, T, R);
     expect(f[0]).toBeCloseTo(0.5, 5);
     expect(f[1]).toBeCloseTo(0.25, 5);
     expect(f[2]).toBeCloseTo(0.25, 5);
   });
 
-  it("normalizes when explicit percents sum above 100", () => {
-    const f = computeAllocationRemainderFractions([
+  it("scales %-only rows when their combined % of T exceeds remainder R", () => {
+    const goals = [
       goal({ id: "a", title: "A", allocationSharePercent: 60 }),
       goal({ id: "b", title: "B", allocationSharePercent: 50 })
-    ]);
-    expect(f[0]).toBeCloseTo(60 / 110, 5);
-    expect(f[1]).toBeCloseTo(50 / 110, 5);
+    ];
+    const T = 1000;
+    const R = 500;
+    const m = computePass2AllocMinutesFromShareOfWeek(goals, T, R);
+    expect(m[0]! + m[1]!).toBeCloseTo(R, 3);
+    expect(m[0]! / m[1]!).toBeCloseTo(60 / 50, 3);
   });
 
-  it("scales up when only percent goals sum below 100", () => {
-    const f = computeAllocationRemainderFractions([
+  it("gives each %-only row its full % of T when the cohort sum fits in R", () => {
+    const goals = [
       goal({ id: "a", title: "A", allocationSharePercent: 30 }),
       goal({ id: "b", title: "B", allocationSharePercent: 30 }),
       goal({ id: "c", title: "C", allocationSharePercent: 30 })
-    ]);
-    expect(f[0]).toBeCloseTo(1 / 3, 5);
-    expect(f[1]).toBeCloseTo(1 / 3, 5);
-    expect(f[2]).toBeCloseTo(1 / 3, 5);
+    ];
+    const T = 1000;
+    const R = 1000;
+    const m = computePass2AllocMinutesFromShareOfWeek(goals, T, R);
+    expect(m[0]).toBeCloseTo(300, 5);
+    expect(m[1]).toBeCloseTo(300, 5);
+    expect(m[2]).toBeCloseTo(300, 5);
+  });
+
+  it("solo %-row takes min(raw % of T, R)", () => {
+    const goals = [goal({ id: "solo", title: "Solo", allocationSharePercent: 10 })];
+    const T = 1000;
+    const R = 1000;
+    const m = computePass2AllocMinutesFromShareOfWeek(goals, T, R);
+    expect(m[0]).toBeCloseTo(100, 5);
+  });
+
+  it("Pass 2 gives a % goal only its share of remainder when floors absorb Pass 1", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "pct-with-floors",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({ id: "f1", title: "F1", minMinutesPerWeek: 120 }),
+          goal({ id: "f2", title: "F2", minMinutesPerWeek: 120 }),
+          goal({ id: "pct", title: "Pct", allocationSharePercent: 10 })
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const free = result.metrics.utilisation.weekCapacityMinutes;
+    const rem = free - 240;
+    const pct = result.metrics.perGoal["pct"]!.targetMinutes;
+    expect(pct).toBeGreaterThan(0);
+    const expectedRaw = 0.1 * free;
+    expect(pct).toBeGreaterThan(expectedRaw * 0.95);
+    expect(pct).toBeLessThan(expectedRaw * 1.05 + 30);
   });
 
   it("distributes evenly when no goal sets allocationSharePercent", () => {
-    const f = computeAllocationRemainderFractions([
-      goal({ id: "a", title: "A" }),
-      goal({ id: "b", title: "B" })
-    ]);
+    const goals = [goal({ id: "a", title: "A" }), goal({ id: "b", title: "B" })];
+    const T = 800;
+    const R = 400;
+    const f = computeAllocationRemainderFractions(goals, T, R);
     expect(f[0]).toBeCloseTo(0.5, 5);
     expect(f[1]).toBeCloseTo(0.5, 5);
   });

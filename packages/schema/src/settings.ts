@@ -232,8 +232,9 @@ export const gymSettingsSchema = z.object({
   /** Shown on the calendar / goal chips for the planner block (not calendar title matching). */
   blockLabel: z.string().min(1).default("Physical activity"),
   /**
-   * Preferred local times of day for placing the workout block; the allocator
-   * picks gaps whose midpoint is closest to one of these clocks.
+   * Preferred local start times for the workout block; the allocator prefers
+   * gaps where the block can start near one of these clocks and aligns the
+   * placed start when the gap is wide enough.
    */
   idealBlockTimes: z
     .array(z.object({ hour: hour, minute: minute }))
@@ -541,7 +542,7 @@ export const allocatorSettingsSchema = z.object({
   /**
    * How unallocated time inside each calendar free window is laid out after goal
    * blocks are scheduled. Does not change weekly target minutes (Pass 2 always
-   * splits post-floor remainder using `allocationSharePercent` / equal share).
+   * splits post-floor remainder using equal-slice `%` and full-slice goals).
    *
    *   "even" (default): spread slack in the window as equal gaps between
    *   consecutive goal runs, rather than one lump of empty time at the end.

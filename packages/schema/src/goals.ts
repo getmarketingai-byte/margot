@@ -151,8 +151,9 @@ export const weeklyGoalSchema = z.object({
   /** Free-form anchor hint, e.g. "after-work", "morning". Display-only for v1. */
   anchor: z.string().optional(),
   /**
-   * Optional clock targets (local wall time) used when scoring gaps and when
-   * placing the block inside a wide free window. Used by routines-driven blocks
+   * Optional preferred local start times (wall clock) used when scoring gaps
+   * and when placing the block inside a wide free window (start is clamped to
+   * the gap when ideal falls outside). Used by routines-driven blocks
    * (`specialGoalType: "gym"` or `"errands"`) from user settings.
    */
   placementIdealClockTimes: z
@@ -176,9 +177,10 @@ export const weeklyGoalSchema = z.object({
    */
   commitmentLevel: commitmentLevel.default("committed"),
   /**
-   * Pass 2 splits the post-floor remainder using this percentage alongside goals
-   * that omit it (they split what is left equally). Calendar packing
-   * (`allocator.allocationMode`) is separate and does not change this weighting.
+   * Pass 2: fraction (1–100) of **full-week schedulable gap time** (same denominator
+   * as weekly capacity), not “% of what’s left after floors”. The cohort never
+   * receives more than the post–minimum remainder; several % rows should sum to ≤100%.
+   * Calendar packing (`allocator.allocationMode`) is separate.
    */
   allocationSharePercent: z.number().int().min(1).max(100).optional(),
   /**

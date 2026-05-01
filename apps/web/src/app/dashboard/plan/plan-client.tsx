@@ -15,6 +15,7 @@ import {
   STARTER_GOALS,
   chipsForGoal,
   goalAllocationRowDisplay,
+  goalExceedsDeclaredWeekShare,
   summaryChipsForGoal,
   formatMinutes,
   summariseAllocation,
@@ -354,6 +355,13 @@ function BudgetChip({
             : ""}
         </p>
       ) : null}
+      {summary.allocationSharePercentOverflow ? (
+        <p className="text-xs text-amber-700 dark:text-amber-300" role="status">
+          Sum of &quot;% of week&quot; constraints is {summary.allocationSharePercentSum}% (over 100%).
+          The planner scales these down proportionally so the week still balances; lower some
+          percentages so targets match what you intend.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -510,6 +518,16 @@ function GoalRow({
       ? goalAllocationRowDisplay(goal, allocationSummary, scheduledMinutes)
       : undefined;
 
+  const shareOverBudget =
+    effectiveTarget !== undefined &&
+    effectiveTarget > 0 &&
+    goalExceedsDeclaredWeekShare(goal, allocationSummary, effectiveTarget);
+
+  const defaultAllocationSharePercent =
+    allocationSummary.equalShareGoals > 0
+      ? Math.max(1, Math.min(100, Math.round(100 / allocationSummary.equalShareGoals)))
+      : 40;
+
   const commitDraft = (next: GoalDraft) => {
     setDraftDirty(next);
     onUpdate({ title: editTitle.trim() || goal.title, ...next });
@@ -618,6 +636,12 @@ function GoalRow({
               </span>
             )}
           </button>
+          {shareOverBudget ? (
+            <p className="mt-1 text-right text-[11px] text-amber-700 dark:text-amber-300" role="status">
+              Planner target is above this row&apos;s fair % of the week (or a simple even slice when
+              no % is set). Check caps, catch-up, or conflicting % totals.
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-1">
           <IconButton onClick={onMoveUp} disabled={index === 0} title="Move up">
@@ -656,7 +680,11 @@ function GoalRow({
             so this list stays about titles and time.
           </p>
           <div className="mt-3">
-            <OptionsEditor draft={draft} onChange={commitDraft} />
+            <OptionsEditor
+              draft={draft}
+              onChange={commitDraft}
+              defaultAllocationSharePercent={defaultAllocationSharePercent}
+            />
           </div>
         </div>
       )}
@@ -754,10 +782,13 @@ function isDaySet(d: GoalDraft): boolean {
 
 function OptionsEditor({
   draft,
-  onChange
+  onChange,
+  defaultAllocationSharePercent
 }: {
   draft: GoalDraft;
   onChange: (draft: GoalDraft) => void;
+  /** Equal slice as % of full-week time: round(100 / remainder-cohort size). */
+  defaultAllocationSharePercent: number;
 }) {
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
 
@@ -794,9 +825,9 @@ function OptionsEditor({
     },
     {
       id: "share-remainder",
-      label: "Share of remainder",
+      label: "% of week",
       isSet: (d) => d.allocationSharePercent !== undefined,
-      initialise: () => ({ allocationSharePercent: 40 }),
+      initialise: () => ({ allocationSharePercent: defaultAllocationSharePercent }),
       clear: () => ({ allocationSharePercent: undefined })
     },
     {
@@ -867,7 +898,12 @@ function OptionsEditor({
                 label={c.label}
                 onRemove={() => update(c.clear(draft))}
               >
-                <ConstraintBody id={c.id} draft={draft} update={update} />
+                <ConstraintBody
+                  id={c.id}
+                  draft={draft}
+                  update={update}
+                  defaultAllocationSharePercent={defaultAllocationSharePercent}
+                />
               </ConstraintCard>
             ))}
           </div>
@@ -898,14 +934,17 @@ function OptionsEditor({
 function PercentShareField({
   value,
   onChange,
-  hint
+  hint,
+  defaultPercent = 40
 }: {
   value: number | undefined;
   onChange: (next: number | undefined) => void;
   hint?: React.ReactNode;
+  /** Slider position when value is unset (equal slice of week). */
+  defaultPercent?: number;
 }) {
   const clamp = (n: number) => Math.min(100, Math.max(1, Math.round(n)));
-  const sliderPos = clamp(value ?? 40);
+  const sliderPos = clamp(value ?? defaultPercent);
 
   return (
     <div className="flex flex-col gap-2 text-xs">
@@ -925,7 +964,7 @@ function PercentShareField({
             if (!Number.isFinite(n)) return;
             onChange(clamp(n));
           }}
-          placeholder="40"
+          placeholder={String(defaultPercent)}
           className="field"
         />
       </label>
@@ -953,11 +992,13 @@ function PercentShareField({
 function ConstraintBody({
   id,
   draft,
-  update
+  update,
+  defaultAllocationSharePercent
 }: {
   id: ConstraintId;
   draft: GoalDraft;
   update: (changes: Partial<GoalDraft>) => void;
+  defaultAllocationSharePercent: number;
 }) {
   switch (id) {
     case "min-week":
@@ -1005,10 +1046,12 @@ function ConstraintBody({
         <PercentShareField
           value={draft.allocationSharePercent}
           onChange={(allocationSharePercent) => update({ allocationSharePercent })}
+          defaultPercent={defaultAllocationSharePercent}
           hint={
             <>
-              Share of time left after weekly mins are reserved (weights the post-floor split between
-              goals).
+              Percent of <strong>full-week schedulable time</strong> (after segments). Pass 2 never
+              assigns more than the pool left after weekly mins; 100% targets that whole pool for
+              this row. Several % rows should add to ≤100% or the planner scales them down.
             </>
           }
         />
@@ -1080,8 +1123,8 @@ function ConstraintBody({
             onChange={(placementIdealClockTimes) => update({ placementIdealClockTimes })}
           />
           <p className="text-[11px] text-ink-400">
-            Nudges gap choice and block placement toward these local clocks (weak signal versus hard
-            earliest/latest hour, if you add those elsewhere).
+            Nudges gap choice and tries to start blocks at these local times when the gap allows
+            (weak signal versus hard earliest/latest hour, if you add those elsewhere).
           </p>
         </div>
       );

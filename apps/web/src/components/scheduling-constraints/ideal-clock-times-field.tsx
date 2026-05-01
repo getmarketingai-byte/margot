@@ -19,7 +19,7 @@ export function normaliseIdealClockTimes(
 export function IdealClockTimesField({
   value,
   onChange,
-  legend = "Ideal times of day (local)",
+  legend = "Ideal start times (local)",
   addLabel = "+ Add time",
   minuteStep = 5
 }: {

@@ -9,6 +9,12 @@ import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { geocodeAddressToCoords } from "@/lib/geocode-address";
+import {
+  formatIdealWakeForInput,
+  formatSleepDurationForInput,
+  parseIdealWakeInput,
+  parseSleepDurationInput
+} from "@/lib/parse-sleep-settings-input";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { PRODUCT } from "@/lib/marketing";
 import { FeedbackForm } from "./feedback-form";
@@ -22,6 +28,10 @@ async function updateBasics(formData: FormData): Promise<void> {
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
+  const idealWake = parseIdealWakeInput(String(formData.get("idealWakeTime") ?? ""), {
+    hour: settings.sleep.idealWakeHour,
+    minute: settings.sleep.idealWakeMinute
+  });
   const next = {
     ...settings,
     timezone: String(formData.get("timezone") ?? settings.timezone),
@@ -34,8 +44,18 @@ async function updateBasics(formData: FormData): Promise<void> {
     },
     sleep: {
       ...settings.sleep,
-      durationHours: Math.max(4, Math.min(12, Number(formData.get("sleepDuration") ?? settings.sleep.durationHours))),
-      idealWakeHour: Math.max(0, Math.min(23, Number(formData.get("idealWakeHour") ?? settings.sleep.idealWakeHour)))
+      durationHours: Math.max(
+        4,
+        Math.min(
+          12,
+          parseSleepDurationInput(
+            String(formData.get("sleepDuration") ?? ""),
+            settings.sleep.durationHours
+          )
+        )
+      ),
+      idealWakeHour: idealWake.hour,
+      idealWakeMinute: idealWake.minute
     }
   };
   await saveSettings(userId, next);
@@ -205,27 +225,37 @@ export default async function SettingsPage({
             />
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            Sleep duration (hours)
+            Sleep duration
             <input
               name="sleepDuration"
-              type="number"
-              min={4}
-              max={12}
-              step={0.25}
-              defaultValue={settings.sleep.durationHours}
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder="8 or 7:30"
+              defaultValue={formatSleepDurationForInput(settings.sleep.durationHours)}
               className="field"
             />
+            <span className="text-[11px] font-normal text-ink-400">
+              Hours as a number (8) or hours and minutes (7:30 → 7h 30m).
+            </span>
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            Ideal wake hour (0–23)
+            Ideal wake time
             <input
-              name="idealWakeHour"
-              type="number"
-              min={0}
-              max={23}
-              defaultValue={settings.sleep.idealWakeHour}
+              name="idealWakeTime"
+              type="text"
+              inputMode="text"
+              autoComplete="off"
+              placeholder="6:30am"
+              defaultValue={formatIdealWakeForInput(
+                settings.sleep.idealWakeHour,
+                settings.sleep.idealWakeMinute
+              )}
               className="field"
             />
+            <span className="text-[11px] font-normal text-ink-400">
+              12-hour (6:30am) or 24-hour (06:30).
+            </span>
           </label>
           <div className="sm:col-span-2">
             <button type="submit" className="btn-primary w-full">Save</button>

@@ -28,7 +28,7 @@
  *      default one-way drive as calendar gym legs). That block is scheduled
  *      **before** other goals at the same commitment/floor tier so earlier list
  *      order cannot occupy those drive windows first. Optional
- *      `placementIdealClockTimes` bias gap choice and in-gap alignment.
+ *      `placementIdealClockTimes` bias gap choice and in-gap start alignment.
  *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
@@ -74,7 +74,7 @@ import {
   physicalActivityWeeklyGoalFromGymSettings,
   weeklyErrandsGoalFromSettings
 } from "./weekly-routines";
-import { hourInTz, dateKeyInTz, localMidnightMs, clockMinutesInTz } from "./time";
+import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -559,11 +559,12 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  * Pass 1 + Pass 2: derive each goal's `effectiveMinutes` for the week.
  *
  *   - Pass 1 reserves every goal's `minMinutesPerWeek` as a floor.
- *   - Pass 2 distributes the remaining free time: weighted share of the
- *     remainder (`allocationSharePercent` plus equal split for goals without
- *     it), respecting caps. Goals with a positive weekly floor do not
- *     participate in this pass unless they explicitly set
- *     `allocationSharePercent` (so "min" behaves as a floor, not floor+bonus).
+ *   - Pass 2 distributes the remaining free time after floors: `%` goals target
+ *     `(pct/100) * T` where `T` is full-week schedulable gap time (`totalFreeMin`);
+ *     the cohort never receives more than remainder `R` after Pass 1. Goals with
+ *     no `%` split whatever is left after those targets (or share `R` evenly when
+ *     there are no `%` rows). Goals with a positive weekly floor do not participate
+ *     unless they set `allocationSharePercent` (so "min" behaves as a floor).
  *     Calendar layout then uses `allocator.allocationMode`
  *     only: `"even"` spreads slack inside each free window as gaps between goal
  *     runs; `"finish-early"` leaves blocks packed without that padding so
@@ -573,55 +574,92 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  *     (default) or pay them in user order until time runs out (strict).
  */
 
-/** Weight each goal's Pass 2 share of post-floor remainder (even allocation mode). */
-export function computeAllocationRemainderFractions(goals: readonly WeeklyGoal[]): number[] {
+/**
+ * Pass-2 minute targets from `% of full-week schedulable time` `T` (same as
+ * `weekCapacityMinutes` / `totalFreeMin`), capped so the cohort never receives
+ * more than post-floor remainder `R`.
+ *
+ * - Rows with `allocationSharePercent` want `(pct/100) * T` each.
+ * - Rows without `%` share any leftover `R - sum(rawPctWants)` evenly.
+ * - If only `%` rows and their raw wants exceed `R`, scale those wants down
+ *   proportionally.
+ * - If only equal-share rows (no `%`), split `R` evenly.
+ */
+export function computePass2AllocMinutesFromShareOfWeek(
+  goals: readonly WeeklyGoal[],
+  weekCapacityMinutes: number,
+  remainderMinutes: number
+): number[] {
   const n = goals.length;
-  if (n === 0) return [];
+  if (n === 0 || remainderMinutes <= 0) return [];
+  const T = Math.max(0, weekCapacityMinutes);
+  const R = remainderMinutes;
 
-  const fractions = Array<number>(n).fill(0);
-  const pctIndices: number[] = [];
-  const pctRaw: number[] = [];
-
+  const pctIdx: number[] = [];
+  const eqIdx: number[] = [];
   for (let i = 0; i < n; i++) {
-    const pct = goals[i]!.allocationSharePercent;
-    if (pct !== undefined) {
-      pctIndices.push(i);
-      pctRaw.push(pct);
+    if (goals[i]!.allocationSharePercent !== undefined) pctIdx.push(i);
+    else eqIdx.push(i);
+  }
+
+  const rawP = Array<number>(n).fill(0);
+  for (const i of pctIdx) {
+    const p = goals[i]!.allocationSharePercent!;
+    const c = Math.min(100, Math.max(0, p));
+    rawP[i] = (c / 100) * T;
+  }
+  const sumP = pctIdx.reduce((a, i) => a + rawP[i]!, 0);
+
+  const out = Array<number>(n).fill(0);
+
+  if (pctIdx.length === 0) {
+    const per = R / n;
+    for (let i = 0; i < n; i++) out[i] = per;
+    return out;
+  }
+
+  if (eqIdx.length > 0) {
+    if (sumP >= R) {
+      const scale = R / Math.max(sumP, 1e-9);
+      for (const i of pctIdx) out[i] = rawP[i]! * scale;
+    } else {
+      for (const i of pctIdx) out[i] = rawP[i]!;
+      const rest = R - sumP;
+      const per = rest / eqIdx.length;
+      for (const i of eqIdx) out[i] = per;
     }
+    return out;
   }
 
-  if (pctIndices.length > 0) {
-    let sumPct = 0;
-    for (const p of pctRaw) sumPct += p;
-    const scaleDown = sumPct > 100 ? 100 / sumPct : 1;
-    for (let j = 0; j < pctIndices.length; j++) {
-      const idx = pctIndices[j]!;
-      fractions[idx] = (pctRaw[j]! * scaleDown) / 100;
-    }
+  // %-only cohort
+  if (sumP <= 1e-9) {
+    const per = R / n;
+    for (let i = 0; i < n; i++) out[i] = per;
+    return out;
   }
-
-  let sumFracPct = 0;
-  for (const idx of pctIndices) sumFracPct += fractions[idx]!;
-
-  const eqIndices: number[] = [];
-  for (let i = 0; i < n; i++) {
-    if (goals[i]!.allocationSharePercent === undefined) eqIndices.push(i);
+  if (sumP <= R) {
+    for (const i of pctIdx) out[i] = rawP[i]!;
+    return out;
   }
+  const scale = R / sumP;
+  for (const i of pctIdx) out[i] = rawP[i]! * scale;
+  return out;
+}
 
-  const rest = 1 - sumFracPct;
-  if (eqIndices.length > 0) {
-    const share = rest / eqIndices.length;
-    for (const i of eqIndices) fractions[i] = share;
-  } else {
-    const total = fractions.reduce((a, b) => a + b, 0);
-    if (total > 1e-12 && Math.abs(total - 1) > 1e-9) {
-      for (let i = 0; i < n; i++) {
-        fractions[i] = fractions[i]! / total;
-      }
-    }
-  }
-
-  return fractions;
+/**
+ * Fraction of the current post-floor remainder each goal takes in Pass 2
+ * (`alloc_i / remainder`), using `% of full-week time T` (see
+ * `computePass2AllocMinutesFromShareOfWeek`).
+ */
+export function computeAllocationRemainderFractions(
+  goals: readonly WeeklyGoal[],
+  weekCapacityMinutes: number,
+  remainderMinutes: number
+): number[] {
+  const alloc = computePass2AllocMinutesFromShareOfWeek(goals, weekCapacityMinutes, remainderMinutes);
+  const r = Math.max(0, remainderMinutes);
+  if (r <= 1e-9) return goals.map(() => 0);
+  return alloc.map((m) => m / r);
 }
 
 function distributeMinutes(
@@ -701,11 +739,12 @@ function distributeMinutes(
   }
 
   let remainder = totalFreeMin - floorTotal;
+  const remainderPass2Start = remainder;
 
-  // Pass 2: weighted share of the remainder (allocationSharePercent + equal split
-  // for goals without it), then rounds respect caps / spillover. Packing/buffers
-  // on the calendar are controlled separately via `allocator.allocationMode`.
-  const remainderFractions = computeAllocationRemainderFractions(goals);
+  // Pass 2: `%` rows target (pct/100)*T of full-week schedulable time T; the pool
+  // for this pass is remainder R after floors. See `computePass2AllocMinutesFromShareOfWeek`.
+  //
+  // Fractions / caps MUST use the same cohort as `eligible()` below.
 
   const eligible = () =>
     prepared.filter((p) => {
@@ -716,23 +755,43 @@ function distributeMinutes(
       return true;
     });
 
+  const baseEffectiveByIndex = new Map(prepared.map((p) => [p.index, p.effectiveMinutes] as const));
+  const T = totalFreeMin;
+  const seedPrepared = eligible();
+  const maxRemainderSliceByIndex = new Map<number, number>();
+  for (const p of seedPrepared) {
+    const pct = p.goal.allocationSharePercent;
+    const slice =
+      pct !== undefined
+        ? quantise(Math.min(remainderPass2Start, (Math.min(100, Math.max(0, pct)) / 100) * T))
+        : remainderPass2Start;
+    maxRemainderSliceByIndex.set(p.index, slice);
+  }
+
   let rounds = prepared.length + 1;
   while (remainder >= QUANTUM && rounds-- > 0) {
     const set = eligible();
     if (set.length === 0) break;
-    let sumW = 0;
-    for (const p of set) sumW += remainderFractions[p.index]!;
-    const useEqual = sumW <= 1e-12;
+    const goalsInSet = set.map((x) => x.goal);
+    const floatMins = computePass2AllocMinutesFromShareOfWeek(goalsInSet, T, remainder);
+    let weights = floatMins.map((m) => Math.max(0, m));
+    if (weights.every((w) => w <= 0)) {
+      weights = Array<number>(set.length).fill(1);
+    }
+    const alloc = proportionalMinutesOnGrid(weights, remainder);
     let consumed = 0;
-    for (const p of set) {
-      const unit =
-        useEqual ? 1 / set.length : remainderFractions[p.index]! / sumW;
-      const cap = p.norm.maxMinutesPerWeek;
-      const share = quantise(remainder * unit);
+    for (let i = 0; i < set.length; i++) {
+      const p = set[i]!;
+      const share = alloc[i] ?? 0;
       if (share <= 0) continue;
+      const cap = p.norm.maxMinutesPerWeek;
       const headroom =
         cap === undefined ? share : Math.max(0, cap - p.effectiveMinutes);
-      const give = Math.min(share, headroom, remainder - consumed);
+      const fromPass2 = p.effectiveMinutes - (baseEffectiveByIndex.get(p.index) ?? 0);
+      const sliceCap = maxRemainderSliceByIndex.get(p.index);
+      const sliceLeft =
+        sliceCap === undefined ? Number.POSITIVE_INFINITY : Math.max(0, sliceCap - fromPass2);
+      const give = Math.min(share, headroom, remainder - consumed, sliceLeft);
       if (give <= 0) continue;
       p.effectiveMinutes += give;
       consumed += give;
@@ -1604,16 +1663,34 @@ function scoreBatteryPlacement(
   return score;
 }
 
-function scoreGapForPlacementIdeals(gap: Interval, goal: WeeklyGoal, tz: string): number {
+function scoreGapForPlacementIdeals(
+  gap: Interval,
+  goal: WeeklyGoal,
+  tz: string,
+  blockMinutes: number
+): number {
   const ideals = goal.placementIdealClockTimes;
-  if (!ideals || ideals.length === 0) return 0;
-  const centerMin = clockMinutesInTz((gap.startMs + gap.endMs) / 2, tz);
-  let best = Infinity;
+  if (!ideals || ideals.length === 0 || blockMinutes <= 0) return 0;
+  const blockMs = blockMinutes * MS_PER_MIN;
+  const latestStart = gap.endMs - blockMs;
+  if (latestStart < gap.startMs) return 0;
+
+  const dk = dateKeyInTz(Math.floor((gap.startMs + gap.endMs) / 2), tz);
+  const segs = dk.split("-");
+  const ys = Number(segs[0]);
+  const mo = Number(segs[1]);
+  const da = Number(segs[2]);
+  if (!Number.isFinite(ys) || !Number.isFinite(mo) || !Number.isFinite(da)) return 0;
+  const dayMidnight = localMidnightMs(ys, mo, da, tz);
+
+  let bestDistMin = Infinity;
   for (const t of ideals) {
-    const target = t.hour * 60 + t.minute;
-    best = Math.min(best, Math.abs(centerMin - target));
+    const idealMs = dayMidnight + (t.hour * 3600 + t.minute * 60) * 1000;
+    const clampedStart = Math.max(gap.startMs, Math.min(idealMs, latestStart));
+    const distMin = Math.abs(clampedStart - idealMs) / MS_PER_MIN;
+    bestDistMin = Math.min(bestDistMin, distMin);
   }
-  return -PLACEMENT_IDEAL_CLOCK_WEIGHT * best;
+  return -PLACEMENT_IDEAL_CLOCK_WEIGHT * bestDistMin;
 }
 
 function pickGapForGoal(
@@ -1645,6 +1722,7 @@ function pickGapForGoal(
     const innerMin =
       gymTravelPadMin > 0 ? lengthMin - 2 * gymTravelPadMin : lengthMin;
     if (innerMin < QUANTUM) continue;
+    const blockMin = Math.min(perDay, innerMin);
     const energyScore =
       weights.energyMode * scoreGapForEnergy(g, goal.energyMode, energy, tz);
     const suggestionScore =
@@ -1652,10 +1730,10 @@ function pickGapForGoal(
         ? 0
         : scoreEnergyAwareness(g, goal, tz, placedToday, weights, frameworkInclusion);
     const batteryScore = battery ? scoreBatteryPlacement(g, goal, tz, placedToday, battery) : 0;
-    const idealScore = scoreGapForPlacementIdeals(g, goal, tz);
+    const idealScore = scoreGapForPlacementIdeals(g, goal, tz, blockMin);
     candidates.push({
       gap: g,
-      minutes: Math.min(perDay, innerMin),
+      minutes: blockMin,
       score: energyScore + suggestionScore + batteryScore + idealScore
     });
   }
@@ -1762,7 +1840,7 @@ function placementWeightsFromPriority(
  * breaks ties — it never overrides hard constraints like day-pinning,
  * earliest/latest hour, or per-day caps.
  */
-/** Weight for `placementIdealClockTimes`: closer gap midpoints score higher. */
+/** Weight for `placementIdealClockTimes`: gaps where the block can start nearer ideal score higher. */
 const PLACEMENT_IDEAL_CLOCK_WEIGHT = 0.12;
 
 export const ENERGY_SUGGESTION_WEIGHTS = {
@@ -1969,10 +2047,10 @@ function placeBlockInGap(
     let bestDist = Infinity;
     for (const ideal of ideals) {
       const idealMs = dayMidnight + (ideal.hour * 3600 + ideal.minute * 60) * 1000;
-      const wantStart = idealMs - ms / 2;
+      /** Align block start to ideal local clock (user-facing "ideal time"), not block midpoint. */
+      const wantStart = idealMs;
       const clamped = Math.max(inner.startMs, Math.min(wantStart, inner.endMs - ms));
-      const center = clamped + ms / 2;
-      const dist = Math.abs(center - idealMs);
+      const dist = Math.abs(clamped - idealMs);
       if (dist < bestDist) {
         bestDist = dist;
         bestStart = clamped;
