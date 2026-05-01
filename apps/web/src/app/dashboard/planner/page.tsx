@@ -135,23 +135,23 @@ export default async function PlannerHubPage() {
       <header>
         <h1 className="text-2xl font-semibold">Planner</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Three layers:{" "}
+          Flow:{" "}
           <a className="underline" href="#why-weekly-intent-heading">
             Why &amp; weekly intent
           </a>
-          , your{" "}
-          <a className="underline" href="#framework-system-heading">
-            Framework system
-          </a>
-          {" "}(choose frameworks + tag goals), advanced{" "}
-          <a className="underline" href="#framework-methods-heading">
-            Framework rule customiser
-          </a>
-          {" "}(numeric framework rules + optional methods), then{" "}
+          , then{" "}
           <a className="underline" href="#scheduling-outcomes-heading">
             Scheduling options
           </a>
-          {" "}(global allocator mechanics). Together they feed{" "}
+          {" "}(routines + global allocator mechanics), your{" "}
+          <a className="underline" href="#framework-system-heading">
+            Framework system
+          </a>
+          {" "}(choose frameworks + tag goals), and the{" "}
+          <a className="underline" href="#framework-methods-heading">
+            Framework rule customiser
+          </a>
+          {" "}(numeric rules + optional methods). Together they feed{" "}
           <a className="underline" href="/dashboard/plan">
             My Perfect Week
           </a>
@@ -165,6 +165,8 @@ export default async function PlannerHubPage() {
         saveWeeklyIntent={updateWeeklyIntent}
         saveVision={updateVision}
       />
+
+      <ConstraintsSection />
 
       <section
         className="card flex flex-col gap-6 scroll-mt-6"
@@ -181,11 +183,11 @@ export default async function PlannerHubPage() {
             <a className="underline" href="#framework-methods-heading">
               Framework rule customiser
             </a>
-            ; global mechanics (catch-up, routines, starvation) stay under{" "}
+            ; global mechanics (catch-up, routines, starvation) are in{" "}
             <a className="underline" href="#scheduling-outcomes-heading">
               Scheduling options
             </a>
-            .
+            {" "}(above).
           </p>
         </header>
 
@@ -211,11 +213,11 @@ export default async function PlannerHubPage() {
           <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
             Review how selected frameworks tie to allocator rules, then tune floors, mix, habits, and
             energy ordering here. Enable optional scheduling method modules for optimisation on top of
-            the defaults. Broad allocator behaviour stays in{" "}
+            the defaults.             Broad allocator behaviour is in{" "}
             <a className="underline" href="#scheduling-outcomes-heading">
               Scheduling options
             </a>
-            .
+            {" "}(above).
           </p>
         </header>
 
@@ -240,8 +242,6 @@ export default async function PlannerHubPage() {
           />
         </div>
       </section>
-
-      <ConstraintsSection />
     </div>
   );
 }

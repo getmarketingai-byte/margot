@@ -235,7 +235,8 @@ export async function loadPlanWeekAllocationInputs(options: {
         (g.daysOfWeek?.length ?? 0) === 0 &&
         g.earliestHour === undefined &&
         g.latestHour === undefined &&
-        g.scheduleInNiceWeather !== true
+        g.scheduleInNiceWeather !== true &&
+        !(g.placementIdealClockTimes && g.placementIdealClockTimes.length > 0)
       );
     });
     if (allGoalsUnconstrained) catchUpFloors = {};

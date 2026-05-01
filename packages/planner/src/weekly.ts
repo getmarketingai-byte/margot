@@ -296,7 +296,8 @@ function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTim
     goal.latestHour === undefined &&
     goal.scheduleInNiceWeather !== true &&
     goal.specialGoalType !== "gym" &&
-    goal.specialGoalType !== "errands"
+    goal.specialGoalType !== "errands" &&
+    !(goal.placementIdealClockTimes && goal.placementIdealClockTimes.length > 0)
   );
 }
 

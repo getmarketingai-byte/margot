@@ -14,15 +14,23 @@ import Link from "next/link";
 import {
   STARTER_GOALS,
   chipsForGoal,
+  goalAllocationRowDisplay,
   summaryChipsForGoal,
   formatMinutes,
-  summariseAllocation
+  summariseAllocation,
+  type GoalAllocationRowSummary
 } from "./goal-helpers";
 import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
 import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
 import { addGoal, removeGoal, reorderGoals, updateGoal } from "./actions";
+import {
+  ConstraintCard,
+  IdealClockTimesField,
+  normaliseIdealClockTimes,
+  SessionsPerWeekField
+} from "@/components/scheduling-constraints";
 
 type GoalDraft = Omit<WeeklyGoal, "id" | "title">;
 type GoalInput = Omit<WeeklyGoal, "id">;
@@ -254,6 +262,7 @@ export function PlanClient({
               total={goals.length}
               wheelAreas={wheelAreas}
               wheelLabel={wheelLabel}
+              allocationSummary={summary}
               scheduledMinutes={scheduledByGoal[goal.id]}
               effectiveTarget={effectiveTargetByGoal[goal.id]}
               pace={paceByGoal?.[goal.id]}
@@ -442,6 +451,7 @@ function GoalRow({
   total,
   wheelAreas,
   wheelLabel,
+  allocationSummary,
   scheduledMinutes,
   effectiveTarget,
   pace,
@@ -458,6 +468,7 @@ function GoalRow({
   total: number;
   wheelAreas: WheelOption[];
   wheelLabel: (id: string) => string;
+  allocationSummary: GoalAllocationRowSummary;
   scheduledMinutes?: number;
   effectiveTarget?: number;
   pace?: GoalPaceInfo;
@@ -491,6 +502,13 @@ function GoalRow({
   const hiddenChipSummary = hiddenChips.map((c) => c.label).join(" · ");
 
   const draft: GoalDraft = draftDirty ?? extractDraft(goal);
+
+  const allocationRow =
+    scheduledMinutes !== undefined &&
+    effectiveTarget !== undefined &&
+    effectiveTarget > 0
+      ? goalAllocationRowDisplay(goal, allocationSummary, scheduledMinutes)
+      : undefined;
 
   const commitDraft = (next: GoalDraft) => {
     setDraftDirty(next);
@@ -594,12 +612,9 @@ function GoalRow({
                 ) : null}
               </>
             )}
-            {scheduledMinutes !== undefined && effectiveTarget !== undefined && effectiveTarget > 0 && (
-              <span
-                className="ml-auto text-xs text-ink-400"
-                title="Achieved (logs + calendar blocks) / weekly plan target"
-              >
-                {formatMinutes(scheduledMinutes)} / {formatMinutes(effectiveTarget)}
+            {allocationRow && (
+              <span className="ml-auto text-xs text-ink-400" title={allocationRow.title}>
+                {allocationRow.line}
               </span>
             )}
           </button>
@@ -699,6 +714,9 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.focusAffinity !== undefined) draft.focusAffinity = goal.focusAffinity;
   if (goal.energyChargeImpact !== undefined) draft.energyChargeImpact = goal.energyChargeImpact;
   if (goal.energyDrainImpact !== undefined) draft.energyDrainImpact = goal.energyDrainImpact;
+  if (goal.placementIdealClockTimes !== undefined && goal.placementIdealClockTimes.length > 0) {
+    draft.placementIdealClockTimes = [...goal.placementIdealClockTimes];
+  }
   return draft;
 }
 
@@ -719,7 +737,8 @@ type ConstraintId =
   | "share-remainder"
   | "frequency"
   | "days"
-  | "nice-weather";
+  | "nice-weather"
+  | "ideal-times";
 
 interface ConstraintDef {
   id: ConstraintId;
@@ -800,6 +819,16 @@ function OptionsEditor({
       isSet: (d) => d.scheduleInNiceWeather === true,
       initialise: () => ({ scheduleInNiceWeather: true }),
       clear: () => ({ scheduleInNiceWeather: undefined })
+    },
+    {
+      id: "ideal-times",
+      label: "Ideal times of day",
+      isSet: (d) =>
+        Array.isArray(d.placementIdealClockTimes) && d.placementIdealClockTimes.length > 0,
+      initialise: () => ({
+        placementIdealClockTimes: normaliseIdealClockTimes(undefined, { hour: 12, minute: 0 })
+      }),
+      clear: () => ({ placementIdealClockTimes: undefined })
     }
   ];
 
@@ -833,13 +862,13 @@ function OptionsEditor({
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {setConstraints.map((c) => (
-              <ConstraintRow
+              <ConstraintCard
                 key={c.id}
                 label={c.label}
                 onRemove={() => update(c.clear(draft))}
               >
                 <ConstraintBody id={c.id} draft={draft} update={update} />
-              </ConstraintRow>
+              </ConstraintCard>
             ))}
           </div>
         </div>
@@ -862,34 +891,6 @@ function OptionsEditor({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function ConstraintRow({
-  label,
-  children,
-  onRemove
-}: {
-  label: string;
-  children: React.ReactNode;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1 rounded-md border border-ink-200 bg-ink-50/50 p-2 dark:border-ink-600 dark:bg-ink-900/40">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium">{label}</span>
-        <button
-          type="button"
-          onClick={onRemove}
-          aria-label={`Remove ${label}`}
-          title={`Remove ${label}`}
-          className="rounded p-0.5 text-ink-400 hover:bg-ink-100 hover:text-ink-900 dark:hover:bg-ink-600/40 dark:hover:text-ink-100"
-        >
-          ✕
-        </button>
-      </div>
-      {children}
     </div>
   );
 }
@@ -945,58 +946,6 @@ function PercentShareField({
         />
       </label>
       {hint ? <span className="text-[11px] text-ink-400">{hint}</span> : null}
-    </div>
-  );
-}
-
-function FrequencyPerWeekField({
-  value,
-  onChange
-}: {
-  value: number | undefined;
-  onChange: (next: number | undefined) => void;
-}) {
-  const clamp = (n: number) => Math.min(14, Math.max(1, Math.round(n)));
-  const sliderPos = clamp(value ?? 3);
-
-  return (
-    <div className="flex flex-col gap-2 text-xs">
-      <label className="flex flex-col gap-1">
-        <span>Times per week (1–14)</span>
-        <input
-          type="number"
-          min={1}
-          max={14}
-          value={value === undefined ? "" : value}
-          onChange={(e) => {
-            if (e.target.value === "") {
-              onChange(undefined);
-              return;
-            }
-            const n = Number(e.target.value);
-            if (!Number.isFinite(n)) return;
-            onChange(clamp(n));
-          }}
-          placeholder="3"
-          className="field"
-        />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="sr-only">Adjust times per week with a slider</span>
-        <input
-          type="range"
-          min={1}
-          max={14}
-          step={1}
-          value={sliderPos}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (!Number.isFinite(n)) return;
-            onChange(clamp(n));
-          }}
-          className="h-2 w-full cursor-pointer accent-accent"
-        />
-      </label>
     </div>
   );
 }
@@ -1066,7 +1015,7 @@ function ConstraintBody({
       );
     case "frequency":
       return (
-        <FrequencyPerWeekField
+        <SessionsPerWeekField
           value={draft.frequencyPerWeek}
           onChange={(frequencyPerWeek) => update({ frequencyPerWeek })}
         />
@@ -1119,6 +1068,24 @@ function ConstraintBody({
           overlaps your free time, this is ignored so the goal can still land.
         </p>
       );
+    case "ideal-times": {
+      const clocks = normaliseIdealClockTimes(
+        draft.placementIdealClockTimes,
+        { hour: 12, minute: 0 }
+      );
+      return (
+        <div className="flex flex-col gap-2">
+          <IdealClockTimesField
+            value={clocks}
+            onChange={(placementIdealClockTimes) => update({ placementIdealClockTimes })}
+          />
+          <p className="text-[11px] text-ink-400">
+            Nudges gap choice and block placement toward these local clocks (weak signal versus hard
+            earliest/latest hour, if you add those elsewhere).
+          </p>
+        </div>
+      );
+    }
   }
 }
 

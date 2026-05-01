@@ -26,6 +26,7 @@ export type ChipKind =
   | "frequency"
   | "day"
   | "nice-weather"
+  | "ideal-times"
   | "share"
   | "energy"
   | "polarity"
@@ -55,6 +56,7 @@ const SUMMARY_ROW_CHIP_KEYS = new Set<ChipKind>([
   "frequency",
   "day",
   "nice-weather",
+  "ideal-times",
   "share"
 ]);
 
@@ -168,6 +170,19 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   if (goal.scheduleInNiceWeather === true) {
     chips.push({ key: "nice-weather", label: "Nice weather" });
   }
+  if (goal.placementIdealClockTimes && goal.placementIdealClockTimes.length > 0) {
+    const labels = goal.placementIdealClockTimes.map(
+      (t) => `${t.hour}:${String(t.minute).padStart(2, "0")}`
+    );
+    const shown = labels.slice(0, 3).join(", ");
+    chips.push({
+      key: "ideal-times",
+      label:
+        labels.length > 3
+          ? `Ideal ~${shown}…`
+          : `Ideal ${shown}`
+    });
+  }
   if (goal.energyMode && goal.energyMode !== "neutral") {
     chips.push({ key: "energy", label: ENERGY_LABELS[goal.energyMode] });
   }
@@ -270,6 +285,60 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
     perEqualShareMinutes: perEqual,
     hasWeightedShare
   };
+}
+
+/** Narrow summary shape consumed by [`goalAllocationRowDisplay`]. */
+export type GoalAllocationRowSummary = Pick<
+  ReturnType<typeof summariseAllocation>,
+  "equalShareGoals" | "perEqualShareMinutes" | "hasWeightedShare"
+>;
+
+/**
+ * Builds the collapsed goals-list time string: achieved / weekly min — weekly max (or unconstrained-share hint).
+ *
+ * Third segment is an explicit `maxMinutesPerWeek` when set; otherwise minutes per unconstrained-equal-share participant
+ * from [`summariseAllocation`] (same basis as “Each unconstrained goal” in the budget chip). Omit the third segment when
+ * there is no explicit max and no unconstrained-equal-share cohort (shows `- 0` otherwise avoided).
+ */
+export function goalAllocationRowDisplay(
+  goal: WeeklyGoal,
+  summary: GoalAllocationRowSummary,
+  scheduledMinutes: number
+): { line: string; title: string } {
+  const norm = normaliseGoalTime(goal);
+  const minFloor = norm.minMinutesPerWeek ?? 0;
+  const minLabel = minFloor > 0 ? formatMinutes(minFloor) : "—";
+
+  const hasExplicitWeeklyMax = norm.maxMinutesPerWeek !== undefined;
+  const maxMinutes =
+    hasExplicitWeeklyMax
+      ? norm.maxMinutesPerWeek!
+      : summary.equalShareGoals > 0
+        ? summary.perEqualShareMinutes
+        : undefined;
+
+  const scheduledLabel = formatMinutes(scheduledMinutes);
+  const maxLabel =
+    maxMinutes !== undefined ? formatMinutes(Math.max(maxMinutes, 0)) : undefined;
+
+  const line =
+    maxLabel !== undefined ? `${scheduledLabel} / ${minLabel} - ${maxLabel}` : `${scheduledLabel} / ${minLabel}`;
+
+  const thirdExplain = hasExplicitWeeklyMax
+    ? "weekly ceiling"
+    : "approx. minutes each unconstrained goal would get after minimums reserve time (budget chip)";
+  let title = `Scheduled (logs plus calendar blocks) / Weekly minimum (${minFloor > 0 ? "explicit floor" : "none"}`;
+  title += `) • Upper: ${maxLabel !== undefined ? `${maxLabel} — ${thirdExplain}` : "not shown (no unconstrained-equal-share cohort and no weekly max)"}`;
+
+  if (goal.allocationSharePercent !== undefined) {
+    title +=
+      ". This row also takes a weighted % of remainder; the planner’s merged target may differ — see expanded options.";
+  } else if (summary.hasWeightedShare) {
+    title +=
+      ". Some goals use `% of remainder`; unconstrained-equal-share hints are approximate for the whole pool.";
+  }
+
+  return { line, title };
 }
 
 /**
