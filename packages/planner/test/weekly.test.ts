@@ -33,6 +33,7 @@ const plan: WeeklyPlan = {
   id: "plan-1",
   weekStart: "2026-04-27",
   timezone: "UTC",
+  goalGroups: [],
   goals: [
     {
       id: "g1",
@@ -65,7 +66,9 @@ const plan: WeeklyPlan = {
       earliestHour: 18,
       latestHour: 21
     }
-  ]
+  ],
+  overrides: [],
+  weeklyIntent: { hp6Focus: [] }
 };
 
 describe("allocateWeek", () => {
@@ -84,6 +87,7 @@ describe("allocateWeek", () => {
       id: "plan-weather",
       weekStart: "2026-04-27",
       timezone: "UTC",
+      goalGroups: [],
       goals: [outdoor],
       overrides: [],
       weeklyIntent: { hp6Focus: [] }
@@ -234,7 +238,9 @@ describe("allocateWeek", () => {
     const mondayBlocks = result.blocks.filter(
       (b) => b.goalId === "single-day" && b.startMs >= mondayStart && b.startMs < mondayStart + DAY_MS
     );
-    expect(mondayBlocks.length).toBeLessThanOrEqual(1);
+    const mondayMins = mondayBlocks.reduce((a, b) => a + (b.endMs - b.startMs) / 60_000, 0);
+    expect(mondayMins).toBe(120);
+    expect(mondayBlocks.length).toBe(2);
   });
 
   it("avoids consecutive-day placements when non-adjacent options exist", () => {
@@ -1617,6 +1623,119 @@ describe("allocateWeek", () => {
   it("buildGoalDragKey scopes overrides by week anchor and slot", () => {
     expect(buildGoalDragKey("goal-id", "2026-05-04", 0)).toBe("goal:2026-05-04:0:goal-id");
     expect(buildGoalDragKey("a:b", "2026-04-27", 3)).toBe("goal:2026-04-27:3:a:b");
+  });
+
+  it("shrinks member weekly targets when a goal group's aggregate exceeds its weekly % ceiling", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const grp = "grp-week-pct";
+    const wgPlan: WeeklyPlan = {
+      id: "plan-grp-week",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [{ id: grp, title: "Screens", allocationSharePercent: 22 }],
+      goals: [
+        goal({
+          id: "ga",
+          title: "A",
+          groupIds: [grp],
+          allocationSharePercent: 45,
+          minMinutesPerWeek: 0
+        }),
+        goal({
+          id: "gb",
+          title: "B",
+          groupIds: [grp],
+          allocationSharePercent: 45,
+          minMinutesPerWeek: 0
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const result = allocateWeek({
+      plan: wgPlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const T = result.metrics.utilisation.weekCapacityMinutes;
+    const ceiling = Math.max(0, Math.round(((22 / 100) * T) / 15) * 15);
+    const sumTargets =
+      result.metrics.perGoal.ga!.targetMinutes + result.metrics.perGoal.gb!.targetMinutes;
+    expect(sumTargets).toBeLessThanOrEqual(ceiling);
+    expect(result.metrics.goalGroupGaps.some((g) => g.reason === "weeklyCap")).toBe(false);
+  });
+
+  it("uses the tighter of multiple goal groups for aggregate daily headroom", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const wgPlan: WeeklyPlan = {
+      id: "plan-grp-day",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [
+        { id: "loose", title: "Loose", maxMinutesPerDay: 180 },
+        { id: "tight", title: "Tight", maxMinutesPerDay: 55 }
+      ],
+      goals: [
+        goal({
+          id: "solo",
+          title: "Solo",
+          groupIds: ["loose", "tight"],
+          targetMinutes: 240,
+          dayOfWeek: "monday",
+          minMinutesPerWeek: 0
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const result = allocateWeek({
+      plan: wgPlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal.solo!.scheduledMinutes).toBeLessThanOrEqual(55);
+    expect(result.metrics.goalGroupMinutes.tight).toBe(result.metrics.perGoal.solo!.scheduledMinutes);
+  });
+
+  it("records a weeklyCap goalGroupGap when the group ceiling cannot be met above member floors", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const grp = "grp-infeasible";
+    const wgPlan: WeeklyPlan = {
+      id: "plan-grp-gap",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [{ id: grp, title: "Bounded", maxMinutesPerWeek: 380 }],
+      goals: [
+        goal({
+          id: "gx",
+          title: "X",
+          groupIds: [grp],
+          minMinutesPerWeek: 420
+        }),
+        goal({
+          id: "gy",
+          title: "Y",
+          groupIds: [grp],
+          minMinutesPerWeek: 420
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const result = allocateWeek({
+      plan: wgPlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.goalGroupGaps).toContainEqual(
+      expect.objectContaining({ groupId: grp, reason: "weeklyCap" })
+    );
   });
 });
 

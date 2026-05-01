@@ -79,6 +79,8 @@ interface PlanClientProps {
    * (or a goal isn't present), no pace pill is shown next to the goal.
    */
   paceByGoal?: Record<string, GoalPaceInfo>;
+  /** Map goal-group id → title (from `WeeklyPlan.goalGroups`). */
+  goalGroupTitles?: Record<string, string>;
 }
 
 const DAY_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
@@ -124,7 +126,8 @@ export function PlanClient({
   wheelAreas,
   scheduledByGoal,
   effectiveTargetByGoal,
-  paceByGoal
+  paceByGoal,
+  goalGroupTitles
 }: PlanClientProps) {
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(850);
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
@@ -283,6 +286,7 @@ export function PlanClient({
               onDropAt={(fromIdx, toIdx) => handleReorder(fromIdx, toIdx)}
               focusedGoalId={focusRequest?.goalId}
               focusNonce={focusRequest?.nonce}
+              goalGroupTitles={goalGroupTitles}
             />
           ))}
           <li className="list-none">
@@ -492,7 +496,8 @@ function GoalRow({
   onMoveDown,
   onDropAt,
   focusedGoalId,
-  focusNonce
+  focusNonce,
+  goalGroupTitles
 }: {
   goal: WeeklyGoal;
   index: number;
@@ -510,6 +515,7 @@ function GoalRow({
   onDropAt: (fromIdx: number, toIdx: number) => void;
   focusedGoalId?: string;
   focusNonce?: number;
+  goalGroupTitles?: Record<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editTitle, setEditTitle] = useState(goal.title);
@@ -626,7 +632,7 @@ function GoalRow({
             {pace && pace.status !== "no-data" && (
               <PacePill pace={pace} />
             )}
-            {rowChips.length === 0 && hiddenChips.length === 0 ? (
+            {rowChips.length === 0 && hiddenChips.length === 0 && !(goal.groupIds?.length) ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
                 Equal share
                 {effectiveTarget && effectiveTarget > 0
@@ -651,6 +657,15 @@ function GoalRow({
                     +{hiddenChips.length}
                   </span>
                 ) : null}
+                {(goal.groupIds ?? []).map((gid) => (
+                  <span
+                    key={`grp-${gid}`}
+                    title="Goal group — edit on Planner"
+                    className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent dark:text-accent"
+                  >
+                    {goalGroupTitles?.[gid] ?? gid.slice(0, 8)}
+                  </span>
+                ))}
               </>
             )}
             {allocationRow && (

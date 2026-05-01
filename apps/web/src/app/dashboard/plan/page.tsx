@@ -39,6 +39,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
       weekStart,
       timezone,
       goals: [],
+      goalGroups: [],
       overrides: [],
       weeklyIntent: blank
     };
@@ -55,6 +56,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
       weekStart,
       timezone,
       goals: [],
+      goalGroups: [],
       overrides: [],
       weeklyIntent: blank
     };
@@ -66,6 +68,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     weekStart,
     timezone,
     goals: stored.goals ?? [],
+    goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
     weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
   };
@@ -274,6 +277,7 @@ export default async function PlanPage() {
               scheduledByGoal={scheduledByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}
               paceByGoal={paceByGoal}
+              goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
             />
 
             {allocation.metrics.notScheduled.length > 0 && (

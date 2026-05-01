@@ -203,9 +203,67 @@ export const weeklyGoalSchema = z.object({
   /**
    * Shortcut affinity when explicit charge/drain impacts are omitted.
    */
-  focusAffinity: z.enum(["hyperfocus", "hyperaware", "mixed", "unspecified"]).optional()
+  focusAffinity: z.enum(["hyperfocus", "hyperaware", "mixed", "unspecified"]).optional(),
+  /**
+   * IDs of [`GoalGroup`](goalGroupSchema) on the same [`WeeklyPlan`]. A goal may
+   * belong to several groups; aggregate constraints intersect (tightest wins).
+   */
+  groupIds: z.array(z.string().min(1)).max(16).optional()
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
+
+/**
+ * Scheduling knobs shared by [`WeeklyGoal`] and [`GoalGroup`]. Validator matches
+ * the corresponding fields on `weeklyGoalSchema` exactly (picked, all optional).
+ *
+ * Aggregate semantics (`GoalGroup`): Pass 3 uses `maxMinutesPerDay` /
+ * `minMinutesPerDay` vs **sum** of member goals on each day; weekly limits use
+ * **sum** of member weekly targets vs `allocationSharePercent` (× full-week `T`),
+ * `maxMinutesPerWeek`, etc. Ignore at group level: energy, frameworks, anchors.
+ */
+export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalSchema.pick({
+  targetMinutes: true,
+  minMinutesPerWeek: true,
+  maxMinutesPerWeek: true,
+  minMinutesPerDay: true,
+  maxMinutesPerDay: true,
+  frequencyPerWeek: true,
+  dayOfWeek: true,
+  daysOfWeek: true,
+  earliestHour: true,
+  latestHour: true,
+  placementIdealClockTimes: true,
+  allocationSharePercent: true,
+  scheduleInNiceWeather: true
+});
+export type WeeklyGoalSchedulingConstraints = z.infer<
+  typeof weeklyGoalSchedulingConstraintsSchema
+>;
+
+/** User-defined cohort on the blueprint with aggregate scheduling limits. */
+export const goalGroupSchema = weeklyGoalSchedulingConstraintsSchema.extend({
+  id: z.string().min(1),
+  title: z.string().min(1)
+});
+export type GoalGroup = z.infer<typeof goalGroupSchema>;
+
+/**
+ * Stable stub for [`normaliseGoalTime`] — same inference as goals; never placed.
+ */
+export function stubWeeklyGoalFromGoalGroup(group: GoalGroup): WeeklyGoal {
+  const { id, title, ...constraints } = group;
+  return weeklyGoalSchema.parse({
+    id,
+    title,
+    ...constraints,
+    energyMode: "neutral",
+    energyPolarity: "neutral",
+    attentionMode: "unspecified",
+    workLayer: "unspecified",
+    ppfHorizon: "unspecified",
+    commitmentLevel: "committed"
+  });
+}
 
 function inferChargeFromTags(goal: WeeklyGoal): number {
   let c = 0.2;
@@ -409,9 +467,42 @@ export const weeklyPlanSchema = z.object({
   weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   timezone: z.string(),
   goals: z.array(weeklyGoalSchema).default([]),
+  /**
+   * Named cohorts ("Work", "Screen time") with aggregate limits; members use
+   * `WeeklyGoal.groupIds`. Authoring lives on the Planner hub.
+   */
+  goalGroups: z.array(goalGroupSchema).default([]),
   /** User-supplied drag overrides for sleep, routine, and goal blocks. */
   overrides: z.array(blockOverrideSchema).default([]),
   /** Weekly intention prompts (Burchard-style). Optional; blank for new weeks. */
   weeklyIntent: weeklyIntentSchema.default({} as never)
 });
 export type WeeklyPlan = z.infer<typeof weeklyPlanSchema>;
+
+const GOAL_SCHEDULING_KEYS = Object.keys(
+  weeklyGoalSchedulingConstraintsSchema.shape
+) as (keyof WeeklyGoalSchedulingConstraints)[];
+
+export type WeeklyPlanningConstraintKey =
+  keyof z.infer<typeof weeklyGoalSchedulingConstraintsSchema>;
+
+/** Keys mirrored on goals and goal groups — for UI/tests to stay aligned. */
+export const WEEKLY_GOAL_SCHEDULING_CONSTRAINT_KEYS: readonly WeeklyPlanningConstraintKey[] =
+  GOAL_SCHEDULING_KEYS as WeeklyPlanningConstraintKey[];
+
+/**
+ * Drops `groupIds` entries that don't match a `GoalGroup.id` on `plan`.
+ */
+export function sanitizeWeeklyPlanGoalGroupRefs(plan: WeeklyPlan): WeeklyPlan {
+  const valid = new Set((plan.goalGroups ?? []).map((g) => g.id));
+  const goals =
+    plan.goals?.map((g) =>
+      !g.groupIds?.length
+        ? g
+        : {
+            ...g,
+            groupIds: g.groupIds.filter((id) => valid.has(id))
+          }
+    ) ?? [];
+  return weeklyPlanSchema.parse({ ...plan, goals });
+}

@@ -7,25 +7,38 @@
 import "server-only";
 
 import { createHash } from "crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { unstable_cache, revalidateTag } from "next/cache";
 import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
 
 import type { PlanWeekAllocationInputs } from "./allocation-run-context";
 import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
+import { isLoggedActualSleepTitle } from "./week-blocks";
 
 const ALLOC_CACHE_HOUR_MS = 60 * 60 * 1000;
-/** Repo-root `.cursor/debug-dba26f.log` (from `apps/web/src/lib`). */
-const DEBUG_ALLOC_LOG = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "..",
-  ".cursor",
-  "debug-dba26f.log"
-);
+
+function repoRootFromCwd(): string {
+  let dir = process.cwd();
+  for (let i = 0; i < 12; i++) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+}
+
+function appendDebugSessionLog(payload: Record<string, unknown>): void {
+  try {
+    const root = repoRootFromCwd();
+    const cursorDir = join(root, ".cursor");
+    mkdirSync(cursorDir, { recursive: true });
+    appendFileSync(join(cursorDir, "debug-dba26f.log"), `${JSON.stringify(payload)}\n`);
+  } catch {
+    /* ignore */
+  }
+}
 
 type CachedPlanWeekAllocationInputs = Omit<PlanWeekAllocationInputs, "reviewsByDate"> & {
   reviewsByDateEntries: Array<[string, DailyReview]>;
@@ -83,21 +96,24 @@ export async function getCachedPlanWeekAllocationInputs(options: {
   };
 
   // #region agent log
-  try {
+  {
     const sleepBlockCount = result.systemBlocks.filter((b) => b.system === "sleep").length;
-    appendFileSync(
-      DEBUG_ALLOC_LOG,
-      `${JSON.stringify({
-        sessionId: "dba26f",
-        hypothesisId: "H-alloc-cache-hour-bucket",
-        location: "cached-plan-week-allocation-inputs.ts:getCachedPlanWeekAllocationInputs",
-        message: "plan week allocation inputs",
-        data: { hourBucket, sleepBlockCount, nowMs: result.nowMs },
-        timestamp: Date.now()
-      })}\n`
-    );
-  } catch {
-    /* ignore logging failures */
+    const loggedActualSleepBusyCount = result.busy.filter(
+      (e) => e.busy && isLoggedActualSleepTitle(e.title)
+    ).length;
+    appendDebugSessionLog({
+      sessionId: "dba26f",
+      hypothesisId: "H-alloc-cache-hour-bucket",
+      location: "cached-plan-week-allocation-inputs.ts:getCachedPlanWeekAllocationInputs",
+      message: "plan week allocation inputs",
+      data: {
+        hourBucket,
+        sleepBlockCount,
+        loggedActualSleepBusyCount,
+        nowMs: result.nowMs
+      },
+      timestamp: Date.now()
+    });
   }
   // #endregion
 

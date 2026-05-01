@@ -4,13 +4,16 @@ import { eq } from "drizzle-orm";
 import {
   filterSchedulingGoals,
   type BlockOverride,
+  type GoalGroup,
   type PersonalSystem,
   type WeeklyGoal,
   type WeeklyIntent,
   type WeeklyPlan,
   blockOverrideSchema,
+  goalGroupSchema,
   isInvertedTimemapGoal,
   personalSystemSchema,
+  sanitizeWeeklyPlanGoalGroupRefs,
   weeklyGoalSchema,
   weeklyIntentSchema,
   weeklyPlanSchema
@@ -77,6 +80,7 @@ async function loadOrCreatePlan(userId: string, timezone: string): Promise<Weekl
       weekStart,
       timezone,
       goals: [],
+      goalGroups: [],
       overrides: [],
       weeklyIntent: weeklyIntentSchema.parse({})
     };
@@ -96,6 +100,7 @@ async function loadOrCreatePlan(userId: string, timezone: string): Promise<Weekl
     weekStart,
     timezone,
     goals: baseGoals,
+    goalGroups: stored?.goalGroups ?? [],
     overrides: baseOverrides,
     weeklyIntent: baseIntent
   };
@@ -222,6 +227,40 @@ export async function reorderGoals(orderedIds: readonly string[]): Promise<void>
   const seen = new Set(orderedIds);
   const missing = userGoals.filter((g) => !seen.has(g.id));
   plan.goals = [...reordered, ...missing, ...timemapTail];
+  weeklyPlanSchema.parse(plan);
+  await savePlan(userId, plan);
+  afterPlanMutation(userId);
+}
+
+export async function upsertGoalGroup(input: GoalGroup): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  let plan = sanitizeWeeklyPlanGoalGroupRefs(await loadOrCreatePlan(userId, settings.timezone));
+  const parsed = goalGroupSchema.parse(input);
+  const groups = [...(plan.goalGroups ?? [])];
+  const idx = groups.findIndex((g) => g.id === parsed.id);
+  if (idx >= 0) groups[idx] = parsed;
+  else groups.push(parsed);
+  plan.goalGroups = groups;
+  weeklyPlanSchema.parse(plan);
+  await savePlan(userId, plan);
+  afterPlanMutation(userId);
+}
+
+export async function removeGoalGroup(groupId: string): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  let plan = await loadOrCreatePlan(userId, settings.timezone);
+  plan.goalGroups = (plan.goalGroups ?? []).filter((g) => g.id !== groupId);
+  plan.goals = plan.goals.map((g) => ({
+    ...g,
+    groupIds: g.groupIds?.filter((id) => id !== groupId)
+  }));
+  plan = sanitizeWeeklyPlanGoalGroupRefs(plan);
   weeklyPlanSchema.parse(plan);
   await savePlan(userId, plan);
   afterPlanMutation(userId);

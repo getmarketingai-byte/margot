@@ -167,6 +167,8 @@ async function ensureInvertedTimemapPlanEntry(
         id: row.id,
         weekStart,
         timezone: args.timezone,
+        goals: (row.data as WeeklyPlan).goals ?? [],
+        goalGroups: (row.data as WeeklyPlan).goalGroups ?? [],
         overrides: (row.data as WeeklyPlan).overrides ?? [],
         weeklyIntent: weeklyIntentSchema.parse(
           (row.data as Partial<WeeklyPlan>).weeklyIntent ?? {}
@@ -177,6 +179,7 @@ async function ensureInvertedTimemapPlanEntry(
         weekStart,
         timezone: args.timezone,
         goals: [],
+        goalGroups: [],
         overrides: [],
         weeklyIntent: blank
       };

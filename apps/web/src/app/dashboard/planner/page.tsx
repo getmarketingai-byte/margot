@@ -26,6 +26,7 @@ import { updateWeeklyIntent } from "../plan/actions";
 import { BuildYourSystemPanel } from "./build-your-system-panel";
 import { ConstraintsSection } from "./constraints-section";
 import { updatePlacementSignalsFromFramework } from "./framework-system-actions";
+import { GoalGroupsPanel } from "./goal-groups-panel";
 import { PlanningHubClient } from "./planning-hub-client";
 import { EnergyOrderingForm } from "./rule-forms/energy-ordering-form";
 import { FrameworkRulesReview } from "./rule-forms/framework-rules-review";
@@ -45,6 +46,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
       weekStart,
       timezone,
       goals: [],
+      goalGroups: [],
       overrides: [],
       weeklyIntent: blank
     };
@@ -61,6 +63,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
       weekStart,
       timezone,
       goals: [],
+      goalGroups: [],
       overrides: [],
       weeklyIntent: blank
     };
@@ -72,6 +75,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     weekStart,
     timezone,
     goals: stored.goals ?? [],
+    goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
     weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
   };
@@ -198,6 +202,12 @@ export default async function PlannerHubPage() {
           wheelAreas={wheelAreas}
           schedulerFrameworkInclusion={settings.schedulerFrameworkInclusion}
           savePlacementOrder={updatePlacementSignalsFromFramework}
+        />
+
+        <GoalGroupsPanel
+          initialGoalGroups={plan.goalGroups ?? []}
+          schedulingGoals={perfectWeekAuthoringGoals}
+          freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
         />
       </section>
 

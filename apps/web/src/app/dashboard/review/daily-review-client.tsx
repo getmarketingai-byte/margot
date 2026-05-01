@@ -104,6 +104,51 @@ function buildSlotIndex(slots: readonly LogSlot[]): Map<number, LogSlot> {
   return out;
 }
 
+/** Stable key for "same activity" when suggesting bridge fills between slots. */
+function activityKeyForBridge(slot: LogSlot): string | null {
+  if (slot.category === "goal") {
+    const id = slot.goalId?.trim();
+    if (!id) return null;
+    return `goal:${id}`;
+  }
+  return `cat:${slot.category}`;
+}
+
+interface BridgeGapSuggestion {
+  fillMinutes: number[];
+  endpoint: LogSlot;
+}
+
+/**
+ * Empty 15-min rows strictly between two logged rows with the same activity
+ * (same goal, or same non-goal category).
+ */
+function computeBridgeGapSuggestions(
+  slotIndex: Map<number, LogSlot>,
+  slotMinutes: number[]
+): BridgeGapSuggestion[] {
+  const filled = slotMinutes.filter((m) => slotIndex.has(m));
+  const out: BridgeGapSuggestion[] = [];
+  for (let i = 0; i < filled.length; i++) {
+    const m1 = filled[i]!;
+    const s1 = slotIndex.get(m1);
+    if (!s1) continue;
+    const k1 = activityKeyForBridge(s1);
+    if (!k1) continue;
+    for (let j = i + 1; j < filled.length; j++) {
+      const m2 = filled[j]!;
+      const s2 = slotIndex.get(m2);
+      if (!s2) continue;
+      if (activityKeyForBridge(s2) !== k1) continue;
+      const gap = slotMinutes.filter((m) => m1 < m && m < m2);
+      if (gap.length === 0) continue;
+      if (gap.some((m) => slotIndex.has(m))) continue;
+      out.push({ fillMinutes: gap, endpoint: s1 });
+    }
+  }
+  return out;
+}
+
 export function DailyReviewClient({
   date,
   initialReview,
@@ -161,6 +206,28 @@ export function DailyReviewClient({
         void setLogSlots(date, slots);
       });
     }, 400);
+  };
+
+  const fillBridgeGap = (fillMinutes: readonly number[], endpoint: LogSlot) => {
+    const additions: LogSlot[] = [];
+    for (const m of fillMinutes) {
+      if (slotIndex.has(m)) continue;
+      additions.push({
+        startMinute: m,
+        endMinute: m + SLOT_LENGTH_MIN,
+        category: endpoint.category,
+        ...(endpoint.category === "goal" && endpoint.goalId
+          ? { goalId: endpoint.goalId }
+          : {}),
+        energy: "neutral"
+      });
+    }
+    if (additions.length === 0) return;
+    flushSlots(
+      [...review.slots, ...additions].sort(
+        (a, b) => a.startMinute - b.startMinute
+      )
+    );
   };
 
   const updateSlot = (startMinute: number, patch: Partial<LogSlot>) => {
@@ -344,6 +411,7 @@ export function DailyReviewClient({
         onSetBlockMark={updateBlockMark}
         onApplyBlock={applyBlockToLog}
         onClearBlock={clearBlockFromLog}
+        onFillBridgeGap={fillBridgeGap}
       />
 
       <GoalMarksCard
@@ -450,7 +518,8 @@ function TimelineCard({
   onClearSlot,
   onSetBlockMark,
   onApplyBlock,
-  onClearBlock
+  onClearBlock,
+  onFillBridgeGap
 }: {
   slotMinutes: number[];
   slotIndex: Map<number, LogSlot>;
@@ -466,6 +535,7 @@ function TimelineCard({
   onSetBlockMark: (blockKey: string, status: BlockMark["status"] | null) => void;
   onApplyBlock: (block: AllocatedBlockSnapshot) => void;
   onClearBlock: (block: AllocatedBlockSnapshot) => void;
+  onFillBridgeGap: (fillMinutes: readonly number[], endpoint: LogSlot) => void;
 }) {
   // Map each visible slot start-minute to the block (if any) that covers it.
   // Object identity is preserved so we can detect block boundaries with
@@ -522,8 +592,21 @@ function TimelineCard({
     return out;
   }, [blocks, dayStartMs, logStartMinute, logEndMinute, slotIndex]);
 
+  const bridgeSuggestions = useMemo(
+    () => computeBridgeGapSuggestions(slotIndex, slotMinutes),
+    [slotIndex, slotMinutes]
+  );
+
   const totalRows = slotMinutes.length;
   const filledRows = slotMinutes.filter((m) => slotIndex.has(m)).length;
+
+  const bridgeActivityLabel = (s: BridgeGapSuggestion): string => {
+    const ep = s.endpoint;
+    if (ep.category === "goal" && ep.goalId) {
+      return goalById.get(ep.goalId)?.title ?? "Goal";
+    }
+    return CATEGORY_LABEL[ep.category];
+  };
 
   return (
     <section className="card">
@@ -540,6 +623,49 @@ function TimelineCard({
           {formatMinutes(totalRows * SLOT_LENGTH_MIN)} window
         </div>
       </header>
+      {bridgeSuggestions.length > 0 ? (
+        <div
+          className="mb-3 rounded-md border border-accent/35 bg-accent/5 px-3 py-2 dark:bg-accent/10"
+          role="status"
+        >
+          <p className="text-xs text-ink-600 dark:text-ink-200">
+            Same activity logged twice with empty rows in between — fill the gap
+            as that activity?
+          </p>
+          <ul className="mt-2 flex flex-col gap-2">
+            {bridgeSuggestions.map((s, idx) => {
+              const first = s.fillMinutes[0]!;
+              const lastStart = s.fillMinutes[s.fillMinutes.length - 1]!;
+              const label = bridgeActivityLabel(s);
+              return (
+                <li
+                  key={`${idx}-${first}-${lastStart}`}
+                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <span className="text-ink-500 dark:text-ink-300">
+                    <span className="font-medium text-ink-700 dark:text-ink-100">
+                      {label}
+                    </span>
+                    {" · "}
+                    {fmtTime(first)}–{fmtTime(lastStart + SLOT_LENGTH_MIN)} (
+                    {s.fillMinutes.length} slot
+                    {s.fillMinutes.length === 1 ? "" : "s"})
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-200 dark:hover:text-ink-100"
+                    onClick={() =>
+                      onFillBridgeGap(s.fillMinutes, s.endpoint)
+                    }
+                  >
+                    Fill gap
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
       {blocks.length === 0 ? (
         <p className="mb-3 rounded-md border border-dashed border-ink-200 bg-ink-50/60 p-2 text-xs text-ink-400 dark:border-ink-600 dark:bg-ink-900/40">
           No planned blocks were captured for this day yet — open this page

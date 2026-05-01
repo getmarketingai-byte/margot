@@ -46,12 +46,14 @@ const MINUTE_MS = 60 * 1000;
 const ACTUAL_SLEEP_NIGHT_OVERLAP_MS = 30 * MINUTE_MS;
 
 /**
- * Calendar rows that log real sleep (e.g. `[Sleep][Actual]`) — busy intervals only.
- * Case-insensitive; requires both `[sleep]` and `[actual]` substrings in the title.
+ * Calendar rows that log real sleep (e.g. `[Sleep][Actual]` or `[Sleep] [Actual]`) — busy only.
+ * Case-insensitive; tolerates whitespace between tags (collapsed check + substring fallback).
  */
 export function isLoggedActualSleepTitle(title: string): boolean {
   const n = (title || "").trim().toLowerCase();
-  return n.includes("[sleep]") && n.includes("[actual]");
+  if (!n.includes("[actual]")) return false;
+  const collapsed = n.replace(/\s+/g, "");
+  return collapsed.includes("[sleep][actual]") || (n.includes("[sleep]") && n.includes("[actual]"));
 }
 
 function loggedActualSleepIntervalsFromBusy(calendarBusy: readonly BusyEvent[]): Interval[] {

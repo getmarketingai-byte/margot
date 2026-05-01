@@ -30,6 +30,14 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 - **One auto block per goal per day** (by design): reduces context switching. Additional demand spills to other days in extra passes when availability allows.
 - Drag overrides and `source: "actual"` pins are honoured per existing pin rules (including relaxed overlap for actuals vs calendar busy, but not vs sleep).
 
+## Goal groups (aggregate constraints)
+
+- **Definitions:** [`GoalGroup`](../schema/src/goals.ts) rows live on [`WeeklyPlan.goalGroups`](../schema/src/goals.ts); goals reference them via [`WeeklyGoal.groupIds`](../schema/src/goals.ts). Scheduling knobs are the same **picked** fields as on goals (`allocationSharePercent`, weekly/day min/max, cadence, placement windows, etc.); group rows use aggregate semantics (sum across member goals), not commitment tiers or framework mirrors.
+- **Weekly caps (after Pass 1+2 targets, before Pass 3 demand trimming):** For each group, member **`plannedWeeklyMinutes`** are compared to the same ceiling interpretation as a single goal built from the group’s constraint fields (`stubWeeklyGoalFromGoalGroup` + `normaliseGoalTime`), using full-week capacity **`T`** = `weekCapacityMinutes` (same denominator as Pass 2 `%` of week). When the aggregate exceeds the cap, minutes come down proportionally from goals that have slack above their Pass 1 floors; if there is no slack, a **`goalGroupGaps` `weeklyCap`** row records the shortfall.
+- **Weekly floors:** A group **`minMinutesPerWeek`** below the sum of member weekly targets surfaces **`weeklyFloor`** in `goalGroupGaps` (planning signal only — targets are not grown automatically).
+- **Pass 3 daily intersection:** Per goal, existing `maxMinutesPerDay` / `minMinutesPerDay` headroom intersects with **each** member group’s aggregate usage that day (pins + auto blocks + `daysheet-goal:` logs for every member). The **tightest** remaining headroom applies, matching how goal-level caps already interact with logging.
+- **Metrics:** `WeekMetrics.goalGroupMinutes` totals achieved weekly minutes per group (same basis as `perGoal.scheduledMinutes`). `goalGroupGaps` also receives **`dailyCap`** entries when post-hoc aggregate usage on a day exceeds a group’s normalised daily maximum.
+
 ## Metrics (`WeekMetrics`)
 
 ### Per-goal

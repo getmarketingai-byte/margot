@@ -35,6 +35,7 @@ const timemapMorning60: TimemapSettings = {
 describe("computeSleepBlocks + timemap routines", () => {
   it("detects logged actual sleep titles case-insensitively", () => {
     expect(isLoggedActualSleepTitle("[Sleep][Actual]")).toBe(true);
+    expect(isLoggedActualSleepTitle("[Sleep] [Actual]")).toBe(true);
     expect(isLoggedActualSleepTitle("[sleep][actual] notes")).toBe(true);
     expect(isLoggedActualSleepTitle("[Sleep] planned")).toBe(false);
   });

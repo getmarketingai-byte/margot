@@ -26,6 +26,7 @@ async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promis
       weekStart,
       timezone,
       goals: [],
+      goalGroups: [],
       overrides: [],
       weeklyIntent: blank
     };
@@ -42,6 +43,7 @@ async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promis
       weekStart,
       timezone,
       goals: [],
+      goalGroups: [],
       overrides: [],
       weeklyIntent: blank
     };
@@ -53,6 +55,7 @@ async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promis
     weekStart,
     timezone,
     goals: stored.goals ?? [],
+    goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
     weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
   };

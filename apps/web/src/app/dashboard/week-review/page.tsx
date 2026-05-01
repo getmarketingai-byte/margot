@@ -49,6 +49,7 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     weekStart,
     timezone,
     goals: [],
+    goalGroups: [],
     overrides: [],
     weeklyIntent: { hp6Focus: [] }
   };
@@ -66,6 +67,8 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     id: row.id,
     weekStart,
     timezone,
+    goals: stored.goals ?? [],
+    goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
     weeklyIntent: stored.weeklyIntent ?? { hp6Focus: [] }
   };

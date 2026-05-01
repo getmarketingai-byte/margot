@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   blockOverrideSchema,
   effectiveEnergyBatteryProfile,
+  goalGroupSchema,
   normaliseGoalTime,
-  weeklyGoalSchema
+  sanitizeWeeklyPlanGoalGroupRefs,
+  stubWeeklyGoalFromGoalGroup,
+  weeklyGoalSchema,
+  weeklyPlanSchema
 } from "../src/goals";
 
 describe("WeeklyGoal energy classification fields", () => {
@@ -150,6 +154,53 @@ describe("WeeklyGoal energy classification fields", () => {
       })
     );
     expect(norm.minMinutesPerWeek).toBe(60);
+  });
+});
+
+describe("GoalGroup & weekly plan group refs", () => {
+  it("round-trips goalGroupSchema scheduling fields", () => {
+    const g = goalGroupSchema.parse({
+      id: "grp-1",
+      title: "Screen time",
+      allocationSharePercent: 35,
+      maxMinutesPerDay: 90
+    });
+    expect(g.id).toBe("grp-1");
+    expect(g.allocationSharePercent).toBe(35);
+    expect(g.maxMinutesPerDay).toBe(90);
+  });
+
+  it("stubWeeklyGoalFromGoalGroup applies neutral framework defaults for allocator reuse", () => {
+    const stub = stubWeeklyGoalFromGoalGroup(
+      goalGroupSchema.parse({
+        id: "grp-stub",
+        title: "Stub group",
+        maxMinutesPerWeek: 400
+      })
+    );
+    expect(stub.id).toBe("grp-stub");
+    expect(stub.title).toBe("Stub group");
+    expect(stub.maxMinutesPerWeek).toBe(400);
+    expect(stub.energyMode).toBe("neutral");
+    expect(stub.ppfHorizon).toBe("unspecified");
+  });
+
+  it("sanitizeWeeklyPlanGoalGroupRefs drops unknown groupIds", () => {
+    const raw = weeklyPlanSchema.parse({
+      id: "w1",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [{ id: "keep", title: "K", maxMinutesPerDay: 60 }],
+      goals: [
+        weeklyGoalSchema.parse({
+          id: "g1",
+          title: "A",
+          groupIds: ["keep", "gone"]
+        })
+      ]
+    });
+    const cleaned = sanitizeWeeklyPlanGoalGroupRefs(raw);
+    expect(cleaned.goals[0]!.groupIds).toEqual(["keep"]);
   });
 });
 
