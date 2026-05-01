@@ -1492,9 +1492,16 @@ function allocateGoal(
         niceWeatherWindows &&
         niceWeatherWindows.length > 0
     );
-  // Spill passes can place one fragment per pass per day; several disjoint gaps
-  // or repeated headroom need >2 rounds even without invert/nice-weather windows.
-  const maxPasses = needsExtraPasses ? 32 : 16;
+  // Each pass schedules at most one auto block per allowed day. Fragmented weeks
+  // (many small pockets on the same day, or invert / nice-weather windows) may need
+  // far more passes than a tiny fixed cap — otherwise we stop at `maxPasses` with
+  // demand left though gaps still exist. Scale with quantised demand × allowed
+  // days (conservative); cap as a safety rail. Idle passes still exit early via
+  // `daysScheduledThisPass === 0`.
+  const baselineMaxPasses = needsExtraPasses ? 64 : 48;
+  const demandPasses =
+    Math.ceil(remainingMinutes / QUANTUM) * Math.max(1, allowedDays.length);
+  const maxPasses = Math.min(2048, Math.max(baselineMaxPasses, demandPasses));
   for (let pass = 0; pass < maxPasses && remainingMinutes > 0; pass++) {
     let daysScheduledThisPass = 0;
     for (const dayIdx of allowedDays) {

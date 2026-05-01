@@ -4,10 +4,6 @@
  * preferred windows and duration fallbacks.
  */
 
-function _timeMapDebugLog(runId, hypothesisId, location, message, data) {
-  return;
-}
-
 /**
  * Returns the 4 TimeMap titles in execution order.
  * @returns {string[]}
@@ -21,15 +17,6 @@ function _timeMapBlockTitles() {
  */
 function _timeMapDateKey(d) {
   return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
-}
-
-/**
- * Formats epoch ms in script timezone for readable debug logs.
- */
-function _timeMapFormatMsLocal(ms) {
-  if (ms == null) return null;
-  var tz = Session.getScriptTimeZone();
-  return Utilities.formatDate(new Date(ms), tz, "yyyy-MM-dd HH:mm:ss Z");
 }
 
 /**
@@ -246,19 +233,6 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
   var msPerMinute = 60 * 1000;
   var earliestStartMs = new Date(dayStartMs).setHours(GYM_EARLIEST_START_HOUR, GYM_EARLIEST_START_MINUTE, 0, 0);
   var latestEndMs = Math.min(dayEndMs, new Date(dayStartMs).setHours(GYM_LATEST_END_HOUR, GYM_LATEST_END_MINUTE, 0, 0));
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H8", "TimeMapBlocks.gs:_timeMapPlaceGym:daytime-bounds", "Gym placement daytime bounds", {
-    dayStartMs: dayStartMs,
-    dayEndMs: dayEndMs,
-    earliestStartMs: earliestStartMs,
-    latestEndMs: latestEndMs,
-    dayStartLocal: _timeMapFormatMsLocal(dayStartMs),
-    dayEndLocal: _timeMapFormatMsLocal(dayEndMs),
-    earliestStartLocal: _timeMapFormatMsLocal(earliestStartMs),
-    latestEndLocal: _timeMapFormatMsLocal(latestEndMs),
-    freeGapsCount: (freeGaps || []).length
-  });
-  // #endregion
   if (latestEndMs <= earliestStartMs) return null;
   var preferredExactStarts = [
     new Date(dayStartMs).setHours(GYM_PREFERRED_EXACT_START_HOUR, GYM_PREFERRED_EXACT_START_MINUTE, 0, 0)
@@ -277,16 +251,6 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
       endMs: latestEndMs
     }
   ];
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H11", "TimeMapBlocks.gs:_timeMapPlaceGym:window-definition", "Gym window definitions in local time", {
-    window0StartLocal: _timeMapFormatMsLocal(windows[0].startMs),
-    window0EndLocal: _timeMapFormatMsLocal(windows[0].endMs),
-    window1StartLocal: _timeMapFormatMsLocal(windows[1].startMs),
-    window1EndLocal: _timeMapFormatMsLocal(windows[1].endMs),
-    window2StartLocal: _timeMapFormatMsLocal(windows[2].startMs),
-    window2EndLocal: _timeMapFormatMsLocal(windows[2].endMs)
-  });
-  // #endregion
   var options = [
     // Gym session duration must remain 45m/30m; travel is always emitted as separate events.
     // Prefer run legs first (long then short), then fallback to drive legs.
@@ -308,16 +272,6 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
     }
     windowFitMinutes.push(Math.floor(bestFitMs / 60000));
   }
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H13", "TimeMapBlocks.gs:_timeMapPlaceGym:window-fit-minutes", "Longest fit minutes per gym window", {
-    window0Local: _timeMapFormatMsLocal(windows[0].startMs) + " -> " + _timeMapFormatMsLocal(windows[0].endMs),
-    window1Local: _timeMapFormatMsLocal(windows[1].startMs) + " -> " + _timeMapFormatMsLocal(windows[1].endMs),
-    window2Local: _timeMapFormatMsLocal(windows[2].startMs) + " -> " + _timeMapFormatMsLocal(windows[2].endMs),
-    window0LongestFitMinutes: windowFitMinutes[0],
-    window1LongestFitMinutes: windowFitMinutes[1],
-    window2LongestFitMinutes: windowFitMinutes[2]
-  });
-  // #endregion
   var longestDaytimeFitMs = 0;
   var totalFreeDaytimeMs = 0;
   for (var fg = 0; fg < freeGaps.length; fg++) {
@@ -348,22 +302,8 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
       feasibleByLongestDaytimeGap: longestDaytimeFitMs >= requiredMinutes * msPerMinute
     });
   }
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H9", "TimeMapBlocks.gs:_timeMapPlaceGym:daytime-feasibility", "Daytime feasibility against gym options", {
-    dayStartMs: dayStartMs,
-    earliestStartMs: earliestStartMs,
-    latestEndMs: latestEndMs,
-    longestDaytimeFitMinutes: Math.floor(longestDaytimeFitMs / 60000),
-    totalFreeDaytimeMinutes: totalFreeDaytimeMinutes,
-    freeMinutesMin: GYM_FREE_MINUTES_MIN,
-    freeMinutesFull: GYM_FREE_MINUTES_FULL,
-    freeTimeRatio: freeTimeRatio,
-    allowedGymMinutes: allowedGymMinutes,
-    optionFeasibility: optionFeasibility
-  });
-  // #endregion
   var mergedOutside = outsideIntervals || [];
-  var tryBuildGymPlacement = function (slot, option, sourceLabel, sourceData) {
+  var tryBuildGymPlacement = function (slot, option) {
     var travelMs = option.travelEachMinutes * msPerMinute;
     var gymDurationMs = option.gymMinutes * msPerMinute;
     var gymStartMs = slot.startMs + travelMs;
@@ -372,19 +312,6 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
       var thereCovered = _timeMapIntervalIsFullyContained(slot.startMs, gymStartMs, mergedOutside);
       var backCovered = _timeMapIntervalIsFullyContained(gymEndMs, slot.endMs, mergedOutside);
       if (!thereCovered || !backCovered) {
-        // #region agent log
-        _timeMapDebugLog("gym-debug", "H23", "TimeMapBlocks.gs:_timeMapPlaceGym:run-rejected-outside", "Run option rejected because [Outside] does not fully cover both legs", {
-          source: sourceLabel,
-          sourceData: sourceData || null,
-          slotStartMs: slot.startMs,
-          slotEndMs: slot.endMs,
-          gymStartMs: gymStartMs,
-          gymEndMs: gymEndMs,
-          thereCovered: thereCovered,
-          backCovered: backCovered,
-          outsideIntervalsCount: mergedOutside.length
-        });
-        // #endregion
         return null;
       }
     }
@@ -411,20 +338,9 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
       if (exactStartMs + durationMs > latestEndMs) continue;
       var slot = _timeMapFindSlotAtExactStart(freeGaps, exactStartMs, durationMs);
       if (slot) {
-        var placementExact = tryBuildGymPlacement(slot, options[o], "exact-start", { exactStartMs: exactStartMs });
+        var placementExact = tryBuildGymPlacement(slot, options[o]);
         if (!placementExact) continue;
         if (options[o].gymMinutes > allowedGymMinutes) continue;
-        // #region agent log
-        _timeMapDebugLog("gym-debug", "H3", "TimeMapBlocks.gs:_timeMapPlaceGym:exact-match", "Gym slot selected via preferred exact start", { dayStartMs: dayStartMs, freeGapsCount: (freeGaps || []).length, travelMode: options[o].travelMode, gymMinutes: options[o].gymMinutes, travelEachMinutes: options[o].travelEachMinutes, slotStartMs: slot.startMs, slotEndMs: slot.endMs });
-        // #endregion
-        // #region agent log
-        _timeMapDebugLog("gym-debug", "H12", "TimeMapBlocks.gs:_timeMapPlaceGym:exact-match-local", "Gym exact-match slot local time", {
-          slotStartLocal: _timeMapFormatMsLocal(slot.startMs),
-          slotEndLocal: _timeMapFormatMsLocal(slot.endMs),
-          gymStartLocal: _timeMapFormatMsLocal(placementExact.gymStartMs),
-          gymEndLocal: _timeMapFormatMsLocal(placementExact.gymEndMs)
-        });
-        // #endregion
         return placementExact;
       }
     }
@@ -432,23 +348,9 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
     for (var w = 0; w < windows.length; w++) {
       var slot = _timeMapFindSlotInWindow(freeGaps, windows[w].startMs, windows[w].endMs, durationMs);
       if (slot) {
-        var placementWindow = tryBuildGymPlacement(slot, options[o], "window", { windowIndex: w });
+        var placementWindow = tryBuildGymPlacement(slot, options[o]);
         if (!placementWindow) continue;
         if (options[o].gymMinutes > allowedGymMinutes) continue;
-        // #region agent log
-        _timeMapDebugLog("gym-debug", "H3", "TimeMapBlocks.gs:_timeMapPlaceGym:window-match", "Gym slot selected via window search", { dayStartMs: dayStartMs, freeGapsCount: (freeGaps || []).length, windowIndex: w, windowStartMs: windows[w].startMs, windowEndMs: windows[w].endMs, travelMode: options[o].travelMode, gymMinutes: options[o].gymMinutes, travelEachMinutes: options[o].travelEachMinutes, slotStartMs: slot.startMs, slotEndMs: slot.endMs });
-        // #endregion
-        // #region agent log
-        _timeMapDebugLog("gym-debug", "H12", "TimeMapBlocks.gs:_timeMapPlaceGym:window-match-local", "Gym window-match slot local time", {
-          windowIndex: w,
-          windowStartLocal: _timeMapFormatMsLocal(windows[w].startMs),
-          windowEndLocal: _timeMapFormatMsLocal(windows[w].endMs),
-          slotStartLocal: _timeMapFormatMsLocal(slot.startMs),
-          slotEndLocal: _timeMapFormatMsLocal(slot.endMs),
-          gymStartLocal: _timeMapFormatMsLocal(placementWindow.gymStartMs),
-          gymEndLocal: _timeMapFormatMsLocal(placementWindow.gymEndMs)
-        });
-        // #endregion
         return placementWindow;
       }
     }
@@ -458,9 +360,6 @@ function _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) {
     var gapMs = freeGaps[g].endMs - freeGaps[g].startMs;
     if (gapMs > longestGapMs) longestGapMs = gapMs;
   }
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H3", "TimeMapBlocks.gs:_timeMapPlaceGym:return-null", "No gym slot found for day", { dayStartMs: dayStartMs, dayEndMs: dayEndMs, freeGapsCount: (freeGaps || []).length, longestGapMinutes: Math.floor(longestGapMs / 60000) });
-  // #endregion
   return null;
 }
 
@@ -1008,9 +907,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   } else {
     console.warn("GYM_EVENT_CALENDAR_ID is placeholder; legacy gym calendar sync is skipped.");
   }
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H1", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-cal-init", "Gym calendar initialization status", { gymEventCalendarIdConfigured: !!GYM_EVENT_CALENDAR_ID, isPlaceholder: GYM_EVENT_CALENDAR_ID ? GYM_EVENT_CALENDAR_ID.indexOf("REPLACE_WITH_") === 0 : true, gymCalendarResolved: !!gymCal, useSkedpalGymSource: useSkedpalGymSource });
-  // #endregion
 
   var now = new Date();
   var todayStart = new Date(now.getTime());
@@ -1029,23 +925,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
   var planningHorizonMs = Math.max(60 * 1000, totalBudgetMs - syncReserveMs);
   var planningDeadlineMs = runStartMs + planningHorizonMs;
   var syncDeadlineMs = runStartMs + totalBudgetMs;
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H2", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:range", "TimeMap run window parameters", { offset: offset, count: count, endDayExclusive: endDayExclusive, schedulingWindow: SCHEDULING_WINDOW, maxRuntimeMs: maxRuntimeMs, totalBudgetMs: totalBudgetMs, planningDeadlineMs: planningDeadlineMs, syncDeadlineMs: syncDeadlineMs });
-  // #endregion
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H10", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:timezone", "Timezone configuration cross-check", {
-    scriptTimezone: Session.getScriptTimeZone(),
-    scriptNowLocal: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss Z"),
-    defaultCalendarTimezone: CalendarApp.getDefaultCalendar().getTimeZone(),
-    gymCalendarTimezone: gymCal ? gymCal.getTimeZone() : null
-  });
-  // #endregion
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H22", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:busy-helper-availability", "Busy helper availability/function fingerprint", {
-    hasEventIsBusyByTransparency: typeof _eventIsBusyByTransparency === "function",
-    eventIsBusyByTransparencyFingerprint: typeof _eventIsBusyByTransparency === "function" ? String(_eventIsBusyByTransparency).slice(0, 180) : null
-  });
-  // #endregion
   var desiredByTitle = {};
   var titles = _timeMapBlockTitles();
   for (var t = 0; t < titles.length; t++) desiredByTitle[titles[t]] = [];
@@ -1062,21 +941,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
       excludedByRules: _timeMapIsCalendarExcluded(auditCal, null)
     });
   }
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H18", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:skedpal-calendar-audit", "SkedPal calendar exclusion audit", {
-    timemapTreatSkedpalAsBusy: TIMEMAP_TREAT_SKEDPAL_AS_BUSY,
-    skedpalCalendarCount: skedpalCalendarAudit.length,
-    skedpalCalendars: skedpalCalendarAudit
-  });
-  // #endregion
   var sleepCal = (typeof SLEEP_CALENDAR_ID !== "undefined") ? CalendarApp.getCalendarById(SLEEP_CALENDAR_ID) : null;
   var noSlotDiagnosticsEmitted = 0;
-  // #region agent log
-  _timeMapDebugLog("gym-debug", "H7", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:sleep-cal-init", "Sleep calendar visibility for busy-collection cross-check", {
-    sleepCalendarIdConfigured: typeof SLEEP_CALENDAR_ID !== "undefined",
-    sleepCalendarResolved: !!sleepCal
-  });
-  // #endregion
 
   var lastProcessedDay = offset - 1;
   for (var i = offset; i < endDayExclusive; i++) {
@@ -1116,52 +982,17 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
         var seEnd = Math.min(dayEndMs, sleepEvents[se].getEndTime().getTime());
         if (seEnd > seStart) sleepOverlapMinutes += Math.floor((seEnd - seStart) / 60000);
       }
-      // #region agent log
-      _timeMapDebugLog("gym-debug", "H7", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:sleep-overlap", "Sleep overlap in this day window", {
-        dayKey: dayKey,
-        sleepEventCountInDay: sleepEvents.length,
-        sleepOverlapMinutes: sleepOverlapMinutes
-      });
-      // #endregion
     }
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H4", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:day-gaps", "Daily free gap stats before gym placement", { dayKey: dayKey, busyCount: busy.length, mergedBusyCount: mergedBusy.length, freeGapCount: freeGaps.length, firstGapStartMs: freeGaps.length ? freeGaps[0].startMs : null, firstGapEndMs: freeGaps.length ? freeGaps[0].endMs : null });
-    // #endregion
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H17", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:skedpal-filter", "SkedPal busy/free filtering counts", {
-      dayKey: dayKey,
-      skedpalSeen: busyDebugMeta.skedpalSeen,
-      skedpalBusyIncluded: busyDebugMeta.skedpalBusyIncluded,
-      skedpalFreeSkipped: busyDebugMeta.skedpalFreeSkipped,
-      skedpalBusyCheckUnavailable: busyDebugMeta.skedpalBusyCheckUnavailable,
-      skedpalAllDaySkipped: busyDebugMeta.skedpalAllDaySkipped,
-      skedpalMultiDaySkipped: busyDebugMeta.skedpalMultiDaySkipped
-    });
-    // #endregion
 
     var outsideIntervals = _timeMapGetOutsideIntervalsForDay(timemapCal, dayStartMs, dayEndMs);
     var shouldPlaceGymSlot = useSkedpalGymSource || !!gymCal;
     var gymSlot = shouldPlaceGymSlot ? _timeMapPlaceGym(dayStartMs, dayEndMs, freeGaps, outsideIntervals) : null;
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H4", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-slot", "Gym slot placement result for day", { dayKey: dayKey, hasGymCal: !!gymCal, gymSlotFound: !!gymSlot, travelMode: gymSlot ? gymSlot.travelMode : null, gymStartMs: gymSlot ? gymSlot.gymStartMs : null, gymEndMs: gymSlot ? gymSlot.gymEndMs : null });
-    // #endregion
     if (shouldPlaceGymSlot && !gymSlot && noSlotDiagnosticsEmitted < 6) {
       var topCalendars = Object.keys(busyDebugMeta.calendarCounts).map(function (name) {
         return { name: name, count: busyDebugMeta.calendarCounts[name] };
       }).sort(function (a, b) {
         return b.count - a.count;
       }).slice(0, 5);
-      // #region agent log
-      _timeMapDebugLog("gym-debug", "H14", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:no-slot-attribution", "No-slot busy attribution sample", {
-        dayKey: dayKey,
-        skedpalSeen: busyDebugMeta.skedpalSeen,
-        skedpalBusyIncluded: busyDebugMeta.skedpalBusyIncluded,
-        skedpalFreeSkipped: busyDebugMeta.skedpalFreeSkipped,
-        skedpalBusyCheckUnavailable: busyDebugMeta.skedpalBusyCheckUnavailable,
-        topCalendars: topCalendars,
-        sampleEvents: busyDebugMeta.samples
-      });
-      // #endregion
       noSlotDiagnosticsEmitted++;
     }
     if (gymSlot) {
@@ -1237,9 +1068,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
 
   if (lastProcessedDay < offset) {
     console.warn("addEvents_TimeMapBlocks: no days processed this run.");
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H2", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:no-days", "No days processed due runtime/range", { offset: offset, lastProcessedDay: lastProcessedDay, endDayExclusive: endDayExclusive });
-    // #endregion
     return;
   }
   if (lastProcessedDay < endDayExclusive - 1) {
@@ -1276,25 +1104,7 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
       else if (gTitle === GYM_DRIVE_TO_TITLE) desiredGymDriveToCount++;
       else if (gTitle === GYM_DRIVE_HOME_TITLE) desiredGymDriveHomeCount++;
     }
-    // #region agent log
-    _timeMapDebugLog("gym-debug", "H20", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:no-write-mode", "No-write debug mode active; skipping calendar syncs", {
-      timemapDebugNoWrites: TIMEMAP_DEBUG_NO_WRITES,
-      syncStartMs: syncStart.getTime(),
-      syncEndMs: syncEnd.getTime(),
-      desiredTimeMapCounts: desiredTimeMapCounts,
-      desiredErrandsCount: desiredErrands.length,
-      desiredScoutHallCount: desiredScoutHall.length,
-      useSkedpalGymSource: useSkedpalGymSource,
-      desiredGymTimemap: desiredGymTimemapCount,
-      desiredGymTotal: desiredGymAll.length,
-      desiredGymMain: desiredGymMainCount,
-      desiredGymRunTo: desiredGymRunToCount,
-      desiredGymRunHome: desiredGymRunHomeCount,
-      desiredGymDriveTo: desiredGymDriveToCount,
-      desiredGymDriveHome: desiredGymDriveHomeCount
-    });
-    // #endregion
-    return;
+        return;
   }
 
   var desiredGymMainAll = [];
@@ -1415,39 +1225,19 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
         var desiredGymRunHomeDay = _timeMapDesiredEventsOverlappingDay(desiredGymRunHomeAll, syncDayStartMs, syncDayEndMs);
         var desiredGymDriveToDay = _timeMapDesiredEventsOverlappingDay(desiredGymDriveToAll, syncDayStartMs, syncDayEndMs);
         var desiredGymDriveHomeDay = _timeMapDesiredEventsOverlappingDay(desiredGymDriveHomeAll, syncDayStartMs, syncDayEndMs);
-        if (di === offset) {
-          // #region agent log
-          _timeMapDebugLog("gym-debug", "H5", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:pre-sync-gym", "Gym desired payload counts before sync (first day only)", { syncStartMs: syncStart.getTime(), syncEndMs: syncEnd.getTime(), desiredGymTotal: desiredGym.length, desiredGymMain: desiredGymMainAll.length, desiredGymRunTo: desiredGymRunToAll.length, desiredGymRunHome: desiredGymRunHomeAll.length, desiredGymDriveTo: desiredGymDriveToAll.length, desiredGymDriveHome: desiredGymDriveHomeAll.length });
-          // #endregion
-        }
 
-        var gymMainStats = _syncCalendarEvents(gymCal, GYM_TITLE, syncDayStart, syncDayRangeEnd, desiredGymMainDay, {
+        _syncCalendarEvents(gymCal, GYM_TITLE, syncDayStart, syncDayRangeEnd, desiredGymMainDay, {
           keyFromExisting: function (ev) {
             return (ev.getTitle() || "").trim() === GYM_TITLE
               ? _timeMapDateKey(ev.getStartTime()) + "_Gym_Main"
               : null;
           },
           onEventSynced: function (calendar, event, desired) {
-            // #region agent log
-            _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-main-synced", "Gym main event synced", {
-              calendarId: calendar.getId(),
-              eventId: event.getId(),
-              title: event.getTitle(),
-              startMs: event.getStartTime().getTime(),
-              endMs: event.getEndTime().getTime(),
-              desiredKey: desired ? desired.key : null
-            });
-            // #endregion
             _timeMapSetEventLocation(calendar, event, desired.location || "");
           }
         });
-        if (di === offset) {
-          // #region agent log
-          _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-main-stats", "Gym main sync stats (first day)", gymMainStats);
-          // #endregion
-        }
 
-        var gymRunToStats = _syncCalendarEvents(gymCal, GYM_RUN_TO_TITLE, syncDayStart, syncDayRangeEnd, desiredGymRunToDay, {
+        _syncCalendarEvents(gymCal, GYM_RUN_TO_TITLE, syncDayStart, syncDayRangeEnd, desiredGymRunToDay, {
           keyFromExisting: function (ev) {
             return (ev.getTitle() || "").trim() === GYM_RUN_TO_TITLE
               ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunTo"
@@ -1457,11 +1247,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
             _timeMapSetEventLocation(calendar, event, desired.location || "");
           }
         });
-        if (di === offset) {
-          _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-run-to-stats", "Gym run-to sync stats (first day)", gymRunToStats);
-        }
 
-        var gymRunHomeStats = _syncCalendarEvents(gymCal, GYM_RUN_HOME_TITLE, syncDayStart, syncDayRangeEnd, desiredGymRunHomeDay, {
+        _syncCalendarEvents(gymCal, GYM_RUN_HOME_TITLE, syncDayStart, syncDayRangeEnd, desiredGymRunHomeDay, {
           keyFromExisting: function (ev) {
             return (ev.getTitle() || "").trim() === GYM_RUN_HOME_TITLE
               ? _timeMapDateKey(ev.getStartTime()) + "_Gym_RunHome"
@@ -1471,11 +1258,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
             _timeMapSetEventLocation(calendar, event, desired.location || "");
           }
         });
-        if (di === offset) {
-          _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-run-home-stats", "Gym run-home sync stats (first day)", gymRunHomeStats);
-        }
 
-        var gymDriveToStats = _syncCalendarEvents(gymCal, GYM_DRIVE_TO_TITLE, syncDayStart, syncDayRangeEnd, desiredGymDriveToDay, {
+        _syncCalendarEvents(gymCal, GYM_DRIVE_TO_TITLE, syncDayStart, syncDayRangeEnd, desiredGymDriveToDay, {
           keyFromExisting: function (ev) {
             return (ev.getTitle() || "").trim() === GYM_DRIVE_TO_TITLE
               ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveTo"
@@ -1485,11 +1269,8 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
             _timeMapSetEventLocation(calendar, event, desired.location || "");
           }
         });
-        if (di === offset) {
-          _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-drive-to-stats", "Gym drive-to sync stats (first day)", gymDriveToStats);
-        }
 
-        var gymDriveHomeStats = _syncCalendarEvents(gymCal, GYM_DRIVE_HOME_TITLE, syncDayStart, syncDayRangeEnd, desiredGymDriveHomeDay, {
+        _syncCalendarEvents(gymCal, GYM_DRIVE_HOME_TITLE, syncDayStart, syncDayRangeEnd, desiredGymDriveHomeDay, {
           keyFromExisting: function (ev) {
             return (ev.getTitle() || "").trim() === GYM_DRIVE_HOME_TITLE
               ? _timeMapDateKey(ev.getStartTime()) + "_Gym_DriveHome"
@@ -1499,9 +1280,6 @@ function addEvents_TimeMapBlocks(dayOffset, dayCount, runOptions) {
             _timeMapSetEventLocation(calendar, event, desired.location || "");
           }
         });
-        if (di === offset) {
-          _timeMapDebugLog("gym-debug", "H6", "TimeMapBlocks.gs:addEvents_TimeMapBlocks:gym-drive-home-stats", "Gym drive-home sync stats (first day)", gymDriveHomeStats);
-        }
       }
     }
 

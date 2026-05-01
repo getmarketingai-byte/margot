@@ -2157,6 +2157,48 @@ describe("allocateWeek energy-aware suggestion pass", () => {
     expect(result.metrics.personalEnergyPlan!.dayCalendarDrain).toHaveLength(7);
     expect(result.metrics.personalEnergyPlan!.tuningHints.length).toBeGreaterThanOrEqual(0);
   });
+
+  it("Pass 3 fills many same-day 30m pockets without maxPasses starvation", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const busy: BusyEvent[] = [];
+    const THIRTY_MIN = 30 * 60 * 1000;
+    for (let h = 0; h < 24; h++) {
+      busy.push({
+        sourceId: `test:busy:${h}`,
+        title: "busy",
+        startMs: weekStartMs + h * HOUR_MS + THIRTY_MIN,
+        endMs: weekStartMs + (h + 1) * HOUR_MS,
+        busy: true,
+        source: "google"
+      });
+    }
+    const soloPlan: WeeklyPlan = {
+      id: "frag-plan",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "frag",
+          title: "Frag",
+          dayOfWeek: "monday",
+          minMinutesPerWeek: 600,
+          maxMinutesPerWeek: 600
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const result = allocateWeek({
+      plan: soloPlan,
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["frag"]!.unplacedMinutes).toBe(0);
+    expect(result.metrics.perGoal["frag"]!.scheduledMinutes).toBeGreaterThanOrEqual(600);
+  });
 });
 
 describe("computeDayCalendarDrainScores", () => {

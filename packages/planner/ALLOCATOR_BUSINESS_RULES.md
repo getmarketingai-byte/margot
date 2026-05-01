@@ -27,7 +27,7 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 
 - Consumes `effectiveMinutes` (placement demand) into calendar blocks inside remaining gaps.
 - When `nowMs` is set, **auto** placement uses only the **future** portion of gaps; past intervals are not used for new auto blocks.
-- **One auto block per goal per day** (by design): reduces context switching. Additional demand spills to other days in extra passes when availability allows.
+- **One auto block per goal per day** (by design): reduces context switching. Additional demand spills in **extra passes** when availability allows. Each pass walks `allowedDays` at most once and can place at most **one** new block for that goal on each allowed day—so a **fragmented** day (many small pockets) or tight invert / nice-weather windows may require **many** passes. The spill loop uses a **scaled `maxPasses`** (derived from quantised remaining demand × `allowedDays.length`, with floor and absolute cap) so we do not stop early while gaps and headroom still exist; passes that schedule nothing still exit immediately.
 - Drag overrides and `source: "actual"` pins are honoured per existing pin rules (including relaxed overlap for actuals vs calendar busy, but not vs sleep).
 
 ## Modelled sleep vs scheduler-owned busy
