@@ -2,108 +2,11 @@ import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
-import {
-  coerceSettingsAfterLegacyWheelPpfHppEdit,
-  type Hp6HabitKey,
-  type PpfPillarKey
-} from "@calendar-automations/schema";
-
-const PILLARS: PpfPillarKey[] = ["personal", "professional", "financial"];
-const HP6: { key: Hp6HabitKey; label: string }[] = [
-  { key: "clarity", label: "Seek clarity" },
-  { key: "energy", label: "Generate energy" },
-  { key: "necessity", label: "Raise necessity" },
-  { key: "productivity", label: "Increase productivity" },
-  { key: "influence", label: "Develop influence" },
-  { key: "courage", label: "Demonstrate courage" }
-];
+import type { UserSettings } from "@calendar-automations/schema";
 
 function afterConstraintsSave(userId: string): void {
   invalidateUserAllocationCache(userId);
   revalidatePlanningRoutes();
-}
-
-async function updateWheel(formData: FormData): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const areas = settings.wheel.areas.map((a) => {
-    const score = Number(formData.get(`score_${a.id}`) ?? a.score);
-    const minMinutes = Number(formData.get(`floor_${a.id}`) ?? a.minMinutesPerWeek);
-    return {
-      ...a,
-      score: Math.max(1, Math.min(10, score || a.score)),
-      minMinutesPerWeek: Math.max(0, Math.floor(minMinutes || 0))
-    };
-  });
-  await saveSettings(
-    userId,
-    coerceSettingsAfterLegacyWheelPpfHppEdit({
-      ...settings,
-      wheel: { ...settings.wheel, enabled: true, areas }
-    })
-  );
-  afterConstraintsSave(userId);
-}
-
-async function updatePpf(formData: FormData): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const targets = PILLARS.map((p) => ({
-    pillar: p,
-    minPercent: Math.max(0, Math.min(100, Number(formData.get(`pct_${p}`) ?? 0))),
-    minTouchesPerWeek: Math.max(0, Number(formData.get(`touches_${p}`) ?? 0))
-  }));
-  await saveSettings(
-    userId,
-    coerceSettingsAfterLegacyWheelPpfHppEdit({
-      ...settings,
-      ppf: { enabled: true, targets }
-    })
-  );
-  afterConstraintsSave(userId);
-}
-
-async function updateHpp(formData: FormData): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const hp6MinTouchesPerMonth = Object.fromEntries(
-    HP6.map((h) => [h.key, Math.max(0, Number(formData.get(`hp6_${h.key}`) ?? 0))])
-  ) as Record<Hp6HabitKey, number>;
-  await saveSettings(
-    userId,
-    coerceSettingsAfterLegacyWheelPpfHppEdit({
-      ...settings,
-      hpp: {
-        ...settings.hpp,
-        enabled: true,
-        hp6MinTouchesPerMonth
-      }
-    })
-  );
-  afterConstraintsSave(userId);
-}
-
-async function updateEnergy(formData: FormData): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const userId = session.user.id;
-  const settings = await loadSettings(userId);
-  const mode = String(formData.get("mode") ?? "balanced") as "strict" | "balanced" | "ignore";
-  await saveSettings(userId, {
-    ...settings,
-    energyOrdering: { ...settings.energyOrdering, mode }
-  });
-  afterConstraintsSave(userId);
 }
 
 async function updateAllocator(formData: FormData): Promise<void> {
@@ -114,7 +17,7 @@ async function updateAllocator(formData: FormData): Promise<void> {
   const settings = await loadSettings(userId);
   const starvationMode = (String(formData.get("starvationMode") ?? "proportional") === "strict"
     ? "strict"
-    : "proportional") as "proportional" | "strict";
+    : "proportional") as UserSettings["allocator"]["starvationMode"];
   await saveSettings(userId, {
     ...settings,
     allocator: { ...settings.allocator, starvationMode }
@@ -130,7 +33,7 @@ async function updateAllocationMode(formData: FormData): Promise<void> {
   const settings = await loadSettings(userId);
   const allocationMode = (String(formData.get("allocationMode") ?? "even") === "finish-early"
     ? "finish-early"
-    : "even") as "even" | "finish-early";
+    : "even") as UserSettings["allocator"]["allocationMode"];
   await saveSettings(userId, {
     ...settings,
     allocator: { ...settings.allocator, allocationMode }
@@ -146,7 +49,7 @@ async function updateCatchUpMode(formData: FormData): Promise<void> {
   const settings = await loadSettings(userId);
   const catchUpMode = (String(formData.get("catchUpMode") ?? "automated") === "manual"
     ? "manual"
-    : "automated") as "automated" | "manual";
+    : "automated") as UserSettings["allocator"]["catchUpMode"];
   await saveSettings(userId, {
     ...settings,
     allocator: { ...settings.allocator, catchUpMode }
@@ -200,17 +103,16 @@ export async function ConstraintsSection() {
     <div id="scheduling-outcomes" className="scroll-mt-6 flex flex-col gap-4">
       <header>
         <h2 id="scheduling-outcomes-heading" className="text-lg font-semibold">
-          Scheduling outcomes
+          Scheduling options
         </h2>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Global allocator mechanics: catch-up, how the day&apos;s <strong>energy curve</strong>{" "}
-          biases gap choice (morning vs afternoon), starvation when you&apos;re overcommitted, and
-          wheel / PPF / HP6 targets. Distinct from optional{" "}
-          <a className="underline" href="#framework-methods">
-            scheduling methods
-          </a>{" "}
-          in the framework system card (e.g. energy + transition scoring)—use both only if you want
-          both layers.
+          Global allocator mechanics: daily routines, catch-up from day sheet, spare-time layout,
+          starvation when you&apos;re overcommitted. Framework tagging, floors, PPF mix, HP6 touches, and
+          energy ordering curves are tuned in{" "}
+          <a className="underline" href="#framework-methods-heading">
+            Framework rule customiser
+          </a>
+          .
         </p>
       </header>
 
@@ -388,142 +290,6 @@ export async function ConstraintsSection() {
           <button type="submit" className="btn-primary w-fit text-xs">
             Save
           </button>
-        </form>
-      </details>
-
-      <details className="card">
-        <summary className="cursor-pointer text-sm font-semibold">Energy ordering</summary>
-        <p className="mt-1 text-xs text-ink-400">
-          Lay deep-focus goals before scanning ones, matching your daily energy curve. This is the
-          built-in <strong>hour / curve</strong> bias—not the optional &quot;Energy and calendar
-          transitions&quot; method above, which adds transition and calendar-load nudges on top.
-        </p>
-        <form action={updateEnergy} className="mt-3 flex items-end gap-2">
-          <label className="flex flex-col gap-1 text-xs">
-            Mode
-            <select name="mode" className="field" defaultValue={settings.energyOrdering.mode}>
-              <option value="strict">Strict — refuse scanning before warm-up</option>
-              <option value="balanced">Balanced — prefer the curve</option>
-              <option value="ignore">Ignore — purely chronological</option>
-            </select>
-          </label>
-          <button className="btn-primary text-xs" type="submit">
-            Save
-          </button>
-        </form>
-      </details>
-
-      <details className="card">
-        <summary className="cursor-pointer text-sm font-semibold">Wheel of Life</summary>
-        <p className="mt-1 text-xs text-ink-400">
-          Areas of life that should each get some weekly time. Set a floor so neglected ones
-          always get scheduled.
-        </p>
-        <form action={updateWheel} className="mt-3 grid gap-3 sm:grid-cols-2">
-          {settings.wheel.areas.map((a) => (
-            <fieldset key={a.id} className="rounded border border-ink-200 p-2 dark:border-ink-600">
-              <legend className="text-xs font-medium">{a.label}</legend>
-              <label className="flex flex-col gap-1 text-xs">
-                Score (1–10)
-                <input
-                  name={`score_${a.id}`}
-                  type="number"
-                  min={1}
-                  max={10}
-                  defaultValue={a.score}
-                  className="field"
-                />
-              </label>
-              <label className="mt-2 flex flex-col gap-1 text-xs">
-                Min minutes / week
-                <input
-                  name={`floor_${a.id}`}
-                  type="number"
-                  min={0}
-                  step={15}
-                  defaultValue={a.minMinutesPerWeek}
-                  className="field"
-                />
-              </label>
-            </fieldset>
-          ))}
-          <div className="sm:col-span-2">
-            <button type="submit" className="btn-primary w-full text-xs">
-              Save Wheel
-            </button>
-          </div>
-        </form>
-      </details>
-
-      <details className="card">
-        <summary className="cursor-pointer text-sm font-semibold">
-          Personal / Professional / Financial mix
-        </summary>
-        <p className="mt-1 text-xs text-ink-400">
-          Set minimum percent of allocated time per pillar and minimum touches per week.
-        </p>
-        <form action={updatePpf} className="mt-3 grid gap-3 sm:grid-cols-3">
-          {PILLARS.map((p) => {
-            const target = settings.ppf.targets.find((t) => t.pillar === p);
-            return (
-              <fieldset key={p} className="rounded border border-ink-200 p-2 dark:border-ink-600">
-                <legend className="text-xs font-medium capitalize">{p}</legend>
-                <label className="flex flex-col gap-1 text-xs">
-                  Min % of week
-                  <input
-                    name={`pct_${p}`}
-                    type="number"
-                    min={0}
-                    max={100}
-                    defaultValue={target?.minPercent ?? 0}
-                    className="field"
-                  />
-                </label>
-                <label className="mt-2 flex flex-col gap-1 text-xs">
-                  Min touches / week
-                  <input
-                    name={`touches_${p}`}
-                    type="number"
-                    min={0}
-                    defaultValue={target?.minTouchesPerWeek ?? 0}
-                    className="field"
-                  />
-                </label>
-              </fieldset>
-            );
-          })}
-          <div className="sm:col-span-3">
-            <button type="submit" className="btn-primary w-full text-xs">
-              Save mix
-            </button>
-          </div>
-        </form>
-      </details>
-
-      <details className="card">
-        <summary className="cursor-pointer text-sm font-semibold">High-performance habits (HP6)</summary>
-        <p className="mt-1 text-xs text-ink-400">
-          Tag goals with a habit and we&apos;ll ensure each habit hits its minimum touches per
-          month.
-        </p>
-        <form action={updateHpp} className="mt-3 grid gap-3 sm:grid-cols-2">
-          {HP6.map((h) => (
-            <label key={h.key} className="flex flex-col gap-1 text-xs">
-              {h.label}
-              <input
-                name={`hp6_${h.key}`}
-                type="number"
-                min={0}
-                defaultValue={settings.hpp.hp6MinTouchesPerMonth[h.key] ?? 0}
-                className="field"
-              />
-            </label>
-          ))}
-          <div className="sm:col-span-2">
-            <button type="submit" className="btn-primary w-full text-xs">
-              Save habits
-            </button>
-          </div>
         </form>
       </details>
     </div>

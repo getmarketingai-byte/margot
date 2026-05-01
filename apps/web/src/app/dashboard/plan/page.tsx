@@ -232,9 +232,9 @@ export default async function PlanPage() {
         <h1 className="text-2xl font-semibold">My Perfect Week</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
           List the things you want each week. Type a goal and press Enter — we&apos;ll find the
-          time. Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
-          <Link className="underline" href="/dashboard/energy#framework-methods">
-            Planning
+          time.           Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
+          <Link className="underline" href="/dashboard/planner#framework-methods">
+            Planner
           </Link>{" "}
           with your frameworks.
         </p>
@@ -271,10 +271,10 @@ export default async function PlanPage() {
                 <p className="text-xs text-ink-400">
                   With strict mode on, these goals didn&apos;t fit. Either soften their floors or
                   switch to proportional under{" "}
-                  <Link className="underline" href="/dashboard/energy#scheduling-outcomes">
-                    Scheduling rules
+                  <Link className="underline" href="/dashboard/planner#scheduling-outcomes">
+                    Scheduling options
                   </Link>{" "}
-                  on Planning.
+                  on Planner.
                 </p>
                 <ul className="mt-2 list-disc pl-5 text-sm">
                   {allocation.metrics.notScheduled.map((n) => (

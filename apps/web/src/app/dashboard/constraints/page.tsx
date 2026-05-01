@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-/** @deprecated Scheduling rules now live on Planning (`/dashboard/energy`). */
+/** @deprecated Scheduling options now live on the Planner hub (`/dashboard/planner`). */
 export default function ConstraintsRedirectPage() {
-  redirect("/dashboard/energy#scheduling-outcomes");
+  redirect("/dashboard/planner#scheduling-outcomes");
 }

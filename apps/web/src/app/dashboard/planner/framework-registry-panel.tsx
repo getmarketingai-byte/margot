@@ -24,11 +24,13 @@ const SCHEDULER_IDS = [
 export function FrameworkRegistryPanel({
   initial,
   onSchedulerInclusionChange,
-  children
+  children,
+  renderSchedulerCardContent
 }: {
   initial: FrameworkSystem;
   onSchedulerInclusionChange?: (args: { key: FrameworkRegistryId; enabled: boolean }) => void;
   children?: ReactNode;
+  renderSchedulerCardContent?: (row: FrameworkSystem["frameworks"][number]) => ReactNode;
 }) {
   const [frameworkRows, setFrameworkRows] = useState<FrameworkSystem["frameworks"]>(
     () => [...initial.frameworks].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
@@ -92,10 +94,15 @@ export function FrameworkRegistryPanel({
         <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">
           Start from a blank canvas: nothing runs in the allocator until you add frameworks. This list
           is goal-tagging dimensions only. Recurring system blocks (consistency segments and routines)
-          are configured in their own surfaces; rule floors (wheel, PPF mix, HP6, etc.) still live
-          under{" "}
+          are configured in their own surfaces; rule floors (wheel, PPF mix, HP6, energy ordering)
+          belong in{" "}
+          <a className="underline" href="#framework-methods-heading">
+            Framework rule customiser
+          </a>
+          {" "}
+          below. Global allocator mechanics stay under{" "}
           <a className="underline" href="#scheduling-outcomes-heading">
-            Scheduling outcomes
+            Scheduling options
           </a>
           .
         </p>
@@ -112,7 +119,9 @@ export function FrameworkRegistryPanel({
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400">
             Active in scheduler ({activeSched.length})
           </p>
-          <ul className="grid gap-3 sm:grid-cols-2">
+          <ul
+            className={`grid gap-3 ${renderSchedulerCardContent ? "grid-cols-1" : "sm:grid-cols-2"}`}
+          >
             {activeSched.map((row) => (
               <FrameworkPickerCard
                 key={row.id}
@@ -120,9 +129,13 @@ export function FrameworkRegistryPanel({
                 busy={busyId === row.id}
                 inScheduler
                 onToggleScheduler={(on) => void commitSchedulerIncluded(row, on)}
+                extraContent={renderSchedulerCardContent?.(row)}
               />
             ))}
           </ul>
+          {children ? (
+            <div className="mt-3 border-t border-ink-200 pt-4 dark:border-ink-600">{children}</div>
+          ) : null}
         </div>
       )}
 
@@ -145,9 +158,10 @@ export function FrameworkRegistryPanel({
         </div>
       )}
 
-      {children ? (
+      {activeSched.length === 0 && children ? (
         <div className="border-t border-ink-200 pt-5 dark:border-ink-600">{children}</div>
       ) : null}
+
     </div>
   );
 }
@@ -156,18 +170,20 @@ function FrameworkPickerCard({
   row,
   busy,
   inScheduler,
-  onToggleScheduler
+  onToggleScheduler,
+  extraContent
 }: {
   row: FrameworkSystem["frameworks"][number];
   busy: boolean;
   inScheduler: boolean;
   onToggleScheduler: (on: boolean) => void;
+  extraContent?: ReactNode;
 }) {
   const label = row.label ?? FRAMEWORK_REGISTRY_DEFAULT_LABELS[row.id];
   const desc = FRAMEWORK_REGISTRY_DESCRIPTIONS[row.id] ?? "";
 
   return (
-    <li className="flex flex-col gap-2 rounded-lg border border-ink-200 bg-ink-50/35 p-3 text-xs dark:border-ink-500 dark:bg-ink-900/40">
+    <li className="flex flex-col gap-3 rounded-lg border border-ink-200 bg-ink-50/35 p-3 text-xs dark:border-ink-500 dark:bg-ink-900/40">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-2">
           <span className="font-semibold text-ink-800 dark:text-ink-100">{label}</span>
@@ -195,6 +211,11 @@ function FrameworkPickerCard({
           </button>
         )}
       </div>
+      {extraContent ? (
+        <div className="rounded-md border border-ink-200/80 bg-white/70 p-2.5 dark:border-ink-600 dark:bg-ink-900/30">
+          {extraContent}
+        </div>
+      ) : null}
     </li>
   );
 }
