@@ -297,10 +297,6 @@ interface PreparedGoal {
   effectiveMinutes: number;
   /** Order in the user's list, used as the priority tie-breaker. */
   index: number;
-  /** After Pass 3: minutes still unplaced (set by `allocateGoal`; debug / diagnostics). */
-  placementRemainingMinutes?: number;
-  /** True if placement loop stopped because a full pass scheduled nothing. */
-  placementStalledZeroPass?: boolean;
 }
 
 function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTime): boolean {
@@ -446,62 +442,69 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     p.effectiveMinutes = Math.max(0, p.effectiveMinutes - unpinnedLoggedMinutes);
   }
 
-  let equalShareFromNowCapApplied = false;
   if (allocationNowMs !== undefined) {
     const schedulable = prepared.filter((p) => p.effectiveMinutes > 0);
-    const allUnconstrainedEqual = schedulable.every((p) =>
-      isUnconstrainedEqualShareGoal(p.goal, p.norm)
-    );
     const totalDemand = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
-    if (allUnconstrainedEqual && schedulable.length > 0 && totalDemand > weekCapacityFromNowMinutes) {
-      equalShareFromNowCapApplied = true;
-      const budget = Math.max(0, weekCapacityFromNowMinutes);
-      const originalDemand = new Map<PreparedGoal, number>(
-        schedulable.map((p) => [p, p.effectiveMinutes] as const)
+    if (schedulable.length > 0 && totalDemand > weekCapacityFromNowMinutes) {
+      const allUnconstrainedEqual = schedulable.every((p) =>
+        isUnconstrainedEqualShareGoal(p.goal, p.norm)
       );
-      // Equalise whole-week achieved totals (not just this-run blocks):
-      // prepared.effectiveMinutes is the remaining deficit after log credit.
-      // Spend from-now budget to pull deficits toward a common residual level.
-      const deficits = schedulable.map((p) => p.effectiveMinutes).sort((a, b) => a - b);
-      let residual = deficits[deficits.length - 1] ?? 0;
-      for (let i = 0; i < deficits.length; i++) {
-        const nextResidual = i === deficits.length - 1 ? 0 : deficits[i]!;
-        const step = residual - nextResidual;
-        const active = deficits.length - i;
-        const cost = step * active;
-        if (budget >= cost) {
-          residual = nextResidual;
-          continue;
+      if (allUnconstrainedEqual) {
+        const budget = Math.max(0, weekCapacityFromNowMinutes);
+        const originalDemand = new Map<PreparedGoal, number>(
+          schedulable.map((p) => [p, p.effectiveMinutes] as const)
+        );
+        // Equalise whole-week achieved totals (not just this-run blocks):
+        // prepared.effectiveMinutes is the remaining deficit after log credit.
+        // Spend from-now budget to pull deficits toward a common residual level.
+        const deficits = schedulable.map((p) => p.effectiveMinutes).sort((a, b) => a - b);
+        let residual = deficits[deficits.length - 1] ?? 0;
+        for (let i = 0; i < deficits.length; i++) {
+          const nextResidual = i === deficits.length - 1 ? 0 : deficits[i]!;
+          const step = residual - nextResidual;
+          const active = deficits.length - i;
+          const cost = step * active;
+          if (budget >= cost) {
+            residual = nextResidual;
+            continue;
+          }
+          residual = residual - budget / active;
+          break;
         }
-        residual = residual - budget / active;
-        break;
-      }
-      const quantisedResidual = Math.max(0, Math.floor(residual / QUANTUM) * QUANTUM);
-      for (const p of schedulable) {
-        const capped = Math.max(0, p.effectiveMinutes - quantisedResidual);
-        p.effectiveMinutes = Math.min(p.effectiveMinutes, capped);
-      }
-      let assigned = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
-      let remaining = budget - assigned;
-      while (remaining >= QUANTUM) {
-        const eligible = schedulable
-          .map((p) => ({
-            p,
-            residual: (originalDemand.get(p) ?? 0) - p.effectiveMinutes
-          }))
-          .filter((x) => x.residual >= QUANTUM)
-          .sort((a, b) => b.residual - a.residual);
-        if (eligible.length === 0) break;
-        let gaveAny = false;
-        for (const x of eligible) {
-          if (remaining < QUANTUM) break;
-          x.p.effectiveMinutes += QUANTUM;
-          remaining -= QUANTUM;
-          gaveAny = true;
+        const quantisedResidual = Math.max(0, Math.floor(residual / QUANTUM) * QUANTUM);
+        for (const p of schedulable) {
+          const capped = Math.max(0, p.effectiveMinutes - quantisedResidual);
+          p.effectiveMinutes = Math.min(p.effectiveMinutes, capped);
         }
-        if (!gaveAny) break;
-        assigned = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
-        remaining = budget - assigned;
+        let assigned = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
+        let remaining = budget - assigned;
+        while (remaining >= QUANTUM) {
+          const eligible = schedulable
+            .map((p) => ({
+              p,
+              residual: (originalDemand.get(p) ?? 0) - p.effectiveMinutes
+            }))
+            .filter((x) => x.residual >= QUANTUM)
+            .sort((a, b) => b.residual - a.residual);
+          if (eligible.length === 0) break;
+          let gaveAny = false;
+          for (const x of eligible) {
+            if (remaining < QUANTUM) break;
+            x.p.effectiveMinutes += QUANTUM;
+            remaining -= QUANTUM;
+            gaveAny = true;
+          }
+          if (!gaveAny) break;
+          assigned = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
+          remaining = budget - assigned;
+        }
+      } else {
+        const budget = weekCapacityFromNowMinutes;
+        const weights = schedulable.map((p) => p.effectiveMinutes);
+        const alloc = proportionalMinutesOnGrid(weights, budget);
+        for (let i = 0; i < schedulable.length; i++) {
+          schedulable[i]!.effectiveMinutes = alloc[i] ?? 0;
+        }
       }
     }
   }
@@ -531,9 +534,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     if (a.index !== b.index) return a.index - b.index;
     return b.effectiveMinutes - a.effectiveMinutes;
   });
-
-  const schedulableBeforePlacement = prepared.filter((p) => p.effectiveMinutes >= QUANTUM).length;
-  const sumDemandBeforePlacement = prepared.reduce((acc, p) => acc + Math.max(0, p.effectiveMinutes), 0);
 
   for (const p of prepared) {
     if (p.effectiveMinutes <= 0) continue;
@@ -609,47 +609,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       tuningHints: buildPersonalEnergyTuningHints(plan, dayDrainScores)
     };
   }
-
-  // #region agent log
-  const unplacedGoals = prepared.filter(
-    (p) => p.placementRemainingMinutes !== undefined && p.placementRemainingMinutes >= QUANTUM
-  );
-  const stalledUnplaced = unplacedGoals.filter((p) => p.placementStalledZeroPass === true);
-  const zeroDemandAfterDist = prepared.filter((p) => p.effectiveMinutes < QUANTUM).length;
-  fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "dba26f" },
-    body: JSON.stringify({
-      sessionId: "dba26f",
-      runId: "pre-fix",
-      hypothesisId: "H_SUMMARY",
-      location: "weekly.ts:allocateWeek",
-      message: "placement_diagnostics",
-      data: {
-        allocationNowMsSet: allocationNowMs !== undefined,
-        equalShareFromNowCapApplied,
-        weekCapacityMinutes,
-        weekCapacityFromNowMinutes,
-        schedulableBeforePlacement,
-        sumDemandBeforePlacement,
-        zeroDemandAfterDist,
-        unplacedGoalCount: unplacedGoals.length,
-        stalledUnplacedCount: stalledUnplaced.length,
-        notScheduledLen: notScheduled.length,
-        overcommitted: Boolean(overcommitted),
-        sampleUnplaced: unplacedGoals.slice(0, 15).map((p) => ({
-          id: p.goal.id,
-          title: p.goal.title?.slice(0, 40),
-          remaining: p.placementRemainingMinutes,
-          stalledZeroPass: p.placementStalledZeroPass,
-          minPerDay: p.norm.minMinutesPerDay,
-          freq: p.goal.frequencyPerWeek
-        }))
-      },
-      timestamp: Date.now()
-    })
-  }).catch(() => {});
-  // #endregion
 
   return { blocks, metrics };
 }
@@ -1406,11 +1365,7 @@ function allocateGoal(
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
-  if (remainingMinutes <= 0) {
-    prepared.placementRemainingMinutes = 0;
-    prepared.placementStalledZeroPass = false;
-    return;
-  }
+  if (remainingMinutes <= 0) return;
 
   const gymTravelPadMin = gymTravelPadMinutesForGoal(goal, settings.gym);
   const gymTravelPadMs = gymTravelPadMin * MS_PER_MIN;
@@ -1436,11 +1391,7 @@ function allocateGoal(
   if (norm.maxMinutesPerDay !== undefined) {
     perDay = Math.min(perDay, norm.maxMinutesPerDay);
   }
-  if (perDay <= 0) {
-    prepared.placementRemainingMinutes = remainingMinutes;
-    prepared.placementStalledZeroPass = false;
-    return;
-  }
+  if (perDay <= 0) return;
 
   // If the user set a daily floor, ensure each scheduled day lands at least that.
   const minPerDay = norm.minMinutesPerDay ?? 0;
@@ -1520,11 +1471,7 @@ function allocateGoal(
       if (norm.maxMinutesPerDay !== undefined) {
         perDay = Math.min(perDay, norm.maxMinutesPerDay);
       }
-      if (perDay <= 0) {
-        prepared.placementRemainingMinutes = remainingMinutes;
-        prepared.placementStalledZeroPass = false;
-        return;
-      }
+      if (perDay <= 0) return;
       perDayBudget = Math.max(perDay, minPerDay);
     }
   }
@@ -1548,7 +1495,6 @@ function allocateGoal(
   // Spill passes can place one fragment per pass per day; several disjoint gaps
   // or repeated headroom need >2 rounds even without invert/nice-weather windows.
   const maxPasses = needsExtraPasses ? 32 : 16;
-  let placementStalledZeroPass = false;
   for (let pass = 0; pass < maxPasses && remainingMinutes > 0; pass++) {
     let daysScheduledThisPass = 0;
     for (const dayIdx of allowedDays) {
@@ -1710,13 +1656,8 @@ function allocateGoal(
       slotIndex++;
       daysScheduledThisPass++;
     }
-    if (daysScheduledThisPass === 0) {
-      placementStalledZeroPass = true;
-      break;
-    }
+    if (daysScheduledThisPass === 0) break;
   }
-  prepared.placementRemainingMinutes = remainingMinutes;
-  prepared.placementStalledZeroPass = placementStalledZeroPass;
   const nodeEnv =
     (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV ?? "";
   if (
