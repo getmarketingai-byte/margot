@@ -19,7 +19,6 @@ import {
   type DragEndEvent,
   type DragStartEvent
 } from "@dnd-kit/core";
-import { restrictToParentElement } from "@dnd-kit/modifiers";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type {
   AttentionMode,
@@ -38,6 +37,7 @@ import type {
 } from "@calendar-automations/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { patchGoal } from "../plan/actions";
+import { BatteryCurveGoalsPanel } from "./battery-curve-goals-panel";
 import { FrameworkRegistryPanel } from "./framework-registry-panel";
 
 const HP6_LABELS: Record<Hp6HabitKey, string> = {
@@ -159,16 +159,6 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     return all.filter((b) => schedulerInclusion[b.key as keyof SchedulerFrameworkInclusion]);
   }, [wheelAreas, schedulerInclusion]);
 
-  const [activeBoardKey, setActiveBoardKey] = useState<FrameworkKey>("commitment");
-
-  useEffect(() => {
-    if (boards.length === 0) return;
-    if (boards.some((b) => b.key === activeBoardKey)) return;
-    setActiveBoardKey(boards[0]!.key);
-  }, [boards, activeBoardKey]);
-
-  const activeBoard = boards.find((b) => b.key === activeBoardKey) ?? boards[0];
-
   const handlePatch = (goalId: string, patch: Partial<Omit<WeeklyGoal, "id">>) => {
     setGoals((prev) =>
       prev.map((g) => (g.id === goalId ? ({ ...g, ...patch } as WeeklyGoal) : g))
@@ -186,9 +176,8 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
     enabled: boolean;
   }) => {
     if (!SCHEDULER_BOARD_KEYS.includes(key as FrameworkKey)) return;
-    const boardKey = key as FrameworkKey;
-    setSchedulerInclusion((prev) => ({ ...prev, [boardKey]: enabled }));
-    if (enabled) setActiveBoardKey(boardKey);
+    const frameworkKey = key as FrameworkKey;
+    setSchedulerInclusion((prev) => ({ ...prev, [frameworkKey]: enabled }));
   };
 
   return (
@@ -196,28 +185,26 @@ export function PlanningHubClient(props: PlanningHubClientProps) {
       <FrameworkRegistryPanel
         initial={initialFrameworkSystem}
         onSchedulerInclusionChange={handleSchedulerInclusionChange}
+        renderSchedulerCardContent={(row) => {
+          const boardKey = mapFrameworkIdToBoardKey(row.id);
+          const board = boardKey ? boards.find((b) => b.key === boardKey) : undefined;
+          if (!board) return null;
+          if (goals.length === 0) {
+            return (
+              <p className="text-[11px] text-ink-500 dark:text-ink-300">
+                Add weekly goals on Perfect Week to start tagging this framework.
+              </p>
+            );
+          }
+          return (
+            <FrameworkBoard board={board} goals={goals} wheelLabel={wheelLabel} onPatch={handlePatch} />
+          );
+        }}
       >
-        {boards.length > 0 ? (
-          <FrameworkBoardsPlanningSection
-            boards={boards}
-            activeBoardKey={activeBoard?.key ?? activeBoardKey}
-            onBoardChange={setActiveBoardKey}
-          />
-        ) : null}
-
-        {boards.length === 0 ? (
-          <NoFrameworksForTaggingCallout />
-        ) : goals.length === 0 ? (
-          <EmptyGoalsCallout />
-        ) : activeBoard ? (
-          <FrameworkBoard
-            board={activeBoard}
-            goals={goals}
-            wheelLabel={wheelLabel}
-            onPatch={handlePatch}
-          />
-        ) : null}
+        {boards.length === 0 ? <NoFrameworksForTaggingCallout /> : null}
       </FrameworkRegistryPanel>
+
+      <BatteryCurveGoalsPanel goals={goals} onPatch={handlePatch} />
 
       <PlacementPriorityCard
         initialOrder={initialPlacementOrder}
@@ -358,69 +345,6 @@ export function VisionCard({
 
 /* ─────────────────────────── Framework boards + scheduler layers ─────────── */
 
-function FrameworkBoardsPlanningSection(props: {
-  boards: ReadonlyArray<BoardConfig>;
-  activeBoardKey: FrameworkKey;
-  onBoardChange: (key: FrameworkKey) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3 border-t border-ink-200 pt-6 dark:border-ink-600">
-      <div>
-        <h2 id="framework-boards-hub-heading" className="text-sm font-semibold">
-          Goal tagging (boards)
-        </h2>
-        <p className="mt-1 text-xs text-ink-400">
-          Pill below switches which tagging board you are using. Inclusion is controlled in{" "}
-          <strong>Choose frameworks</strong> above. Rule floors and mix targets stay under{" "}
-          <a className="underline" href="#scheduling-outcomes-heading">
-            Scheduling outcomes
-          </a>
-          .
-        </p>
-      </div>
-      <nav aria-label="Goal tagging frameworks">
-        <ul className="flex flex-wrap gap-2">
-          {props.boards.map((board) => {
-            const active = board.key === props.activeBoardKey;
-            return (
-              <li key={board.key}>
-                <button
-                  type="button"
-                  data-active={active}
-                  aria-pressed={active}
-                  onClick={() => props.onBoardChange(board.key)}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-950 ${
-                    active
-                      ? "border-accent bg-accent text-accent-fg shadow-sm shadow-accent/20"
-                      : "border-ink-200 text-ink-700 hover:bg-ink-100/70 dark:border-ink-600 dark:text-ink-100 dark:hover:bg-ink-800/70"
-                  }`}
-                >
-                  {board.title}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
-    </div>
-  );
-}
-
-function EmptyGoalsCallout() {
-  return (
-    <div className="rounded-lg border border-dashed border-ink-200 p-4 dark:border-ink-600">
-      <h2 className="text-sm font-semibold">No goals yet</h2>
-      <p className="mt-1 text-xs text-ink-400">
-        Add your weekly goals on{" "}
-        <a className="underline" href="/dashboard/plan">
-          Perfect Week
-        </a>
-        . Once you have a list, the boards above let you classify each one.
-      </p>
-    </div>
-  );
-}
-
 function NoFrameworksForTaggingCallout() {
   return (
     <div className="rounded-lg border border-dashed border-ink-200 p-4 dark:border-ink-600">
@@ -432,6 +356,13 @@ function NoFrameworksForTaggingCallout() {
       </p>
     </div>
   );
+}
+
+function mapFrameworkIdToBoardKey(id: FrameworkRegistryId): FrameworkKey | null {
+  if (SCHEDULER_BOARD_KEYS.includes(id as FrameworkKey)) {
+    return id as FrameworkKey;
+  }
+  return null;
 }
 
 /* ─────────────────────────── Framework board ─────────────────────────────── */
@@ -487,7 +418,6 @@ function FrameworkBoard({ board, goals, wheelLabel, onPatch }: FrameworkBoardPro
 
       <DndContext
         sensors={sensors}
-        modifiers={[restrictToParentElement]}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       >
@@ -636,11 +566,14 @@ function buildBoardRegistry({
       description:
         "Non-negotiables get first access to free time. Nice-to-haves only land after the rest fits.",      columns: [
         { id: "non_negotiable", title: COMMITMENT_LABELS.non_negotiable },
-        { id: "committed", title: COMMITMENT_LABELS.committed },
-        { id: "nice_to_have", title: COMMITMENT_LABELS.nice_to_have }
+        { id: "nice_to_have", title: COMMITMENT_LABELS.nice_to_have },
+        { id: "__none__", title: "Unassigned" }
       ],
-      columnOf: (g) => g.commitmentLevel ?? "committed",
-      patchFor: (col) => ({ commitmentLevel: col as CommitmentLevel })
+      columnOf: (g) =>
+        g.commitmentLevel && g.commitmentLevel !== "committed" ? g.commitmentLevel : "__none__",
+      patchFor: (col) => ({
+        commitmentLevel: col === "__none__" ? undefined : (col as CommitmentLevel)
+      })
     },
     {
       key: "polarity",
@@ -648,11 +581,13 @@ function buildBoardRegistry({
       description:
         "Classify which goals recharge you and which drain you. Drains will be spread out, energise blocks may be batched.",      columns: [
         { id: "energise", title: "Energise" },
-        { id: "neutral", title: "Neutral" },
-        { id: "drain", title: "Drain" }
+        { id: "drain", title: "Drain" },
+        { id: "__none__", title: "Unassigned" }
       ],
-      columnOf: (g) => g.energyPolarity ?? "neutral",
-      patchFor: (col) => ({ energyPolarity: col as EnergyPolarity })
+      columnOf: (g) => (g.energyPolarity && g.energyPolarity !== "neutral" ? g.energyPolarity : "__none__"),
+      patchFor: (col) => ({
+        energyPolarity: col === "__none__" ? undefined : (col as EnergyPolarity)
+      })
     },
     {
       key: "attention",
@@ -660,8 +595,8 @@ function buildBoardRegistry({
       description:
         "Hyper-focus = deep, single-tasked work; hyper-awareness = scanning, batched, reactive.",      columns: [
         { id: "hyperfocus", title: "Hyper focus" },
-        { id: "unspecified", title: "Either" },
-        { id: "hyperaware", title: "Hyper aware" }
+        { id: "hyperaware", title: "Hyper aware" },
+        { id: "unspecified", title: "Unassigned" }
       ],
       columnOf: (g) => g.attentionMode ?? "unspecified",
       patchFor: (col) => ({ attentionMode: col as AttentionMode })
@@ -686,7 +621,7 @@ function buildBoardRegistry({
     key: "wheel",
     title: "Wheel of Life",
     description:
-      "Tag each goal to a life area. When Wheel is checked under In scheduler and floors are set in Scheduling rules, the allocator respects those floors.",    columns: [
+      "Tag each goal to a life area. When Wheel is checked under In scheduler and floors are set in Framework rule customiser, the allocator respects those floors.",    columns: [
       ...wheelAreas.map((a) => ({ id: a.id, title: a.label })),
       { id: "__none__", title: "Unassigned" }
     ],
@@ -698,7 +633,7 @@ function buildBoardRegistry({
     key: "ppfPillar",
     title: "PPF pillar",
     description:
-      "Personal / Professional / Financial — Natalie Dawson's three buckets. When PPF is checked under In scheduler, mix metrics and touch rules from Scheduling rules apply.",    columns: [
+      "Personal / Professional / Financial — Natalie Dawson's three buckets. When PPF is checked under In scheduler, mix metrics and touch rules from Framework rule customiser apply.",    columns: [
       { id: "personal", title: "Personal" },
       { id: "professional", title: "Professional" },
       { id: "financial", title: "Financial" },
@@ -728,7 +663,7 @@ function buildBoardRegistry({
     key: "hp6",
     title: "HP6 habit",
     description:
-      "Tag goals against Brendon Burchard's six high-performance habits. When HP6 is checked under In scheduler, minimum touches from Scheduling rules apply.",    columns: [
+      "Tag goals against Brendon Burchard's six high-performance habits. When HP6 is checked under In scheduler, minimum touches from Framework rule customiser apply.",    columns: [
       ...HP6_KEYS.map((h) => ({ id: h, title: HP6_LABELS[h] })),
       { id: "__none__", title: "Unassigned" }
     ],

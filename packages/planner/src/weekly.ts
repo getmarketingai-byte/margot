@@ -21,12 +21,14 @@
  *      between goal runs when `allocator.allocationMode` is `"even"` (skipped
  *      for `"finish-early"` and when a window is mostly unused, e.g. inverted-
  *      calendar pockets). Weekly target minutes do not depend on this mode.
- *   5. Goals with `specialGoalType: "gym"` reserve an extra quantised band of
+ *   5. Routines settings inject synthetic goals: physical activity (`gym`) and
+ *      weekly errands (`weeklyErrands`), each with optional ideal clock times.
+ *      Physical activity reserves a quantised band of
  *      `settings.gym.driveMinutes` on each side of the workout block (same
- *      default one-way drive as calendar gym legs) so nothing else stacks in
- *      the commute window. Gym goals are scheduled **before** other goals at
- *      the same commitment/floor tier so earlier list order cannot occupy
- *      those drive windows first.
+ *      default one-way drive as calendar gym legs). That block is scheduled
+ *      **before** other goals at the same commitment/floor tier so earlier list
+ *      order cannot occupy those drive windows first. Optional
+ *      `placementIdealClockTimes` bias gap choice and in-gap alignment.
  *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
@@ -68,7 +70,11 @@ import {
 } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps } from "./intervals";
-import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
+import {
+  physicalActivityWeeklyGoalFromGymSettings,
+  weeklyErrandsGoalFromSettings
+} from "./weekly-routines";
+import { hourInTz, dateKeyInTz, localMidnightMs, clockMinutesInTz } from "./time";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -289,7 +295,9 @@ function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTim
     goal.earliestHour === undefined &&
     goal.latestHour === undefined &&
     goal.scheduleInNiceWeather !== true &&
-    goal.specialGoalType !== "gym"
+    goal.specialGoalType !== "gym" &&
+    goal.specialGoalType !== "errands" &&
+    !(goal.placementIdealClockTimes && goal.placementIdealClockTimes.length > 0)
   );
 }
 
@@ -326,12 +334,25 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     }
   }
 
-  const schedulingGoals = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
+  const schedulingGoalsBase = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
+  const withoutRoutineInjected = schedulingGoalsBase.filter(
+    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+  );
+  const physicalRoutine = physicalActivityWeeklyGoalFromGymSettings(settings.gym);
+  const errandsRoutine = weeklyErrandsGoalFromSettings(settings.weeklyErrands);
+  const schedulingGoals = withoutRoutineInjected;
+  const routineInject: WeeklyGoal[] = [];
+  if (physicalRoutine) routineInject.push(physicalRoutine);
+  if (errandsRoutine) routineInject.push(errandsRoutine);
   const fw = settings.schedulerFrameworkInclusion;
 
   // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
-  const wheelTopUps = wheelTopUpGoals(schedulingGoals, settings.wheel, fw.wheel);
-  const goalsForAllocation = [...schedulingGoals, ...wheelTopUps];
+  const wheelTopUps = wheelTopUpGoals(
+    [...schedulingGoals, ...routineInject],
+    settings.wheel,
+    fw.wheel
+  );
+  const goalsForAllocation = [...schedulingGoals, ...routineInject, ...wheelTopUps];
 
   const batteryOn = settings.personalSystem.energyBatterySchedulingEnabled === true;
   const dayDrainScores = batteryOn ? computeDayCalendarDrainScores(busy, days) : undefined;
@@ -1556,6 +1577,18 @@ function scoreBatteryPlacement(
   return score;
 }
 
+function scoreGapForPlacementIdeals(gap: Interval, goal: WeeklyGoal, tz: string): number {
+  const ideals = goal.placementIdealClockTimes;
+  if (!ideals || ideals.length === 0) return 0;
+  const centerMin = clockMinutesInTz((gap.startMs + gap.endMs) / 2, tz);
+  let best = Infinity;
+  for (const t of ideals) {
+    const target = t.hour * 60 + t.minute;
+    best = Math.min(best, Math.abs(centerMin - target));
+  }
+  return -PLACEMENT_IDEAL_CLOCK_WEIGHT * best;
+}
+
 function pickGapForGoal(
   gaps: readonly Interval[],
   goal: WeeklyGoal,
@@ -1592,10 +1625,11 @@ function pickGapForGoal(
         ? 0
         : scoreEnergyAwareness(g, goal, tz, placedToday, weights, frameworkInclusion);
     const batteryScore = battery ? scoreBatteryPlacement(g, goal, tz, placedToday, battery) : 0;
+    const idealScore = scoreGapForPlacementIdeals(g, goal, tz);
     candidates.push({
       gap: g,
       minutes: Math.min(perDay, innerMin),
-      score: energyScore + suggestionScore + batteryScore
+      score: energyScore + suggestionScore + batteryScore + idealScore
     });
   }
   if (candidates.length === 0) return null;
@@ -1701,6 +1735,9 @@ function placementWeightsFromPriority(
  * breaks ties — it never overrides hard constraints like day-pinning,
  * earliest/latest hour, or per-day caps.
  */
+/** Weight for `placementIdealClockTimes`: closer gap midpoints score higher. */
+const PLACEMENT_IDEAL_CLOCK_WEIGHT = 0.12;
+
 export const ENERGY_SUGGESTION_WEIGHTS = {
   /** Per-hour distance penalty when a goal carries an attentionMode. */
   attentionPenaltyPerHour: 0.4,
@@ -1886,12 +1923,41 @@ function placeBlockInGap(
 ): Interval {
   const inner =
     travelPadMs > 0 ? insetGapByPadding(gap, travelPadMs)! : gap;
+  const innerLen = inner.endMs - inner.startMs;
+  if (innerLen <= ms) {
+    return { startMs: inner.startMs, endMs: inner.startMs + ms };
+  }
+  const ideals = goal.placementIdealClockTimes;
+  if (ideals && ideals.length > 0) {
+    const dk = dateKeyInTz(Math.floor((inner.startMs + inner.endMs) / 2), tz);
+    const segs = dk.split("-");
+    const ys = Number(segs[0]);
+    const mo = Number(segs[1]);
+    const da = Number(segs[2]);
+    if (!Number.isFinite(ys) || !Number.isFinite(mo) || !Number.isFinite(da)) {
+      return { startMs: inner.startMs, endMs: inner.startMs + ms };
+    }
+    const dayMidnight = localMidnightMs(ys, mo, da, tz);
+    let bestStart = inner.startMs;
+    let bestDist = Infinity;
+    for (const ideal of ideals) {
+      const idealMs = dayMidnight + (ideal.hour * 3600 + ideal.minute * 60) * 1000;
+      const wantStart = idealMs - ms / 2;
+      const clamped = Math.max(inner.startMs, Math.min(wantStart, inner.endMs - ms));
+      const center = clamped + ms / 2;
+      const dist = Math.abs(center - idealMs);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestStart = clamped;
+      }
+    }
+    return { startMs: bestStart, endMs: bestStart + ms };
+  }
   // Prefer the beginning of the gap if hyperfocus, end if hyperaware.
   if (goal.energyMode === "hyperaware") {
-    const endMs = Math.min(inner.endMs, inner.startMs + (inner.endMs - inner.startMs));
+    const endMs = Math.min(inner.endMs, inner.startMs + innerLen);
     return { startMs: endMs - ms, endMs };
   }
-  void tz;
   return { startMs: inner.startMs, endMs: inner.startMs + ms };
 }
 

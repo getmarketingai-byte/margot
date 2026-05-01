@@ -10,6 +10,7 @@ import type { AllocatedBlock } from "../src/weekly";
 import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
 import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION, weeklyGoalSchema } from "@calendar-automations/schema";
 import type { BusyEvent } from "../src/types";
+import { ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID } from "../src/weekly-routines";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -1021,18 +1022,7 @@ describe("allocateWeek", () => {
       id: "gym-plan",
       weekStart: "2026-04-27",
       timezone: "UTC",
-      goals: [
-        {
-          id: "gym-goal",
-          title: "Gym",
-          minMinutesPerWeek: 60,
-          maxMinutesPerWeek: 60,
-          dayOfWeek: "monday",
-          energyMode: "hyperfocus",
-          ppfHorizon: "unspecified",
-          specialGoalType: "gym"
-        }
-      ]
+      goals: []
     };
     const plainPlan: WeeklyPlan = {
       ...gymPlan,
@@ -1049,25 +1039,35 @@ describe("allocateWeek", () => {
         }
       ]
     };
-    const settings = buildSettings({
-      gym: { ...DEFAULT_USER_SETTINGS.gym, driveMinutes: 10 }
+    const settingsWithRoutine = buildSettings({
+      gym: {
+        ...DEFAULT_USER_SETTINGS.gym,
+        driveMinutes: 10,
+        plannerBlockEnabled: true,
+        sessionsPerWeek: 1,
+        runMinutes: 45,
+        plannerDaysOfWeek: ["monday"]
+      }
+    });
+    const settingsNoRoutine = buildSettings({
+      gym: { ...DEFAULT_USER_SETTINGS.gym, driveMinutes: 10, plannerBlockEnabled: false }
     });
     // driveMinutes 10 → 15 min grid each way → inner window 75 − 30 = 45 min.
     const gymResult = allocateWeek({
       plan: gymPlan,
       busy,
-      settings,
+      settings: settingsWithRoutine,
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
     const plainResult = allocateWeek({
       plan: plainPlan,
       busy,
-      settings,
+      settings: settingsNoRoutine,
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
-    const gymBlock = gymResult.blocks.find((b) => b.goalId === "gym-goal");
+    const gymBlock = gymResult.blocks.find((b) => b.goalId === ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID);
     const plainBlock = plainResult.blocks.find((b) => b.goalId === "plain-goal");
     expect(gymBlock).toBeDefined();
     expect(plainBlock).toBeDefined();
@@ -1108,27 +1108,25 @@ describe("allocateWeek", () => {
           energyMode: "neutral",
           ppfHorizon: "unspecified"
         },
-        {
-          id: "gym-goal",
-          title: "Gym",
-          targetMinutes: 60,
-          dayOfWeek: "monday",
-          energyMode: "neutral",
-          ppfHorizon: "unspecified",
-          specialGoalType: "gym"
-        }
       ]
     };
     const result = allocateWeek({
       plan,
       busy,
       settings: buildSettings({
-        gym: { ...DEFAULT_USER_SETTINGS.gym, driveMinutes: 10 }
+        gym: {
+          ...DEFAULT_USER_SETTINGS.gym,
+          driveMinutes: 10,
+          plannerBlockEnabled: true,
+          sessionsPerWeek: 1,
+          runMinutes: 45,
+          plannerDaysOfWeek: ["monday"]
+        }
       }),
       weekStartMs,
       weekEndMs: weekStartMs + 7 * DAY_MS
     });
-    const gymBlock = result.blocks.find((b) => b.goalId === "gym-goal");
+    const gymBlock = result.blocks.find((b) => b.goalId === ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID);
     expect(gymBlock).toBeDefined();
     expect(Math.floor((gymBlock!.endMs - gymBlock!.startMs) / 60_000)).toBe(45);
   });

@@ -1,11 +1,12 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
+import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema } from "@calendar-automations/schema";
 import {
-  filterSchedulingGoals,
-  type WeeklyPlan,
-  weeklyIntentSchema
-} from "@calendar-automations/schema";
-import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+  allocateWeek,
+  buildStableUid,
+  goalOverrideSourcesFromPlan,
+  schedulingGoalsWithWeeklyRoutines
+} from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import {
   getCachedPlanWeekAllocationInputs,
@@ -78,7 +79,10 @@ export default async function PlanPage() {
   const catchUpMode = settings.allocator.catchUpMode;
   const nowMs = Date.now();
   const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
-  const schedulingGoals = filterSchedulingGoals(plan.goals);
+  const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
+  const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
+    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+  );
   const resolvedCatchUpFloors = ctx.catchUpFloors;
   const {
     busyFetch,
@@ -180,7 +184,7 @@ export default async function PlanPage() {
   );
   const gymGoalTravelOverlay = gymGoalTravelBlocksFromProposed(
     proposedForCalendar,
-    plan.goals,
+    schedulingGoals,
     settings.travel,
     settings.gym
   );
@@ -232,9 +236,9 @@ export default async function PlanPage() {
         <h1 className="text-2xl font-semibold">My Perfect Week</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
           List the things you want each week. Type a goal and press Enter — we&apos;ll find the
-          time. Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
-          <Link className="underline" href="/dashboard/energy#framework-methods">
-            Planning
+          time.           Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
+          <Link className="underline" href="/dashboard/planner#framework-methods">
+            Planner
           </Link>{" "}
           with your frameworks.
         </p>
@@ -254,7 +258,7 @@ export default async function PlanPage() {
         left={
           <div className="flex flex-col gap-5">
             <PlanClient
-              initialGoals={schedulingGoals}
+              initialGoals={perfectWeekAuthoringGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
               weekCapacityFromNowMinutes={allocation.metrics.utilisation.weekCapacityFromNowMinutes}
               remainingWeekMinutes={allocation.metrics.utilisation.availableMinutes}
@@ -271,10 +275,10 @@ export default async function PlanPage() {
                 <p className="text-xs text-ink-400">
                   With strict mode on, these goals didn&apos;t fit. Either soften their floors or
                   switch to proportional under{" "}
-                  <Link className="underline" href="/dashboard/energy#scheduling-outcomes">
-                    Scheduling rules
+                  <Link className="underline" href="/dashboard/planner#scheduling-outcomes">
+                    Scheduling options
                   </Link>{" "}
-                  on Planning.
+                  on Planner.
                 </p>
                 <ul className="mt-2 list-disc pl-5 text-sm">
                   {allocation.metrics.notScheduled.map((n) => (

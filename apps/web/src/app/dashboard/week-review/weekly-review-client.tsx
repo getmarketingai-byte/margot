@@ -322,7 +322,7 @@ function AutomatedCatchUpSummary({
       <p className="mt-3 text-xs text-ink-400">
         To set floors yourself from this screen, switch to{" "}
         <Link
-          href="/dashboard/energy#scheduling-outcomes"
+          href="/dashboard/planner#scheduling-outcomes"
           className="text-accent hover:underline"
         >
           manual catch-up

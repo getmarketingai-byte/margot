@@ -5,7 +5,7 @@ import { useEffect } from "react";
 
 const PREFETCH_HREFS = [
   "/dashboard/plan",
-  "/dashboard/energy",
+  "/dashboard/planner",
   "/dashboard/review",
   "/dashboard/week-review",
   "/dashboard/calendars"

@@ -8,7 +8,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 
 /** Routes that consume weekly plan data + allocator context. */
-const PLANNING_PATHS = ["/dashboard/plan", "/dashboard/energy"] as const;
+const PLANNING_PATHS = ["/dashboard/plan", "/dashboard/planner"] as const;
 
 export function revalidatePlanningRoutes(options?: {
   /** Also refresh review surfaces when plan-derived context must align (reviews, ICS, etc.). */

@@ -53,7 +53,7 @@ export function BuildYourSystemPanel({
       <div>
         {variant === "embedded" ? (
           <h3 id="build-system-methods-heading" className={mainTitleClass}>
-            Optional scheduling methods
+            Scheduling method modules
           </h3>
         ) : (
           <h2 id="build-system-methods-heading" className={mainTitleClass}>
@@ -85,7 +85,7 @@ export function BuildYourSystemPanel({
             persist(next);
           }}
         />
-        <span>Show scheduling methods on this page (saves your preferences)</span>
+        <span>Show method modules on the Planner hub (saves your preferences)</span>
       </label>
 
       <div className="rounded-md border border-ink-200/90 dark:border-ink-600">

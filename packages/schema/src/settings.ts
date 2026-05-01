@@ -206,12 +206,44 @@ export type TravelCache = z.infer<typeof travelCacheSchema>;
 
 /* ─────────────────────────────── 5. Gym ──────────────────────────────────── */
 
+const plannerDayOfWeek = z.enum([
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday"
+]);
+
 export const gymSettingsSchema = z.object({
   enabled: z.boolean().default(false),
   title: z.string().default("Gym"),
   locationSubstring: z.string().optional(),
   driveMinutes: positiveInt.default(10),
   runMinutes: positiveInt.default(30),
+  /**
+   * When true, the weekly allocator schedules a single physical-activity block
+   * (gym-type padding, drive windows) from these settings instead of a Perfect
+   * Week goal row. Configure label, cadence, and ideal times under Planner →
+   * Daily routines.
+   */
+  plannerBlockEnabled: z.boolean().default(false),
+  /** Shown on the calendar / goal chips for the planner block (not calendar title matching). */
+  blockLabel: z.string().min(1).default("Physical activity"),
+  /**
+   * Preferred local times of day for placing the workout block; the allocator
+   * picks gaps whose midpoint is closest to one of these clocks.
+   */
+  idealBlockTimes: z
+    .array(z.object({ hour: hour, minute: minute }))
+    .min(1)
+    .max(8)
+    .default([{ hour: 11, minute: 30 }]),
+  /** How many sessions to plan per ISO week (paired with `runMinutes` per session). */
+  sessionsPerWeek: z.number().int().min(1).max(14).default(3),
+  /** When set, sessions may only land on these weekdays; when unset, any day is allowed. */
+  plannerDaysOfWeek: z.array(plannerDayOfWeek).min(1).max(7).optional(),
   earliestStart: z
     .object({ hour: hour.default(6), minute: minute.default(0) })
     .default({ hour: 6, minute: 0 }),
@@ -235,6 +267,28 @@ export const gymSettingsSchema = z.object({
   freeMinutesMin: positiveInt.default(120)
 });
 export type GymSettings = z.infer<typeof gymSettingsSchema>;
+
+/**
+ * Weekly errands block (allocator), parallel to physical activity under
+ * Planner → Daily routines. Not the timemap `[Errands]` band label.
+ */
+export const weeklyErrandsRoutineSchema = z.object({
+  plannerBlockEnabled: z.boolean().default(false),
+  blockLabel: z.string().min(1).default("Errands"),
+  idealBlockTimes: z
+    .array(z.object({ hour: hour, minute: minute }))
+    .min(1)
+    .max(8)
+    .default([{ hour: 14, minute: 0 }]),
+  sessionsPerWeek: z.number().int().min(1).max(14).default(2),
+  sessionMinutes: positiveInt.default(45),
+  /** Inclusive earliest scheduling hour (0–23). */
+  earliestHour: hour.default(8),
+  /** Exclusive latest scheduling hour (1–24), same semantics as `WeeklyGoal.latestHour`. */
+  latestHour: z.number().int().min(1).max(24).default(20),
+  plannerDaysOfWeek: z.array(plannerDayOfWeek).min(1).max(7).optional()
+});
+export type WeeklyErrandsRoutine = z.infer<typeof weeklyErrandsRoutineSchema>;
 
 /* ─────────────────────────── 6. Work / pay period ───────────────────────── */
 
@@ -784,6 +838,7 @@ export const userSettingsSchema = z.object({
   sleep: sleepSettingsSchema.default({} as never),
   travel: travelSettingsSchema.default({} as never),
   gym: gymSettingsSchema.default({} as never),
+  weeklyErrands: weeklyErrandsRoutineSchema.default({} as never),
   work: workSettingsSchema.default({} as never),
   weather: weatherSettingsSchema.default({} as never),
   wheel: wheelSettingsSchema.default({} as never),
