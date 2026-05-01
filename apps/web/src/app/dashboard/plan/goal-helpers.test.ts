@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { WeeklyGoal } from "@calendar-automations/schema";
 import {
+  formatMinutes,
   goalAllocationRowDisplay,
-  type GoalAllocationRowSummary
+  summariseAllocation
 } from "./goal-helpers";
 
 function baseGoal(over: Partial<WeeklyGoal> = {}): WeeklyGoal {
@@ -19,56 +20,65 @@ function baseGoal(over: Partial<WeeklyGoal> = {}): WeeklyGoal {
   };
 }
 
+describe("summariseAllocation", () => {
+  it("applies allocationSharePercent to the post-floor remainder for hints", () => {
+    const floor = baseGoal({ id: "floor", title: "Floored", minMinutesPerWeek: 120 });
+    const eq = baseGoal({ id: "eq", title: "Equal share" });
+    const wt = baseGoal({
+      id: "wt",
+      title: "40% row",
+      allocationSharePercent: 40
+    });
+    const summary = summariseAllocation([floor, eq, wt], 614);
+    expect(summary.reservedMinutes).toBe(120);
+    expect(summary.remainingMinutes).toBe(494);
+    expect(summary.remainderHintByGoalId["wt"]).toBe(Math.round(494 * 0.4));
+    expect(summary.remainderHintByGoalId["eq"]).toBe(Math.round(494 * 0.6));
+    expect(summary.remainderHintByGoalId["floor"]).toBeUndefined();
+  });
+});
+
 describe("goalAllocationRowDisplay", () => {
-  it("shows min and equal-share hint for weekly min-only goals", () => {
-    const summary: GoalAllocationRowSummary = {
-      equalShareGoals: 1,
-      perEqualShareMinutes: 667,
-      hasWeightedShare: false
-    };
-    const { line } = goalAllocationRowDisplay(
-      baseGoal({ minMinutesPerWeek: 480 }),
-      summary,
-      480
-    );
-    expect(line).toBe("8h / 8h - 11h 7m");
-  });
-
-  it("uses explicit weekly max as the third segment", () => {
-    const summary: GoalAllocationRowSummary = {
-      equalShareGoals: 0,
-      perEqualShareMinutes: 0,
-      hasWeightedShare: false
-    };
-    const { line } = goalAllocationRowDisplay(
-      baseGoal({ minMinutesPerWeek: 120, maxMinutesPerWeek: 600 }),
-      summary,
-      200
-    );
-    expect(line).toBe("3h 20 min / 2h - 10h");
-  });
-
-  it("omits third segment when there is no cohort and no explicit max", () => {
-    const summary: GoalAllocationRowSummary = {
-      equalShareGoals: 0,
-      perEqualShareMinutes: 0,
-      hasWeightedShare: false
-    };
-    const { line } = goalAllocationRowDisplay(
-      baseGoal({ minMinutesPerWeek: 480 }),
-      summary,
-      480
-    );
+  it("omits upper hint for floor-only goals that do not take remainder", () => {
+    const g = baseGoal({ minMinutesPerWeek: 480 });
+    const summary = summariseAllocation([g], 1000);
+    const { line } = goalAllocationRowDisplay(g, summary, 480);
     expect(line).toBe("8h / 8h");
   });
 
-  it("shows unconstrained upper hint with em-dash minimum", () => {
-    const summary: GoalAllocationRowSummary = {
-      equalShareGoals: 1,
-      perEqualShareMinutes: 420,
-      hasWeightedShare: false
-    };
-    const { line } = goalAllocationRowDisplay(baseGoal(), summary, 120);
+  it("uses explicit weekly max as the third segment", () => {
+    const g = baseGoal({ minMinutesPerWeek: 120, maxMinutesPerWeek: 600 });
+    const summary = summariseAllocation([g], 5000);
+    const { line } = goalAllocationRowDisplay(g, summary, 200);
+    expect(line).toBe("3h 20m / 2h - 10h");
+  });
+
+  it("omits third segment when there is no remainder cohort", () => {
+    const g = baseGoal({ minMinutesPerWeek: 480 });
+    const summary = summariseAllocation([g], 480);
+    const { line } = goalAllocationRowDisplay(g, summary, 480);
+    expect(line).toBe("8h / 8h");
+  });
+
+  it("shows equal-share upper hint for a single unconstrained goal", () => {
+    const g = baseGoal();
+    const summary = summariseAllocation([g], 420);
+    const { line } = goalAllocationRowDisplay(g, summary, 120);
     expect(line).toBe("2h / — - 7h");
+  });
+
+  it("shows weighted remainder share, not an even split of the pool", () => {
+    const floor = baseGoal({ id: "floor", title: "Floored", minMinutesPerWeek: 120 });
+    const eq = baseGoal({ id: "eq", title: "Equal" });
+    const wt = baseGoal({
+      id: "wt",
+      title: "Weighted",
+      allocationSharePercent: 40
+    });
+    const summary = summariseAllocation([floor, eq, wt], 614);
+    const wtHint = summary.remainderHintByGoalId["wt"]!;
+    expect(wtHint).toBe(198);
+    const { line } = goalAllocationRowDisplay(wt, summary, 1614);
+    expect(line).toBe(`26h 54m / — - ${formatMinutes(wtHint)}`);
   });
 });

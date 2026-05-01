@@ -293,8 +293,12 @@ export interface NormalisedGoalTime {
  *      only; use explicit `minMinutesPerWeek` / `maxMinutesPerWeek` when the user
  *      needs an exact weekly band.
  *   2. If `minMinutesPerDay` is set without `minMinutesPerWeek`, derive
- *      `min/wk = min/day × scheduledDays`, but only when cadence is explicit
- *      (`frequencyPerWeek`, `dayOfWeek`, or `daysOfWeek`). Same for max.
+ *      `min/wk = min/day × scheduledDays`. When cadence is not explicit
+ *      (`frequencyPerWeek`, `dayOfWeek`, `daysOfWeek`), assume **7 days** so the
+ *      stated daily floor participates in weekly Pass 1 + proportional starvation
+ *      like other commitments. Weekly **max** from `maxMinutesPerDay` still
+ *      requires explicit cadence (avoid turning a vague daily cap into a huge
+ *      weekly ceiling).
  *   3. A goal with no explicit weekly/day bounds (`minMinutesPerWeek`, etc.) is
  *      "equal share", **including** when only legacy `targetMinutes` is set.
  */
@@ -319,12 +323,9 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   let minMinutesPerWeek = goal.minMinutesPerWeek;
   let maxMinutesPerWeek = goal.maxMinutesPerWeek;
 
-  if (
-    minMinutesPerWeek === undefined &&
-    goal.minMinutesPerDay !== undefined &&
-    inferredScheduledDays !== undefined
-  ) {
-    minMinutesPerWeek = goal.minMinutesPerDay * inferredScheduledDays;
+  if (minMinutesPerWeek === undefined && goal.minMinutesPerDay !== undefined) {
+    const daysForWeeklyMin = inferredScheduledDays ?? 7;
+    minMinutesPerWeek = goal.minMinutesPerDay * daysForWeeklyMin;
   }
   if (
     maxMinutesPerWeek === undefined &&

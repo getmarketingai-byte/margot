@@ -676,9 +676,10 @@ function distributeMinutes(
       mode: allocator.starvationMode
     };
     if (allocator.starvationMode === "proportional") {
-      const ratio = totalFreeMin / Math.max(1, floorTotal);
-      for (const p of prepared) {
-        p.effectiveMinutes = quantise(p.effectiveMinutes * ratio);
+      const weights = prepared.map((p) => p.effectiveMinutes);
+      const alloc = proportionalMinutesOnGrid(weights, totalFreeMin);
+      for (let i = 0; i < prepared.length; i++) {
+        prepared[i]!.effectiveMinutes = alloc[i] ?? 0;
       }
     } else {
       // Strict: pay floors in goal order until time runs out, zero the rest.
@@ -749,6 +750,32 @@ function distributeMinutes(
 
 function quantise(min: number): number {
   return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
+}
+
+/**
+ * Split `totalBudget` minutes across goals in proportion to `weights` (floors),
+ * on the 15-minute grid, using largest-remainder so the parts sum to
+ * `floor(totalBudget / 15) * 15` (avoids independent round-off blowing the budget).
+ */
+function proportionalMinutesOnGrid(weights: readonly number[], totalBudget: number): number[] {
+  const n = weights.length;
+  if (n === 0) return [];
+  const sumW = weights.reduce((a, b) => a + b, 0);
+  if (sumW <= 0) return Array<number>(n).fill(0);
+  const totalQuanta = Math.floor(Math.max(0, totalBudget) / QUANTUM);
+  if (totalQuanta <= 0) return Array<number>(n).fill(0);
+
+  const exact = weights.map((w) => (w / sumW) * totalQuanta);
+  const down = exact.map((e) => Math.floor(e));
+  let usedQ = down.reduce((a, b) => a + b, 0);
+  let remQ = totalQuanta - usedQ;
+  const order = exact.map((e, i) => ({ i, frac: e - Math.floor(e) }));
+  order.sort((a, b) => (b.frac !== a.frac ? b.frac - a.frac : a.i - b.i));
+  for (let j = 0; j < remQ; j++) {
+    const idx = order[j % order.length]!.i;
+    down[idx] = (down[idx] ?? 0) + 1;
+  }
+  return down.map((q) => q * QUANTUM);
 }
 
 function intervalMinutesFull(interval: Interval): number {

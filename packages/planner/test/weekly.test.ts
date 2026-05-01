@@ -824,6 +824,50 @@ describe("allocateWeek", () => {
     );
   });
 
+  it("proportional starvation trims daily min goals (no cadence) alongside weekly floors", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      busy.push({
+        id: `b${d}`,
+        startMs: weekStartMs + d * DAY_MS + 0,
+        endMs: weekStartMs + d * DAY_MS + 23 * HOUR_MS,
+        busy: true
+      });
+    }
+    const result = allocateWeek({
+      plan: {
+        id: "starved-mixed-cadence",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "weekly",
+            title: "Weekly floor",
+            minMinutesPerWeek: 120
+          }),
+          goal({
+            id: "daily",
+            title: "Daily floor only",
+            minMinutesPerDay: 150
+          })
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.overcommitted).toBeDefined();
+    expect(result.metrics.overcommitted!.mode).toBe("proportional");
+    const ta = result.metrics.perGoal["weekly"]!.targetMinutes;
+    const tb = result.metrics.perGoal["daily"]!.targetMinutes;
+    expect(ta + tb).toBe(Math.floor((60 * 7) / 15) * 15);
+    // 120 vs 150×7 weekly floors → largest-remainder split on 15m grid.
+    expect(ta).toBe(45);
+    expect(tb).toBe(375);
+  });
+
   it("finish-early packing mode still allows two capped goals to fill equally when time abounds", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const result = allocateWeek({

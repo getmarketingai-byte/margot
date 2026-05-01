@@ -116,7 +116,7 @@ describe("WeeklyGoal energy classification fields", () => {
     expect(norm.maxMinutesPerWeek).toBeUndefined();
     expect(norm.maxMinutesPerDay).toBe(480);
   });
-  it("does not inflate min/week from min/day when cadence is unconstrained", () => {
+  it("derives min/week from min/day × 7 when cadence is unconstrained", () => {
     const norm = normaliseGoalTime(
       weeklyGoalSchema.parse({
         id: "g1",
@@ -124,7 +124,7 @@ describe("WeeklyGoal energy classification fields", () => {
         minMinutesPerDay: 60
       })
     );
-    expect(norm.minMinutesPerWeek).toBeUndefined();
+    expect(norm.minMinutesPerWeek).toBe(420);
     expect(norm.minMinutesPerDay).toBe(60);
   });
 

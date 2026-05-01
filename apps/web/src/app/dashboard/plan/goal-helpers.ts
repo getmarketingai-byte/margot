@@ -17,6 +17,7 @@ import type {
   WorkLayer
 } from "@calendar-automations/schema";
 import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
+import { computeAllocationRemainderFractions } from "@calendar-automations/planner/weekly";
 
 export type ChipKind =
   | "min-week"
@@ -258,11 +259,18 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
   perEqualShareMinutes: number;
   /** True when some scheduling goal sets `allocationSharePercent`. */
   hasWeightedShare: boolean;
+  /**
+   * Pass-2-style share of `remainingMinutes` for each goal that participates in
+   * the post-floor remainder (same weighting as `computeAllocationRemainderFractions`).
+   * Goals with a weekly floor and no `% share` are omitted — they do not take remainder.
+   */
+  remainderHintByGoalId: Record<string, number>;
 } {
   const schedulingGoals = filterSchedulingGoals(goals);
   const hasWeightedShare = schedulingGoals.some((g) => g.allocationSharePercent !== undefined);
   let reserved = 0;
   let equalShareCount = 0;
+  const eligibleForRemainder: WeeklyGoal[] = [];
   for (const g of schedulingGoals) {
     const norm = normaliseGoalTime(g);
     const floor = norm.minMinutesPerWeek ?? 0;
@@ -272,10 +280,21 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
       floor <= 0 || g.allocationSharePercent !== undefined;
     if (participatesInRemainder && (ceiling === undefined || floor < ceiling)) {
       equalShareCount++;
+      eligibleForRemainder.push(g);
     }
   }
   const remaining = Math.max(0, freeMinutes - reserved);
   const perEqual = equalShareCount > 0 ? Math.round(remaining / equalShareCount) : 0;
+
+  const remainderHintByGoalId: Record<string, number> = {};
+  if (eligibleForRemainder.length > 0 && remaining > 0) {
+    const fractions = computeAllocationRemainderFractions(eligibleForRemainder);
+    for (let i = 0; i < eligibleForRemainder.length; i++) {
+      const id = eligibleForRemainder[i]!.id;
+      remainderHintByGoalId[id] = Math.round(remaining * fractions[i]!);
+    }
+  }
+
   return {
     freeMinutes,
     goalCount: schedulingGoals.length,
@@ -283,22 +302,24 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
     remainingMinutes: remaining,
     equalShareGoals: equalShareCount,
     perEqualShareMinutes: perEqual,
-    hasWeightedShare
+    hasWeightedShare,
+    remainderHintByGoalId
   };
 }
 
 /** Narrow summary shape consumed by [`goalAllocationRowDisplay`]. */
 export type GoalAllocationRowSummary = Pick<
   ReturnType<typeof summariseAllocation>,
-  "equalShareGoals" | "perEqualShareMinutes" | "hasWeightedShare"
+  "equalShareGoals" | "perEqualShareMinutes" | "hasWeightedShare" | "remainderHintByGoalId"
 >;
 
 /**
  * Builds the collapsed goals-list time string: achieved / weekly min — weekly max (or unconstrained-share hint).
  *
- * Third segment is an explicit `maxMinutesPerWeek` when set; otherwise minutes per unconstrained-equal-share participant
- * from [`summariseAllocation`] (same basis as “Each unconstrained goal” in the budget chip). Omit the third segment when
- * there is no explicit max and no unconstrained-equal-share cohort (shows `- 0` otherwise avoided).
+ * Third segment is an explicit `maxMinutesPerWeek` when set; otherwise this goal’s
+ * share of post-floor remainder from [`summariseAllocation`].`remainderHintByGoalId`
+ * (same weighting as Pass 2). When `remainderHintByGoalId` is absent (legacy callers),
+ * falls back to `perEqualShareMinutes` only if `equalShareGoals > 0`.
  */
 export function goalAllocationRowDisplay(
   goal: WeeklyGoal,
@@ -310,12 +331,18 @@ export function goalAllocationRowDisplay(
   const minLabel = minFloor > 0 ? formatMinutes(minFloor) : "—";
 
   const hasExplicitWeeklyMax = norm.maxMinutesPerWeek !== undefined;
+  const hintMap = summary.remainderHintByGoalId;
+  const hasPerGoalHints = hintMap !== undefined;
+  const idHint = hasPerGoalHints && Object.hasOwn(hintMap, goal.id) ? hintMap[goal.id] : undefined;
+
   const maxMinutes =
     hasExplicitWeeklyMax
       ? norm.maxMinutesPerWeek!
-      : summary.equalShareGoals > 0
-        ? summary.perEqualShareMinutes
-        : undefined;
+      : idHint !== undefined
+        ? idHint
+        : !hasPerGoalHints && summary.equalShareGoals > 0
+          ? summary.perEqualShareMinutes
+          : undefined;
 
   const scheduledLabel = formatMinutes(scheduledMinutes);
   const maxLabel =
@@ -326,16 +353,18 @@ export function goalAllocationRowDisplay(
 
   const thirdExplain = hasExplicitWeeklyMax
     ? "weekly ceiling"
-    : "approx. minutes each unconstrained goal would get after minimums reserve time (budget chip)";
+    : hasPerGoalHints && idHint !== undefined
+      ? "your approximate share of time left after weekly minimums (same % split as the planner Pass 2 hint)"
+      : "approx. minutes each unconstrained goal would get after minimums reserve time (budget chip)";
   let title = `Scheduled (logs plus calendar blocks) / Weekly minimum (${minFloor > 0 ? "explicit floor" : "none"}`;
-  title += `) • Upper: ${maxLabel !== undefined ? `${maxLabel} — ${thirdExplain}` : "not shown (no unconstrained-equal-share cohort and no weekly max)"}`;
+  title += `) • Upper: ${maxLabel !== undefined ? `${maxLabel} — ${thirdExplain}` : "not shown (no remainder share for this row and no weekly max)"}`;
 
   if (goal.allocationSharePercent !== undefined) {
     title +=
-      ". This row also takes a weighted % of remainder; the planner’s merged target may differ — see expanded options.";
+      ". `% of remainder` applies to the post-floor pool only; caps and placement can change the final plan.";
   } else if (summary.hasWeightedShare) {
     title +=
-      ". Some goals use `% of remainder`; unconstrained-equal-share hints are approximate for the whole pool.";
+      ". Some goals use `% of remainder`; their upper hint uses the weighted split, not an even slice of the pool.";
   }
 
   return { line, title };
