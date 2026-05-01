@@ -82,6 +82,24 @@ const DRAIN_REF_MS = 14 * 60 * MS_PER_MIN;
 /** Round all minute decisions to a 15-minute grid. */
 const QUANTUM = 15;
 
+/** Next slot index for auto goal blocks so repeated Pass 3 invocations stay unique. */
+function nextAutoGoalSlotIndex(
+  blocks: readonly AllocatedBlock[],
+  goalId: string,
+  weekAnchorDate: string
+): number {
+  const suffix = `:${goalId}`;
+  let max = -1;
+  for (const b of blocks) {
+    if (b.segment || b.goalId !== goalId || !b.dragKey?.endsWith(suffix)) continue;
+    const parts = b.dragKey.split(":");
+    if (parts.length < 4) continue;
+    const n = Number(parts[2]);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return max + 1;
+}
+
 const DAY_INDEX: Record<DayOfWeek, number> = {
   monday: 0,
   tuesday: 1,
@@ -285,9 +303,15 @@ export interface AllocateResult {
 }
 
 /** Internal: a goal augmented with the bounds the allocator actually uses. */
-interface PreparedGoal {
+export interface PreparedGoal {
   goal: WeeklyGoal;
   norm: NormalisedGoalTime;
+  /**
+   * Weekly floor from `normaliseGoalTime` **before** `catchUpFloors` bump.
+   * Pass 2 excludes goals with a positive **user** weekly floor and no `%`;
+   * catch-up-only floors must still join equal-share remainder splitting.
+   */
+  weeklyFloorBeforeCatchUpBump: number;
   /** Pass 1+2 planned weekly minutes (full-week budget). */
   plannedWeeklyMinutes: number;
   /**
@@ -515,28 +539,26 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   // Pass 3 — placement: schedule each prepared goal, day by day, honouring
   // per-day caps. Order matters when free time is scarce, so we sort:
   //   1. commitment tier (non-negotiable → committed → nice-to-have),
-  //   2. floor-bearing goals first (so their minimums actually land),
+  //   2. explicit weekly-floor goals first (`weeklyFloorBeforeCatchUpBump`, so
+  //      catch-up-only bumps do not reorder ahead of true equal-share peers),
   //   3. gym goals next (they consume drive pads — must run before fillers),
   //   4. then by user-provided list order,
   //   5. then by remaining minutes desc as a final tie-breaker.
-  prepared.sort((a, b) => {
-    if (fw.commitment) {
-      const aTier = commitmentRank(a.goal.commitmentLevel);
-      const bTier = commitmentRank(b.goal.commitmentLevel);
-      if (aTier !== bTier) return aTier - bTier;
-    }
-    const aHasFloor = (a.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
-    const bHasFloor = (b.norm.minMinutesPerWeek ?? 0) > 0 ? 0 : 1;
-    if (aHasFloor !== bHasFloor) return aHasFloor - bHasFloor;
-    const aGym = a.goal.specialGoalType === "gym" ? 0 : 1;
-    const bGym = b.goal.specialGoalType === "gym" ? 0 : 1;
-    if (aGym !== bGym) return aGym - bGym;
-    if (a.index !== b.index) return a.index - b.index;
-    return b.effectiveMinutes - a.effectiveMinutes;
-  });
+  prepared.sort((a, b) => comparePreparedGoalsForPass3Placement(a, b, fw));
 
-  for (const p of prepared) {
-    if (p.effectiveMinutes <= 0) continue;
+  const placementDemandBeforePass3 = new Map(
+    prepared.map((p) => [p.goal.id, p.effectiveMinutes] as const)
+  );
+
+  const pass3Sequential = prepared.filter(
+    (p) => p.goal.specialGoalType === "gym" || p.weeklyFloorBeforeCatchUpBump > 0
+  );
+  const pass3RoundRobin = prepared.filter(
+    (p) => p.goal.specialGoalType !== "gym" && p.weeklyFloorBeforeCatchUpBump <= 0
+  );
+
+  const runAllocateGoalPass3 = (p: PreparedGoal) => {
+    if (p.effectiveMinutes <= 0) return;
     allocateGoal(
       p,
       days,
@@ -559,6 +581,68 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       batteryContext,
       groupPlacement
     );
+  };
+
+  for (const p of pass3Sequential) runAllocateGoalPass3(p);
+
+  const goalClaimsPctShare = (p: PreparedGoal) =>
+    p.goal.allocationSharePercent != null && p.goal.allocationSharePercent > 0;
+
+  /** When remaining demands fall in the same quantum bucket, prefer tighter daily caps first. */
+  const ascendingDailyCapTie = (a: PreparedGoal, b: PreparedGoal): number => {
+    const ca = a.norm.maxMinutesPerDay ?? Number.MAX_SAFE_INTEGER;
+    const cb = b.norm.maxMinutesPerDay ?? Number.MAX_SAFE_INTEGER;
+    if (ca !== cb) return ca - cb;
+    return 0;
+  };
+
+  // Round-robin waves: %-share goals sorted descending (large targets first within
+  // that cohort) interleaved with equal-share goals sorted ascending. Pure pct-first
+  // fragments the grid before modest peers run (equal-share starvation); pure ascending
+  // leaves %-rows too late. Interleaving gives both cohorts an early pick each wave.
+  // Within a quantum-wide demand tie, tighter maxMinutesPerDay runs first — capped
+  // peers need more distinct pocket shapes than unconstrained rows at the same target.
+  const RR_ROUNDS = 128;
+  for (let r = 0; r < RR_ROUNDS; r++) {
+    let progressed = false;
+    const pct = pass3RoundRobin.filter(goalClaimsPctShare).sort((a, b) => {
+      const da = a.effectiveMinutes;
+      const db = b.effectiveMinutes;
+      if (Math.abs(da - db) < QUANTUM) {
+        const cap = ascendingDailyCapTie(a, b);
+        if (cap !== 0) return cap;
+        return r % 2 === 0 ? a.index - b.index : b.index - a.index;
+      }
+      return db - da;
+    });
+    const free = pass3RoundRobin.filter((p) => !goalClaimsPctShare(p)).sort((a, b) => {
+      const da = a.effectiveMinutes;
+      const db = b.effectiveMinutes;
+      if (Math.abs(da - db) < QUANTUM) {
+        const cap = ascendingDailyCapTie(a, b);
+        if (cap !== 0) return cap;
+        return r % 2 === 0 ? a.index - b.index : b.index - a.index;
+      }
+      return da - db;
+    });
+    const seq: PreparedGoal[] = [];
+    for (let i = 0, j = 0; i < pct.length || j < free.length; ) {
+      if (i < pct.length) {
+        seq.push(pct[i]!);
+        i++;
+      }
+      if (j < free.length) {
+        seq.push(free[j]!);
+        j++;
+      }
+    }
+    for (const p of seq) {
+      if (p.effectiveMinutes < QUANTUM) continue;
+      const before = p.effectiveMinutes;
+      runAllocateGoalPass3(p);
+      if (p.effectiveMinutes < before) progressed = true;
+    }
+    if (!progressed) break;
   }
 
   for (const b of blocks) {
@@ -599,7 +683,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       consistencyReservedWeekMinutes,
       busyTrueEventCount
     },
-    goalGroupWeeklyGapsPre
+    goalGroupWeeklyGapsPre,
+    placementDemandBeforePass3
   );
   if (overcommitted) metrics.overcommitted = overcommitted;
   metrics.notScheduled = notScheduled;
@@ -621,8 +706,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  *     `(pct/100) * T` where `T` is full-week schedulable gap time (`totalFreeMin`);
  *     the cohort never receives more than remainder `R` after Pass 1. Goals with
  *     no `%` split whatever is left after those targets (or share `R` evenly when
- *     there are no `%` rows). Goals with a positive weekly floor do not participate
- *     unless they set `allocationSharePercent` (so "min" behaves as a floor).
+ *     there are no `%` rows). Goals with a positive **user** weekly floor (before any
+ *     catch-up bump) do not participate unless they set `allocationSharePercent`
+ *     (so "min" behaves as a floor). Catch-up-inflated floors alone still join Pass 2.
  *     Calendar layout then uses `allocator.allocationMode`
  *     only: `"even"` spreads slack inside each free window as gaps between goal
  *     runs; `"finish-early"` leaves blocks packed without that padding so
@@ -732,16 +818,17 @@ function distributeMinutes(
 } {
   const prepared: PreparedGoal[] = goals.map((goal, index) => {
     const norm = normaliseGoalTime(goal);
+    const weeklyFloorBeforeCatchUpBump = norm.minMinutesPerWeek ?? 0;
     const bump = catchUpFloors?.[goal.id] ?? 0;
     if (bump !== 0) {
       // Floor only. Raising the weekly ceiling here made allocations exceed a
       // stated `maxMinutesPerWeek` (catch-up looked like "ignore my cap").
-      const baseFloor = norm.minMinutesPerWeek ?? 0;
-      norm.minMinutesPerWeek = Math.max(0, baseFloor + bump);
+      norm.minMinutesPerWeek = Math.max(0, weeklyFloorBeforeCatchUpBump + bump);
     }
     return {
       goal,
       norm,
+      weeklyFloorBeforeCatchUpBump,
       plannedWeeklyMinutes: 0,
       effectiveMinutes: 0,
       index
@@ -808,8 +895,14 @@ function distributeMinutes(
     prepared.filter((p) => {
       const cap = p.norm.maxMinutesPerWeek;
       if (cap !== undefined && p.effectiveMinutes >= cap) return false;
-      const floor = p.norm.minMinutesPerWeek ?? 0;
-      if (floor > 0 && p.goal.allocationSharePercent === undefined) return false;
+      // Ignore catch-up-inflated floors: only an explicit user weekly floor (or
+      // derived weekly min before catch-up) opts out of Pass 2 remainder sharing.
+      if (
+        p.weeklyFloorBeforeCatchUpBump > 0 &&
+        p.goal.allocationSharePercent === undefined
+      ) {
+        return false;
+      }
       return true;
     });
 
@@ -1365,7 +1458,8 @@ function allocateGoal(
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
-  if (remainingMinutes <= 0) return;
+  try {
+    if (remainingMinutes <= 0) return;
 
   const gymTravelPadMin = gymTravelPadMinutesForGoal(goal, settings.gym);
   const gymTravelPadMs = gymTravelPadMin * MS_PER_MIN;
@@ -1476,7 +1570,7 @@ function allocateGoal(
     }
   }
 
-  let slotIndex = 0;
+  let slotIndex = nextAutoGoalSlotIndex(blocks, goal.id, weekAnchorDate);
   /** Drag overrides that failed `tryPinGoalBlock` — treat as unpinned so we do not auto-place duplicates on later passes. */
   const ignoredGoalPinKeys = new Set<string>();
 
@@ -1569,10 +1663,13 @@ function allocateGoal(
       if (dayGoalBlocks.length > 0 && remainingMinutes < QUANTUM) continue;
 
       // Secondary guardrail (even-split pass only): avoid placing this goal on
-      // consecutive days when a non-adjacent day is still available.
+      // consecutive days when a non-adjacent day is still available. Skip this when
+      // the goal already uses invert / nice-weather windows — pockets are scarce and
+      // pass-0 deferral leaves demand unplaced while peers fill shared gaps.
       const occupiedDays = occupiedGoalDayIndexes();
       if (
         pass === 0 &&
+        !needsExtraPasses &&
         hasAdjacentGoalDay(dayIdx, occupiedDays) &&
         hasNonAdjacentAlternativeDay(dayIdx, occupiedDays)
       ) {
@@ -1676,6 +1773,9 @@ function allocateGoal(
     console.warn(
       `[allocateWeek] Goal "${goal.title}" (${goal.id}) has ${remainingMinutes} min unscheduled after ${maxPasses} passes (availability/nice-weather squeeze).`
     );
+  }
+  } finally {
+    prepared.effectiveMinutes = Math.max(0, remainingMinutes);
   }
 }
 
@@ -2063,6 +2163,31 @@ function commitmentRank(level: CommitmentLevel | undefined): number {
     default:
       return 1;
   }
+}
+
+/**
+ * Stable Pass 3 ordering before greedy placement (exported for tests).
+ * Uses `weeklyFloorBeforeCatchUpBump` so catch-up-inflated weekly mins do not
+ * preempt true equal-share peers in list order.
+ */
+export function comparePreparedGoalsForPass3Placement(
+  a: PreparedGoal,
+  b: PreparedGoal,
+  fw: SchedulerFrameworkInclusion
+): number {
+  if (fw.commitment) {
+    const aTier = commitmentRank(a.goal.commitmentLevel);
+    const bTier = commitmentRank(b.goal.commitmentLevel);
+    if (aTier !== bTier) return aTier - bTier;
+  }
+  const aHasFloor = a.weeklyFloorBeforeCatchUpBump > 0 ? 0 : 1;
+  const bHasFloor = b.weeklyFloorBeforeCatchUpBump > 0 ? 0 : 1;
+  if (aHasFloor !== bHasFloor) return aHasFloor - bHasFloor;
+  const aGym = a.goal.specialGoalType === "gym" ? 0 : 1;
+  const bGym = b.goal.specialGoalType === "gym" ? 0 : 1;
+  if (aGym !== bGym) return aGym - bGym;
+  if (a.index !== b.index) return a.index - b.index;
+  return b.effectiveMinutes - a.effectiveMinutes;
 }
 
 interface SignalWeights {
@@ -2465,7 +2590,9 @@ function computeMetrics(
     groupId: string;
     reason: "weeklyCap" | "weeklyFloor";
     shortMinutes: number;
-  }[]
+  }[],
+  /** Placement demand (minutes) after logs / now scaling, captured before Pass 3 — used for `unplacedMinutes`. */
+  placementDemandBeforePass3?: ReadonlyMap<string, number>
 ): WeekMetrics {
   const wheel = settings.wheel;
   const ppf = settings.ppf;
@@ -2475,7 +2602,8 @@ function computeMetrics(
   for (const g of plan.goals) {
     const p = preparedById.get(g.id);
     const target = p?.plannedWeeklyMinutes ?? g.targetMinutes ?? 0;
-    const placementDemand = p?.effectiveMinutes ?? 0;
+    const placementDemand =
+      placementDemandBeforePass3?.get(g.id) ?? p?.effectiveMinutes ?? 0;
     const placedBlocks = goalBlockMinutesPlaced(g.id, blocks);
     const achieved = achievedMinutesForGoal(g.id, busy, blocks, weekStartMs, weekEndMs);
     perGoal[g.id] = {

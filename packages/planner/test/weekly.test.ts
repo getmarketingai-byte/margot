@@ -3,13 +3,20 @@ import {
   achievedMinutesForGoal,
   allocateWeek,
   buildGoalDragKey,
+  comparePreparedGoalsForPass3Placement,
   computeAllocationRemainderFractions,
   computePass2AllocMinutesFromShareOfWeek,
   computeDayCalendarDrainScores
 } from "../src/weekly";
+import type { PreparedGoal } from "../src/weekly";
 import type { AllocatedBlock } from "../src/weekly";
 import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
-import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION, weeklyGoalSchema } from "@calendar-automations/schema";
+import {
+  DEFAULT_USER_SETTINGS,
+  SETTINGS_SCHEMA_VERSION,
+  weeklyGoalSchema,
+  normaliseGoalTime
+} from "@calendar-automations/schema";
 import type { BusyEvent } from "../src/types";
 import { ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID } from "../src/weekly-routines";
 
@@ -489,6 +496,37 @@ describe("allocateWeek", () => {
     const min = Math.min(...targets);
     expect(max - min).toBeLessThanOrEqual(15);
     expect(min).toBeGreaterThan(0);
+  });
+
+  it("orders Pass 3 placement: catch-up-only weekly bump does not preempt equal-share list order", () => {
+    const fw = buildSettings().schedulerFrameworkInclusion;
+    const gFirst = goal({ id: "goalFirst", title: "First" });
+    const gSecond = goal({ id: "goalSecond", title: "Second" });
+    const normSecondBase = normaliseGoalTime(gSecond);
+    const preparedFirst: PreparedGoal = {
+      goal: gFirst,
+      norm: normaliseGoalTime(gFirst),
+      weeklyFloorBeforeCatchUpBump: 0,
+      plannedWeeklyMinutes: 0,
+      effectiveMinutes: 100,
+      index: 0
+    };
+    const preparedSecondCatchUp: PreparedGoal = {
+      goal: gSecond,
+      norm: { ...normSecondBase, minMinutesPerWeek: 60 },
+      weeklyFloorBeforeCatchUpBump: 0,
+      plannedWeeklyMinutes: 0,
+      effectiveMinutes: 100,
+      index: 1
+    };
+    expect(comparePreparedGoalsForPass3Placement(preparedFirst, preparedSecondCatchUp, fw)).toBeLessThan(0);
+    expect(comparePreparedGoalsForPass3Placement(preparedSecondCatchUp, preparedFirst, fw)).toBeGreaterThan(0);
+
+    const preparedSecondExplicitMin: PreparedGoal = {
+      ...preparedSecondCatchUp,
+      weeklyFloorBeforeCatchUpBump: 60
+    };
+    expect(comparePreparedGoalsForPass3Placement(preparedFirst, preparedSecondExplicitMin, fw)).toBeGreaterThan(0);
   });
 
   it("weights free-time targets by allocationSharePercent in even mode", () => {
