@@ -1,5 +1,6 @@
 import type { PpfPillarKey, UserSettings } from "@calendar-automations/schema";
-import { frameworkRuleFormPillarKeys, updatePpf } from "./framework-rules-actions";
+import { frameworkRuleFormPillarKeys } from "./framework-rule-form-shared";
+import { updatePpf } from "./framework-rules-actions";
 
 export function PpfMixForm({
   targets

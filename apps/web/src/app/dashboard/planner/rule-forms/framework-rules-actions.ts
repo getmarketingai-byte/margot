@@ -7,10 +7,9 @@ import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
   coerceSettingsAfterLegacyWheelPpfHppEdit,
   type Hp6HabitKey,
-  type PpfPillarKey,
 } from "@calendar-automations/schema";
 
-const PILLARS: PpfPillarKey[] = ["personal", "professional", "financial"];
+import { frameworkRuleFormPillarKeys as PILLARS } from "./framework-rule-form-shared";
 const HP6_KEYS: Readonly<Hp6HabitKey[]> = [
   "clarity",
   "energy",
@@ -20,9 +19,7 @@ const HP6_KEYS: Readonly<Hp6HabitKey[]> = [
   "courage"
 ];
 
-export const frameworkRuleFormPillarKeys = PILLARS;
-
-export function afterFrameworkRulesSave(userId: string): void {
+function afterFrameworkRulesSave(userId: string): void {
   invalidateUserAllocationCache(userId);
   revalidatePlanningRoutes();
 }
