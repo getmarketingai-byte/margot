@@ -1,8 +1,8 @@
 /**
- * Google Calendar adapter — turns a user's connected Google account into the
- * planner's `BusyEvent[]` shape. Token refresh is handled by `googleapis` when
- * we provide both the access and refresh tokens; we re-persist the new access
- * token so subsequent jobs reuse it.
+ * Live Google Calendar `events.list` projection into planner busy intervals (plus
+ * invert-free-busy availability windows). Route handlers should prefer
+ * `fetchGoogleBusy` from `@/lib/google-busy-cache`, which serves Postgres first and
+ * refreshes in the background.
  */
 
 import { google, type calendar_v3 } from "googleapis";
@@ -80,7 +80,7 @@ export async function listGoogleCalendars(userId: string): Promise<
  * clipped to each day window (multi-day trips still block each day) unless the
  * clipped slice exceeds 24h.
  */
-export async function fetchGoogleBusy(
+export async function fetchGoogleBusyLive(
   userId: string,
   sources: readonly CalendarSource[],
   windowStartMs: number,

@@ -30,6 +30,12 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 - **One auto block per goal per day** (by design): reduces context switching. Additional demand spills to other days in extra passes when availability allows.
 - Drag overrides and `source: "actual"` pins are honoured per existing pin rules (including relaxed overlap for actuals vs calendar busy, but not vs sleep).
 
+## Modelled sleep vs scheduler-owned busy
+
+- **Rule:** Events this product **schedules or proposes** (allocator blocks, synthetic routines, and other planner output on the week model) **must not displace modelled sleep** from its ideal target window or force gap / split / shrink placement—**except** for **drive** legs, which may still constrain sleep the same way as real calendar travel.
+- **Drive (allowed to move sleep):** Titles treated as travel-like for this purpose match [`isTravelLikeConflictTitle`](src/sleep.ts) (`[Drive]` prefix, or `->` for drive-direct). Caller-specific shaping (e.g. outbound wake pull, `[Drive] Home` + buffer) lives in [`apps/web/src/lib/week-blocks.ts`](../../apps/web/src/lib/week-blocks.ts) before `placeSleepBlock`.
+- **Integration:** [`apps/web/src/lib/week-blocks.ts`](../../apps/web/src/lib/week-blocks.ts) `computeSleepBlocks` omits `source: "internal"` busy from the `sleepBusy` stream unless the title matches a travel/drive leg for `travel.driveEventTag` (same shapes as synthetic `[Drive]` blocks). [`placeSleepBlock`](src/sleep.ts) still receives calendar busy (Google / ICS / Microsoft) unchanged, so a real same-title event on a provider calendar can still displace modelled sleep.
+
 ## Goal groups (aggregate constraints)
 
 - **Definitions:** [`GoalGroup`](../schema/src/goals.ts) rows live on [`WeeklyPlan.goalGroups`](../schema/src/goals.ts); goals reference them via [`WeeklyGoal.groupIds`](../schema/src/goals.ts). Scheduling knobs are the same **picked** fields as on goals (`allocationSharePercent`, weekly/day min/max, cadence, placement windows, etc.); group rows use aggregate semantics (sum across member goals), not commitment tiers or framework mirrors.

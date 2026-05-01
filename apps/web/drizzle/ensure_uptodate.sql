@@ -357,6 +357,107 @@ BEGIN
   END IF;
 END$$;
 
+CREATE TABLE IF NOT EXISTS "google_busy_cache" (
+  "userId" text PRIMARY KEY NOT NULL,
+  "updatedAt" timestamp DEFAULT now() NOT NULL,
+  "windowStartMs" text NOT NULL,
+  "windowEndMs" text NOT NULL,
+  "sourcesFingerprint" text NOT NULL,
+  "busyEvents" jsonb NOT NULL,
+  "goalAvailabilityWindows" jsonb NOT NULL
+);
+
+ALTER TABLE "google_busy_cache" ADD COLUMN IF NOT EXISTS "userId" text;
+ALTER TABLE "google_busy_cache" ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now();
+ALTER TABLE "google_busy_cache" ADD COLUMN IF NOT EXISTS "windowStartMs" text;
+ALTER TABLE "google_busy_cache" ADD COLUMN IF NOT EXISTS "windowEndMs" text;
+ALTER TABLE "google_busy_cache" ADD COLUMN IF NOT EXISTS "sourcesFingerprint" text;
+ALTER TABLE "google_busy_cache" ADD COLUMN IF NOT EXISTS "busyEvents" jsonb;
+ALTER TABLE "google_busy_cache" ADD COLUMN IF NOT EXISTS "goalAvailabilityWindows" jsonb;
+ALTER TABLE "google_busy_cache" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "google_busy_cache" ALTER COLUMN "windowStartMs" SET NOT NULL;
+ALTER TABLE "google_busy_cache" ALTER COLUMN "windowEndMs" SET NOT NULL;
+ALTER TABLE "google_busy_cache" ALTER COLUMN "sourcesFingerprint" SET NOT NULL;
+ALTER TABLE "google_busy_cache" ALTER COLUMN "busyEvents" SET NOT NULL;
+ALTER TABLE "google_busy_cache" ALTER COLUMN "goalAvailabilityWindows" SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'google_busy_cache_userId_user_id_fk'
+  ) THEN
+    ALTER TABLE "google_busy_cache"
+      ADD CONSTRAINT "google_busy_cache_userId_user_id_fk"
+      FOREIGN KEY ("userId") REFERENCES "public"."user"("id")
+      ON DELETE cascade ON UPDATE no action;
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS "weather_forecast_cache" (
+  "userId" text PRIMARY KEY NOT NULL,
+  "updatedAt" timestamp DEFAULT now() NOT NULL,
+  "coordsFingerprint" text NOT NULL,
+  "openMeteoJson" jsonb,
+  "openMeteoFetchedAtMs" text NOT NULL,
+  "sunriseByDate" jsonb NOT NULL
+);
+
+ALTER TABLE "weather_forecast_cache" ADD COLUMN IF NOT EXISTS "userId" text;
+ALTER TABLE "weather_forecast_cache" ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now();
+ALTER TABLE "weather_forecast_cache" ADD COLUMN IF NOT EXISTS "coordsFingerprint" text;
+ALTER TABLE "weather_forecast_cache" ADD COLUMN IF NOT EXISTS "openMeteoJson" jsonb;
+ALTER TABLE "weather_forecast_cache" ADD COLUMN IF NOT EXISTS "openMeteoFetchedAtMs" text;
+ALTER TABLE "weather_forecast_cache" ADD COLUMN IF NOT EXISTS "sunriseByDate" jsonb;
+ALTER TABLE "weather_forecast_cache" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "weather_forecast_cache" ALTER COLUMN "coordsFingerprint" SET NOT NULL;
+ALTER TABLE "weather_forecast_cache" ALTER COLUMN "openMeteoFetchedAtMs" SET NOT NULL;
+ALTER TABLE "weather_forecast_cache" ALTER COLUMN "sunriseByDate" SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'weather_forecast_cache_userId_user_id_fk'
+  ) THEN
+    ALTER TABLE "weather_forecast_cache"
+      ADD CONSTRAINT "weather_forecast_cache_userId_user_id_fk"
+      FOREIGN KEY ("userId") REFERENCES "public"."user"("id")
+      ON DELETE cascade ON UPDATE no action;
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS "system_sleep_routine_cache" (
+  "userId" text NOT NULL,
+  "weekStartIso" text NOT NULL,
+  "inputsFingerprint" text NOT NULL,
+  "sleepBlocks" jsonb NOT NULL,
+  "routineBlocks" jsonb NOT NULL,
+  "updatedAt" timestamp DEFAULT now() NOT NULL,
+  CONSTRAINT "system_sleep_routine_cache_userId_weekStartIso_pk" PRIMARY KEY ("userId", "weekStartIso")
+);
+
+ALTER TABLE "system_sleep_routine_cache" ADD COLUMN IF NOT EXISTS "userId" text;
+ALTER TABLE "system_sleep_routine_cache" ADD COLUMN IF NOT EXISTS "weekStartIso" text;
+ALTER TABLE "system_sleep_routine_cache" ADD COLUMN IF NOT EXISTS "inputsFingerprint" text;
+ALTER TABLE "system_sleep_routine_cache" ADD COLUMN IF NOT EXISTS "sleepBlocks" jsonb;
+ALTER TABLE "system_sleep_routine_cache" ADD COLUMN IF NOT EXISTS "routineBlocks" jsonb;
+ALTER TABLE "system_sleep_routine_cache" ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now();
+ALTER TABLE "system_sleep_routine_cache" ALTER COLUMN "inputsFingerprint" SET NOT NULL;
+ALTER TABLE "system_sleep_routine_cache" ALTER COLUMN "sleepBlocks" SET NOT NULL;
+ALTER TABLE "system_sleep_routine_cache" ALTER COLUMN "routineBlocks" SET NOT NULL;
+ALTER TABLE "system_sleep_routine_cache" ALTER COLUMN "updatedAt" SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'system_sleep_routine_cache_userId_user_id_fk'
+  ) THEN
+    ALTER TABLE "system_sleep_routine_cache"
+      ADD CONSTRAINT "system_sleep_routine_cache_userId_user_id_fk"
+      FOREIGN KEY ("userId") REFERENCES "public"."user"("id")
+      ON DELETE cascade ON UPDATE no action;
+  END IF;
+END$$;
+
 COMMENT ON COLUMN "user_settings"."data" IS
   'UserSettings JSON; parsed and upgraded by migrateSettings() in @calendar-automations/schema (SETTINGS_SCHEMA_VERSION).';
 

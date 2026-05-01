@@ -5,7 +5,6 @@ import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import type { UserSettings } from "@calendar-automations/schema";
 import { PhysicalActivityRoutineForm } from "./physical-activity-routine-form";
-import { WeeklyErrandsRoutineForm } from "./weekly-errands-routine-form";
 
 function afterConstraintsSave(userId: string): void {
   invalidateUserAllocationCache(userId);
@@ -121,8 +120,8 @@ export async function ConstraintsSection() {
       <details className="card" open>
         <summary className="cursor-pointer text-sm font-semibold">Daily routines</summary>
         <p className="mt-1 text-xs text-ink-400">
-          Morning and shutdown routines reserve windows around sleep; physical activity and errands use
-          the same cadence / ideal-time controls as weekly goals.
+          Morning and shutdown routines reserve windows around sleep; physical activity uses the same
+          cadence / ideal-time controls as weekly goals.
         </p>
         <form action={updateRoutines} className="mt-3">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -178,7 +177,6 @@ export async function ConstraintsSection() {
           </div>
         </form>
         <PhysicalActivityRoutineForm initial={settings.gym} />
-        <WeeklyErrandsRoutineForm initial={settings.weeklyErrands} />
       </details>
 
       <details className="card" open>

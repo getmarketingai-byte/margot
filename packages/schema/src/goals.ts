@@ -70,11 +70,16 @@ export const specialGoalType = z.enum([
   "morning-routine",
   "shutdown-routine",
   "gym",
-  "errands",
   /** Synthetic row for invert-free-busy calendar sources (readout, not a commitment). */
   "inverted-timemap"
 ]);
 export type SpecialGoalType = z.infer<typeof specialGoalType>;
+
+/** Strips legacy `"errands"` (was a settings-driven block; use a normal goal instead). */
+const specialGoalTypeFieldSchema = z.preprocess(
+  (v) => (v === "errands" ? undefined : v),
+  specialGoalType.optional()
+);
 
 /**
  * How firmly the user is committing to this goal this week.
@@ -154,7 +159,7 @@ export const weeklyGoalSchema = z.object({
    * Optional preferred local start times (wall clock) used when scoring gaps
    * and when placing the block inside a wide free window (start is clamped to
    * the gap when ideal falls outside). Used by routines-driven blocks
-   * (`specialGoalType: "gym"` or `"errands"`) from user settings.
+   * (`specialGoalType: "gym"`) from user settings.
    */
   placementIdealClockTimes: z
     .array(
@@ -169,7 +174,7 @@ export const weeklyGoalSchema = z.object({
    * Optional semantic type used by the UI for routine presets that map to
    * existing timemap/sleep/travel patterns.
    */
-  specialGoalType: specialGoalType.optional(),
+  specialGoalType: specialGoalTypeFieldSchema,
   /**
    * Commitment tier (non-negotiable / committed / nice-to-have). Defaults to
    * "committed" so existing goals round-trip cleanly. Drives placement order

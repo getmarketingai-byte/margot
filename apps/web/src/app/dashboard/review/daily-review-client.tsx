@@ -208,28 +208,6 @@ export function DailyReviewClient({
     }, 400);
   };
 
-  const fillBridgeGap = (fillMinutes: readonly number[], endpoint: LogSlot) => {
-    const additions: LogSlot[] = [];
-    for (const m of fillMinutes) {
-      if (slotIndex.has(m)) continue;
-      additions.push({
-        startMinute: m,
-        endMinute: m + SLOT_LENGTH_MIN,
-        category: endpoint.category,
-        ...(endpoint.category === "goal" && endpoint.goalId
-          ? { goalId: endpoint.goalId }
-          : {}),
-        energy: "neutral"
-      });
-    }
-    if (additions.length === 0) return;
-    flushSlots(
-      [...review.slots, ...additions].sort(
-        (a, b) => a.startMinute - b.startMinute
-      )
-    );
-  };
-
   const updateSlot = (startMinute: number, patch: Partial<LogSlot>) => {
     const existing = slotIndex.get(startMinute);
     const base: LogSlot = existing ?? {
@@ -411,7 +389,6 @@ export function DailyReviewClient({
         onSetBlockMark={updateBlockMark}
         onApplyBlock={applyBlockToLog}
         onClearBlock={clearBlockFromLog}
-        onFillBridgeGap={fillBridgeGap}
       />
 
       <GoalMarksCard
@@ -518,8 +495,7 @@ function TimelineCard({
   onClearSlot,
   onSetBlockMark,
   onApplyBlock,
-  onClearBlock,
-  onFillBridgeGap
+  onClearBlock
 }: {
   slotMinutes: number[];
   slotIndex: Map<number, LogSlot>;
@@ -535,7 +511,6 @@ function TimelineCard({
   onSetBlockMark: (blockKey: string, status: BlockMark["status"] | null) => void;
   onApplyBlock: (block: AllocatedBlockSnapshot) => void;
   onClearBlock: (block: AllocatedBlockSnapshot) => void;
-  onFillBridgeGap: (fillMinutes: readonly number[], endpoint: LogSlot) => void;
 }) {
   // Map each visible slot start-minute to the block (if any) that covers it.
   // Object identity is preserved so we can detect block boundaries with
@@ -592,21 +567,23 @@ function TimelineCard({
     return out;
   }, [blocks, dayStartMs, logStartMinute, logEndMinute, slotIndex]);
 
-  const bridgeSuggestions = useMemo(
-    () => computeBridgeGapSuggestions(slotIndex, slotMinutes),
-    [slotIndex, slotMinutes]
-  );
+  const bridgeHintByMinute = useMemo(() => {
+    const map = new Map<number, { endpoint: LogSlot; activityTitle: string }>();
+    for (const s of computeBridgeGapSuggestions(slotIndex, slotMinutes)) {
+      const ep = s.endpoint;
+      const activityTitle =
+        ep.category === "goal" && ep.goalId
+          ? goalById.get(ep.goalId)?.title ?? "Goal"
+          : CATEGORY_LABEL[ep.category];
+      for (const m of s.fillMinutes) {
+        map.set(m, { endpoint: ep, activityTitle });
+      }
+    }
+    return map;
+  }, [slotIndex, slotMinutes, goalById]);
 
   const totalRows = slotMinutes.length;
   const filledRows = slotMinutes.filter((m) => slotIndex.has(m)).length;
-
-  const bridgeActivityLabel = (s: BridgeGapSuggestion): string => {
-    const ep = s.endpoint;
-    if (ep.category === "goal" && ep.goalId) {
-      return goalById.get(ep.goalId)?.title ?? "Goal";
-    }
-    return CATEGORY_LABEL[ep.category];
-  };
 
   return (
     <section className="card">
@@ -623,49 +600,6 @@ function TimelineCard({
           {formatMinutes(totalRows * SLOT_LENGTH_MIN)} window
         </div>
       </header>
-      {bridgeSuggestions.length > 0 ? (
-        <div
-          className="mb-3 rounded-md border border-accent/35 bg-accent/5 px-3 py-2 dark:bg-accent/10"
-          role="status"
-        >
-          <p className="text-xs text-ink-600 dark:text-ink-200">
-            Same activity logged twice with empty rows in between — fill the gap
-            as that activity?
-          </p>
-          <ul className="mt-2 flex flex-col gap-2">
-            {bridgeSuggestions.map((s, idx) => {
-              const first = s.fillMinutes[0]!;
-              const lastStart = s.fillMinutes[s.fillMinutes.length - 1]!;
-              const label = bridgeActivityLabel(s);
-              return (
-                <li
-                  key={`${idx}-${first}-${lastStart}`}
-                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
-                >
-                  <span className="text-ink-500 dark:text-ink-300">
-                    <span className="font-medium text-ink-700 dark:text-ink-100">
-                      {label}
-                    </span>
-                    {" · "}
-                    {fmtTime(first)}–{fmtTime(lastStart + SLOT_LENGTH_MIN)} (
-                    {s.fillMinutes.length} slot
-                    {s.fillMinutes.length === 1 ? "" : "s"})
-                  </span>
-                  <button
-                    type="button"
-                    className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-200 dark:hover:text-ink-100"
-                    onClick={() =>
-                      onFillBridgeGap(s.fillMinutes, s.endpoint)
-                    }
-                  >
-                    Fill gap
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
       {blocks.length === 0 ? (
         <p className="mb-3 rounded-md border border-dashed border-ink-200 bg-ink-50/60 p-2 text-xs text-ink-400 dark:border-ink-600 dark:bg-ink-900/40">
           No planned blocks were captured for this day yet — open this page
@@ -700,6 +634,7 @@ function TimelineCard({
                 startMinute={startMinute}
                 slot={slotIndex.get(startMinute)}
                 block={block}
+                bridgeHint={bridgeHintByMinute.get(startMinute)}
                 isFirstOfBlock={isFirstOfBlock}
                 isLastOfBlock={isLastOfBlock}
                 goals={goals}
@@ -798,10 +733,14 @@ function PlannedBlockHeader({
   );
 }
 
+const SLOT_ACTION_PILL_CLASS =
+  "rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-500 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-300 dark:hover:text-ink-100";
+
 function SlotRow({
   startMinute,
   slot,
   block,
+  bridgeHint,
   isFirstOfBlock,
   isLastOfBlock,
   goals,
@@ -811,6 +750,7 @@ function SlotRow({
   startMinute: number;
   slot: LogSlot | undefined;
   block: AllocatedBlockSnapshot | undefined;
+  bridgeHint?: { endpoint: LogSlot; activityTitle: string };
   isFirstOfBlock: boolean;
   isLastOfBlock: boolean;
   goals: WeeklyGoal[];
@@ -829,17 +769,24 @@ function SlotRow({
   const blockRadius = block
     ? `${isFirstOfBlock ? "rounded-tl-md " : ""}${isLastOfBlock ? "rounded-bl-md" : ""}`
     : "";
+  const bridgeMatchesPlannedGoal =
+    !!block &&
+    !!bridgeHint &&
+    bridgeHint.endpoint.category === "goal" &&
+    bridgeHint.endpoint.goalId === block.goalId;
+  const showBridgePill = !!bridgeHint && !slot && !bridgeMatchesPlannedGoal;
+
   return (
     <li
-      className={`grid grid-cols-[64px_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-ink-200 py-1.5 last:border-b-0 dark:border-ink-600 ${inBlockClass} ${blockRadius}`}
+      className={`grid grid-cols-[64px_minmax(0,1fr)_auto] items-start gap-2 border-b border-ink-200 py-1.5 last:border-b-0 dark:border-ink-600 ${inBlockClass} ${blockRadius}`}
       style={
         railColor
           ? { borderLeftWidth: 3, borderLeftColor: railColor, paddingLeft: 8 }
           : undefined
       }
     >
-      <div className="font-mono text-xs text-ink-400">{fmtTime(startMinute)}</div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="pt-1 font-mono text-xs text-ink-400">{fmtTime(startMinute)}</div>
+      <div className="flex min-w-0 flex-col gap-1">
         <select
           aria-label={`Goal at ${fmtTime(startMinute)}`}
           className="field text-xs"
@@ -888,20 +835,42 @@ function SlotRow({
             <option value="cat:other">{CATEGORY_LABEL.other}</option>
           </optgroup>
         </select>
-        {block && !slot ? (
-          <button
-            type="button"
-            className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-500 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-300 dark:hover:text-ink-100"
-            onClick={() =>
-              onUpdate(startMinute, {
-                category: "goal",
-                goalId: block.goalId
-              })
-            }
-            title={`Accept the planned ${block.title} for this 15 min`}
-          >
-            Accept plan
-          </button>
+        {(block && !slot) || showBridgePill ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {block && !slot ? (
+              <button
+                type="button"
+                className={SLOT_ACTION_PILL_CLASS}
+                onClick={() =>
+                  onUpdate(startMinute, {
+                    category: "goal",
+                    goalId: block.goalId
+                  })
+                }
+                title={`Accept the planned ${block.title} for this 15 min`}
+              >
+                Accept plan
+              </button>
+            ) : null}
+            {showBridgePill ? (
+              <button
+                type="button"
+                className={SLOT_ACTION_PILL_CLASS}
+                onClick={() => {
+                  const ep = bridgeHint.endpoint;
+                  onUpdate(startMinute, {
+                    category: ep.category,
+                    ...(ep.category === "goal" && ep.goalId
+                      ? { goalId: ep.goalId }
+                      : { goalId: undefined })
+                  });
+                }}
+                title={`Log this 15 min as ${bridgeHint.activityTitle} — same activity as the rows before and after this gap`}
+              >
+                Continue {bridgeHint.activityTitle}
+              </button>
+            ) : null}
+          </div>
         ) : null}
         <input
           type="text"
@@ -918,22 +887,24 @@ function SlotRow({
           }
         />
       </div>
-      <SegmentedControl
-        ariaLabel={`Energy state at ${fmtTime(startMinute)}`}
-        options={ENERGY_OPTIONS}
-        value={slot?.energy ?? "neutral"}
-        onChange={(next) => onUpdate(startMinute, { energy: next })}
-        disabled={!slot}
-      />
-      <button
-        type="button"
-        className="text-xs text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
-        onClick={() => onClear(startMinute)}
-        aria-label={`Clear log at ${fmtTime(startMinute)}`}
-        disabled={!slot}
-      >
-        ×
-      </button>
+      <div className="flex items-center gap-2 pt-1">
+        <SegmentedControl
+          ariaLabel={`Energy state at ${fmtTime(startMinute)}`}
+          options={ENERGY_OPTIONS}
+          value={slot?.energy ?? "neutral"}
+          onChange={(next) => onUpdate(startMinute, { energy: next })}
+          disabled={!slot}
+        />
+        <button
+          type="button"
+          className="text-xs text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
+          onClick={() => onClear(startMinute)}
+          aria-label={`Clear log at ${fmtTime(startMinute)}`}
+          disabled={!slot}
+        >
+          ×
+        </button>
+      </div>
     </li>
   );
 }

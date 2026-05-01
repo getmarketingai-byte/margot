@@ -1,5 +1,6 @@
 import type { GeneratedEvent, GeocodeCacheEntry, WeatherSettings } from "@calendar-automations/schema";
 import { parseLatLngFromAddress } from "./geocode-address";
+import { createWeatherForecastCacheSession } from "./weather-forecast-cache";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -8,26 +9,6 @@ interface Interval {
   startMs: number;
   endMs: number;
   source: "weather" | "sun";
-}
-
-interface OpenMeteoHourly {
-  time: string[];
-  temperature_2m: number[];
-  precipitation_probability: number[];
-  windspeed_10m: number[];
-  uv_index: number[];
-  is_day: number[];
-}
-
-interface OpenMeteoResponse {
-  hourly?: OpenMeteoHourly;
-}
-
-interface SunriseSunsetResponse {
-  results?: {
-    sunrise?: string;
-    sunset?: string;
-  };
 }
 
 function toDateParts(ms: number, timezone: string): {
@@ -146,40 +127,6 @@ function effectiveForecastCoordinates(
     return { latitude: cached.lat, longitude: cached.lng };
   }
   return { latitude: weather.latitude, longitude: weather.longitude };
-}
-
-async function fetchWeather(weather: WeatherSettings): Promise<OpenMeteoResponse> {
-  const params = new URLSearchParams({
-    latitude: String(weather.latitude),
-    longitude: String(weather.longitude),
-    timezone: weather.timezone,
-    forecast_days: "16",
-    hourly: "temperature_2m,precipitation_probability,windspeed_10m,uv_index,is_day"
-  });
-  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`, {
-    method: "GET",
-    cache: "no-store"
-  });
-  if (!res.ok) throw new Error(`Open-Meteo failed: ${res.status}`);
-  return (await res.json()) as OpenMeteoResponse;
-}
-
-async function fetchSunriseSunset(
-  latitude: number,
-  longitude: number,
-  dateMs: number,
-  timezone: string
-): Promise<{ sunriseMs: number; sunsetMs: number } | null> {
-  const d = toDateParts(dateMs, timezone);
-  const date = `${String(d.year).padStart(4, "0")}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
-  const url = `https://api.sunrise-sunset.org/json?lat=${latitude}&lng=${longitude}&date=${date}&formatted=0`;
-  const res = await fetch(url, { method: "GET", cache: "no-store" });
-  if (!res.ok) return null;
-  const json = (await res.json()) as SunriseSunsetResponse;
-  const sunrise = json.results?.sunrise ? Date.parse(json.results.sunrise) : NaN;
-  const sunset = json.results?.sunset ? Date.parse(json.results.sunset) : NaN;
-  if (!Number.isFinite(sunrise) || !Number.isFinite(sunset) || sunset <= sunrise) return null;
-  return { sunriseMs: sunrise, sunsetMs: sunset };
 }
 
 function mergeIntervals(intervals: readonly Interval[]): Interval[] {
@@ -325,9 +272,11 @@ export async function buildWeatherTimemapEvents(params: {
     longitude: coords.longitude
   };
 
+  const wxSession = createWeatherForecastCacheSession(userId);
+
   const outside: Interval[] = [];
   try {
-    const raw = await fetchWeather(weatherAtHome);
+    const raw = await wxSession.getOpenMeteo(weatherAtHome);
     const hourly = raw.hourly;
     if (!hourly || hourly.time.length === 0) return [];
     let inNice = false;
@@ -387,7 +336,7 @@ export async function buildWeatherTimemapEvents(params: {
         weatherAtHome.timezone
       );
       while (dayCursor <= windowEndMs) {
-        const sun = await fetchSunriseSunset(
+        const sun = await wxSession.getSunriseSunset(
           weatherAtHome.latitude,
           weatherAtHome.longitude,
           dayCursor,

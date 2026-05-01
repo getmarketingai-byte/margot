@@ -21,6 +21,11 @@
  * concern is handled by the caller, which extends drive-home end times by
  * `bufferAfterDriveHomeMinutes` before passing them in here. By the time we
  * see the busy stream the drive-home buffer already shows up as occupied.
+ *
+ * **Product rule (see ALLOCATOR_BUSINESS_RULES.md):** among scheduler-owned
+ * busy, only travel/drive intervals (`isTravelLikeConflictTitle`) may displace
+ * modelled sleep; callers should not pass other proposed blocks as collisions
+ * that would move sleep off the ideal target.
  */
 
 import type { SleepSettings } from "@calendar-automations/schema";

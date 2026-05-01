@@ -21,8 +21,8 @@
  *      between goal runs when `allocator.allocationMode` is `"even"` (skipped
  *      for `"finish-early"` and when a window is mostly unused, e.g. inverted-
  *      calendar pockets). Weekly target minutes do not depend on this mode.
- *   5. Routines settings inject synthetic goals: physical activity (`gym`) and
- *      weekly errands (`weeklyErrands`), each with optional ideal clock times.
+ *   5. Routines settings can inject a synthetic physical activity (`gym`) goal
+ *      with optional ideal clock times.
  *      Physical activity reserves a quantised band of
  *      `settings.gym.driveMinutes` on each side of the workout block (same
  *      default one-way drive as calendar gym legs). That block is scheduled
@@ -72,10 +72,7 @@ import {
 } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps, mergeIntervals } from "./intervals";
-import {
-  physicalActivityWeeklyGoalFromGymSettings,
-  weeklyErrandsGoalFromSettings
-} from "./weekly-routines";
+import { physicalActivityWeeklyGoalFromGymSettings } from "./weekly-routines";
 import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 
 const MS_PER_MIN = 60_000;
@@ -322,7 +319,6 @@ function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTim
     goal.latestHour === undefined &&
     goal.scheduleInNiceWeather !== true &&
     goal.specialGoalType !== "gym" &&
-    goal.specialGoalType !== "errands" &&
     !(goal.placementIdealClockTimes && goal.placementIdealClockTimes.length > 0)
   );
 }
@@ -370,15 +366,11 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   }
 
   const schedulingGoalsBase = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
-  const withoutRoutineInjected = schedulingGoalsBase.filter(
-    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
-  );
+  const withoutRoutineInjected = schedulingGoalsBase.filter((g) => g.specialGoalType !== "gym");
   const physicalRoutine = physicalActivityWeeklyGoalFromGymSettings(settings.gym);
-  const errandsRoutine = weeklyErrandsGoalFromSettings(settings.weeklyErrands);
   const schedulingGoals = withoutRoutineInjected;
   const routineInject: WeeklyGoal[] = [];
   if (physicalRoutine) routineInject.push(physicalRoutine);
-  if (errandsRoutine) routineInject.push(errandsRoutine);
   const fw = settings.schedulerFrameworkInclusion;
 
   // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
@@ -401,7 +393,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       : undefined;
 
   // Pass 1+2: full ISO-week free gap total after segments (Mon–Sun window).
-  // Pass 3 still respects `nowMs`; weekly *targets* must not shrink mid-week.
+  // Pass 3 clips gaps to `allocationNowMs` when set, so placement demand for a
+  // *mixed* goal cohort must not exceed `weekCapacityFromNowMinutes` or many
+  // goals stall with unmeetable targets. (Unconstrained equal-share goals use
+  // the specialised cap block below.)
   const weekCapacityMinutes = days.reduce(
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFull(g), 0),
     0

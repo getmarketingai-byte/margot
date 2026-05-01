@@ -157,6 +157,58 @@ describe("computeSleepBlocks + timemap routines", () => {
     expect(p1!.startMs).toBeGreaterThanOrEqual(monday2315 + 45 * 60 * 1000);
   });
 
+  it("ignores internal non-drive busy when placing sleep (scheduler cannot move sleep)", () => {
+    const tue5am = WEEK_START_MS + DAY_MS + 5 * HOUR_MS;
+    const tue6am = WEEK_START_MS + DAY_MS + 6 * HOUR_MS;
+    const proposedLike: BusyEvent = {
+      sourceId: "proposed-neutrino",
+      title: "Neutrino Code",
+      startMs: tue5am,
+      endMs: tue6am,
+      busy: true,
+      source: "internal"
+    };
+    const blocks = computeSleepBlocks(
+      WEEK_START_MS,
+      [proposedLike],
+      baseSleep,
+      "UTC",
+      0,
+      new Map(),
+      undefined
+    );
+    const monNight = blocks.find((b) => b.system === "sleep" && b.override?.key === "0");
+    expect(monNight).toBeDefined();
+    expect(monNight!.title).toBe("Sleep");
+    expect(monNight!.endMs).toBe(WEEK_START_MS + DAY_MS + 7 * HOUR_MS);
+  });
+
+  it("still treats overlapping Google busy as sleep collision (external calendar)", () => {
+    const tue5am = WEEK_START_MS + DAY_MS + 5 * HOUR_MS;
+    const tue6am = WEEK_START_MS + DAY_MS + 6 * HOUR_MS;
+    const calendarWork: BusyEvent = {
+      sourceId: "cal-neutrino",
+      title: "Neutrino Code",
+      startMs: tue5am,
+      endMs: tue6am,
+      busy: true,
+      source: "google"
+    };
+    const blocks = computeSleepBlocks(
+      WEEK_START_MS,
+      [calendarWork],
+      baseSleep,
+      "UTC",
+      0,
+      new Map(),
+      undefined
+    );
+    const monNight = blocks.find((b) => b.system === "sleep" && b.override?.key === "0");
+    expect(monNight).toBeDefined();
+    expect(monNight!.title).not.toBe("Sleep");
+    expect(monNight!.title).toContain("conflicts:");
+  });
+
   it("includes sleep for nights whose wake is already past (full-week busy budget)", () => {
     // Monday May 4 2026 00:00 UTC week; Tue 07:00 is wake after Mon night sleep.
     const tue7am = WEEK_START_MS + DAY_MS + 7 * HOUR_MS;

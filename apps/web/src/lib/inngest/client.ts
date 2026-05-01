@@ -9,6 +9,9 @@ export type Events = {
   "user/regenerate.requested": {
     data: { userId: string; reason: "cron" | "user" | "settings-change" };
   };
+  "user/google-busy.refresh-requested": {
+    data: { userId: string; reason: "cron" };
+  };
   "user/snapshot.completed": {
     data: { userId: string };
   };

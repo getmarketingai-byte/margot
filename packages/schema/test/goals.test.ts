@@ -75,6 +75,15 @@ describe("WeeklyGoal energy classification fields", () => {
     expect(parsed.workLayer).toBe("unspecified");
   });
 
+  it("drops legacy specialGoalType errands (use a normal goal instead)", () => {
+    const parsed = weeklyGoalSchema.parse({
+      id: "g1",
+      title: "Shop",
+      specialGoalType: "errands"
+    });
+    expect(parsed.specialGoalType).toBeUndefined();
+  });
+
   it("round-trips allocationSharePercent", () => {
     const parsed = weeklyGoalSchema.parse({
       id: "g1",

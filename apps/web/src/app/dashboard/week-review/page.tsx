@@ -14,7 +14,7 @@ import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@cale
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
-import { fetchGoogleBusy } from "@/lib/google-calendar";
+import { fetchGoogleBusy } from "@/lib/google-busy-cache";
 import {
   localMondayIso,
   localMondayMidnightMs,

@@ -269,28 +269,6 @@ export const gymSettingsSchema = z.object({
 });
 export type GymSettings = z.infer<typeof gymSettingsSchema>;
 
-/**
- * Weekly errands block (allocator), parallel to physical activity under
- * Planner → Daily routines. Not the timemap `[Errands]` band label.
- */
-export const weeklyErrandsRoutineSchema = z.object({
-  plannerBlockEnabled: z.boolean().default(false),
-  blockLabel: z.string().min(1).default("Errands"),
-  idealBlockTimes: z
-    .array(z.object({ hour: hour, minute: minute }))
-    .min(1)
-    .max(8)
-    .default([{ hour: 14, minute: 0 }]),
-  sessionsPerWeek: z.number().int().min(1).max(14).default(2),
-  sessionMinutes: positiveInt.default(45),
-  /** Inclusive earliest scheduling hour (0–23). */
-  earliestHour: hour.default(8),
-  /** Exclusive latest scheduling hour (1–24), same semantics as `WeeklyGoal.latestHour`. */
-  latestHour: z.number().int().min(1).max(24).default(20),
-  plannerDaysOfWeek: z.array(plannerDayOfWeek).min(1).max(7).optional()
-});
-export type WeeklyErrandsRoutine = z.infer<typeof weeklyErrandsRoutineSchema>;
-
 /* ─────────────────────────── 6. Work / pay period ───────────────────────── */
 
 export const workSettingsSchema = z.object({
@@ -839,7 +817,6 @@ export const userSettingsSchema = z.object({
   sleep: sleepSettingsSchema.default({} as never),
   travel: travelSettingsSchema.default({} as never),
   gym: gymSettingsSchema.default({} as never),
-  weeklyErrands: weeklyErrandsRoutineSchema.default({} as never),
   work: workSettingsSchema.default({} as never),
   weather: weatherSettingsSchema.default({} as never),
   wheel: wheelSettingsSchema.default({} as never),

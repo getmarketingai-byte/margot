@@ -9,11 +9,12 @@ import "server-only";
 import { createHash } from "crypto";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { unstable_cache, revalidateTag } from "next/cache";
+import { unstable_cache } from "next/cache";
 import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
 
 import type { PlanWeekAllocationInputs } from "./allocation-run-context";
 import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
+import { userAllocationCacheTag } from "./allocation-cache-invalidation";
 import { isLoggedActualSleepTitle } from "./week-blocks";
 
 const ALLOC_CACHE_HOUR_MS = 60 * 60 * 1000;
@@ -44,10 +45,6 @@ type CachedPlanWeekAllocationInputs = Omit<PlanWeekAllocationInputs, "reviewsByD
   reviewsByDateEntries: Array<[string, DailyReview]>;
 };
 
-export function userAllocationCacheTag(userId: string): string {
-  return `user-alloc-context-${userId}`;
-}
-
 function fingerprint(plan: WeeklyPlan, settings: UserSettings): string {
   return createHash("sha256")
     .update(
@@ -58,10 +55,6 @@ function fingerprint(plan: WeeklyPlan, settings: UserSettings): string {
     )
     .digest("hex")
     .slice(0, 32);
-}
-
-export function invalidateUserAllocationCache(userId: string): void {
-  revalidateTag(userAllocationCacheTag(userId));
 }
 
 export async function getCachedPlanWeekAllocationInputs(options: {
@@ -119,3 +112,8 @@ export async function getCachedPlanWeekAllocationInputs(options: {
 
   return result;
 }
+
+export {
+  invalidateUserAllocationCache,
+  userAllocationCacheTag
+} from "./allocation-cache-invalidation";

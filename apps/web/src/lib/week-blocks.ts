@@ -67,6 +67,32 @@ function loggedActualSleepIntervalsFromBusy(calendarBusy: readonly BusyEvent[]):
   return mergeIntervals(raw);
 }
 
+/**
+ * True for synthetic travel legs we emit (`computeTravelBlocks` / gym pads).
+ * Used so internal non-drive busy (e.g. day-sheet logs, future proposed-as-busy)
+ * never displaces modelled sleep — see ALLOCATOR_BUSINESS_RULES.md.
+ */
+function internalTravelDriveLeg(ev: BusyEvent, driveTag: string): boolean {
+  if (ev.source !== "internal") return false;
+  const tag = (driveTag || "[Drive]").trim() || "[Drive]";
+  const title = (ev.title || "").trim();
+  if (
+    title.startsWith(`${tag} →`) ||
+    title.startsWith(`${tag} To:`) ||
+    title.includes(" → ")
+  ) {
+    return true;
+  }
+  if (
+    title.startsWith(`${tag} ←`) ||
+    title === `${tag} Home` ||
+    title.startsWith(`${tag} Home`)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function nightCoversLoggedActualSleep(
   nightStartMs: number,
   nightEndMs: number,
@@ -459,6 +485,10 @@ export interface SleepOverride {
  *      minutes extend busy `endMs` for sleep gap search so sleep cannot start
  *      until after shutdown following calendar events (drive-home already
  *      stacks `bufferAfterDriveHome` + shutdown in one bound).
+ *   8. Internal busy that is **not** a travel/drive leg (`driveEventTag`, same
+ *      shapes as {@link internalTravelDriveLeg}) is omitted from sleep collision
+ *      so scheduler-owned rows cannot move modelled sleep; Google/ICS/Microsoft
+ *      busy still can.
  */
 export function computeSleepBlocks(
   weekStartMs: number,
@@ -467,11 +497,13 @@ export function computeSleepBlocks(
   timezone: string,
   nowMs: number = Date.now(),
   overrides: ReadonlyMap<number, SleepOverride> = new Map(),
-  timemap?: TimemapSettings
+  timemap?: TimemapSettings,
+  driveEventTag: string = "[Drive]"
 ): SystemBlock[] {
   void nowMs;
   const out: SystemBlock[] = [];
   const ignoreTitles = (sleep.ignoreEventTitles ?? []).map((t) => t.toLowerCase());
+  const tag = (driveEventTag || "[Drive]").trim() || "[Drive]";
 
   // Pre-bucket travel blocks for fast per-day lookup.
   const drivePre: BusyEvent[] = [];
@@ -481,15 +513,15 @@ export function computeSleepBlocks(
     if (!isInternal) continue;
     const title = (ev.title || "").trim();
     if (
-      title.startsWith("[Drive] →") ||
-      title.startsWith("[Drive] To:") ||
+      title.startsWith(`${tag} →`) ||
+      title.startsWith(`${tag} To:`) ||
       title.includes(" → ") // drive-direct also pulls wake earlier
     ) {
       drivePre.push(ev);
     } else if (
-      title.startsWith("[Drive] ←") ||
-      title === "[Drive] Home" ||
-      title.startsWith("[Drive] Home")
+      title.startsWith(`${tag} ←`) ||
+      title === `${tag} Home` ||
+      title.startsWith(`${tag} Home`)
     ) {
       driveHome.push(ev);
     }
@@ -543,6 +575,9 @@ export function computeSleepBlocks(
       if (ev.endMs <= nightStartMs || ev.startMs >= nightEndMs) continue;
       const titleLower = (ev.title || "").toLowerCase();
       if (ignoreTitles.includes(titleLower)) continue;
+      if (ev.source === "internal" && !internalTravelDriveLeg(ev, tag)) {
+        continue;
+      }
       // Shutdown precedes sleep; internal travel blocks are shaped in the
       // drive-home pass below (home buffer + optional shutdown).
       const padShutdown = shutdownPadMs > 0 && ev.source !== "internal";
@@ -846,6 +881,7 @@ export async function computeSystemBlocks(
 ): Promise<SystemBlock[]> {
   const travelBlocks = await computeTravelBlocks(busy, travel, gym, resolver);
   const busyWithTravel = [...busy, ...travelBlocks];
+  const driveTag = (travel.driveEventTag || "[Drive]").trim() || "[Drive]";
   const sleepBlocks = computeSleepBlocks(
     weekStartMs,
     busyWithTravel,
@@ -853,7 +889,8 @@ export async function computeSystemBlocks(
     timezone,
     nowMs,
     overrides.sleep,
-    timemap
+    timemap,
+    driveTag
   );
   const routineBlocks = timemap
     ? computeRoutineBlocks(sleepBlocks, timemap, weekStartMs, undefined, overrides.routine)

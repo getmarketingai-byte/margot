@@ -3,7 +3,8 @@
  *
  * Includes Auth.js tables (`users`, `accounts`, `sessions`, `verificationTokens`)
  * plus app domain tables: per-user settings, weekly plans/goals, generated
- * snapshots, ICS feed tokens, calendar source links, jobs lock, and Stripe
+ * snapshots, ICS feed tokens, calendar source links, Google busy cache, weather forecast cache,
+ * sleep/routine derivation cache, jobs lock, and Stripe
  * subscriptions.
  */
 
@@ -126,6 +127,53 @@ export const calendarSnapshots = pgTable("calendar_snapshot", {
   windowEndMs: text("windowEndMs").notNull(),
   events: jsonb("events").notNull()
 });
+
+/** Latest Google Calendar busy snapshot per user (server-side cache for fast reads). */
+export const googleBusyCache = pgTable("google_busy_cache", {
+  userId: text("userId")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow().notNull(),
+  windowStartMs: text("windowStartMs").notNull(),
+  windowEndMs: text("windowEndMs").notNull(),
+  sourcesFingerprint: text("sourcesFingerprint").notNull(),
+  busyEvents: jsonb("busyEvents").notNull(),
+  goalAvailabilityWindows: jsonb("goalAvailabilityWindows").notNull()
+});
+
+/** Open-Meteo + sunrise API payloads keyed by forecast coordinates (server-side cache). */
+export const weatherForecastCache = pgTable("weather_forecast_cache", {
+  userId: text("userId")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow().notNull(),
+  coordsFingerprint: text("coordsFingerprint").notNull(),
+  openMeteoJson: jsonb("openMeteoJson"),
+  openMeteoFetchedAtMs: text("openMeteoFetchedAtMs").notNull(),
+  sunriseByDate: jsonb("sunriseByDate").notNull()
+});
+
+/**
+ * Cached sleep + morning/shutdown routine blocks per ISO week (Monday date).
+ * Invalidated implicitly via inputs fingerprint (calendar busy, travel overlays,
+ * sleep window, routine minutes, overrides).
+ */
+export const systemSleepRoutineCache = pgTable(
+  "system_sleep_routine_cache",
+  {
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    weekStartIso: text("weekStartIso").notNull(),
+    inputsFingerprint: text("inputsFingerprint").notNull(),
+    sleepBlocks: jsonb("sleepBlocks").notNull(),
+    routineBlocks: jsonb("routineBlocks").notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow().notNull()
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.weekStartIso] })
+  })
+);
 
 export const feedTokens = pgTable(
   "feed_token",

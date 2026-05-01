@@ -16,14 +16,15 @@ import {
   goalOverrideSourcesFromPlan,
   schedulingGoalsWithWeeklyRoutines
 } from "@calendar-automations/planner";
-import { fetchGoogleBusy } from "@/lib/google-calendar";
+import { fetchGoogleBusy } from "@/lib/google-busy-cache";
 import { isoCalendarDay, localMondayMidnightMs } from "@/lib/week";
-import { buildSystemBlocks, overridesFromPlan } from "@/lib/system-blocks-server";
-import { computeSystemBlocks, sleepIntervalsForAllocation } from "@/lib/week-blocks";
+import { buildSystemBlocks, computeSystemBlocksWithSleepRoutineCache, overridesFromPlan } from "@/lib/system-blocks-server";
+import { sleepIntervalsForAllocation } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
 import type { GeneratedEvent } from "@calendar-automations/schema";
+import { saveSettings } from "@/lib/settings-store";
 import {
   isoDatesForWeek,
   loadDailyReviewsInRange,
@@ -67,7 +68,7 @@ export interface PlanWeekAllocationInputs {
   busy: BusyEvent[];
   busyNextWeek: BusyEvent[];
   systemBlocks: Awaited<ReturnType<typeof buildSystemBlocks>>;
-  nextWeekSystemBlocks: Awaited<ReturnType<typeof computeSystemBlocks>>;
+  nextWeekSystemBlocks: Awaited<ReturnType<typeof computeSystemBlocksWithSleepRoutineCache>>;
   weatherTimemapEvents: GeneratedEvent[];
   niceWeatherThisWeek: ReturnType<typeof outsideNiceWeatherIntervalsInRange>;
   niceWeatherNextWeek: ReturnType<typeof outsideNiceWeatherIntervalsInRange>;
@@ -118,28 +119,42 @@ export async function loadPlanWeekAllocationInputs(options: {
     (e) => e.endMs > nextWeekStartMs && e.startMs < nextWeekEndMs
   );
 
+  const travelResolver = createLegResolver({
+    travel: settings.travel,
+    cache: settings.travelCache
+  });
+
   const systemBlocks = await buildSystemBlocks({
     userId,
     settings,
     weekStartMs,
     busy,
     overrides: overridesFromPlan(plan),
+    nowMs,
+    travelResolver
+  });
+  const nextWeekSystemBlocks = await computeSystemBlocksWithSleepRoutineCache({
+    userId,
+    weekStartMs: nextWeekStartMs,
+    busy: busyNextWeek,
+    sleep: settings.sleep,
+    travel: settings.travel,
+    gym: settings.gym,
+    timezone: tz,
+    resolver: travelResolver,
+    timemap: settings.timemap,
+    overrides: {},
     nowMs
   });
-  const nextWeekResolver = createLegResolver({
-    travel: settings.travel,
-    cache: settings.travelCache
-  });
-  const nextWeekSystemBlocks = await computeSystemBlocks(
-    nextWeekStartMs,
-    busyNextWeek,
-    settings.sleep,
-    settings.travel,
-    settings.gym,
-    tz,
-    nextWeekResolver,
-    settings.timemap
-  );
+
+  const travelCacheUpdates = travelResolver.takeCacheUpdates();
+  if (travelCacheUpdates) {
+    try {
+      await saveSettings(userId, { ...settings, travelCache: travelCacheUpdates });
+    } catch (err) {
+      console.warn("loadPlanWeekAllocationInputs: travel cache flush failed", err);
+    }
+  }
 
   const sleepBlockMs = sleepIntervalsForAllocation(
     [...systemBlocks, ...nextWeekSystemBlocks],
@@ -183,7 +198,7 @@ export async function loadPlanWeekAllocationInputs(options: {
   const nextWeekAnchor = isoCalendarDay(nextWeekStartMs, tz);
   const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
   const userSchedulingGoalsNoRoutines = filterSchedulingGoals(plan.goals).filter(
-    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+    (g) => g.specialGoalType !== "gym"
   );
 
   const weekStartIso = isoCalendarDay(weekStartMs, tz);

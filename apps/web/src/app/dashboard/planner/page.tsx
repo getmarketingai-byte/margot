@@ -101,7 +101,7 @@ export default async function PlannerHubPage() {
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
   const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
-    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+    (g) => g.specialGoalType !== "gym"
   );
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
   const nowMs = Date.now();

@@ -84,7 +84,7 @@ export default async function PlanPage() {
   const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
   const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
   const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
-    (g) => g.specialGoalType !== "gym" && g.specialGoalType !== "errands"
+    (g) => g.specialGoalType !== "gym"
   );
   const resolvedCatchUpFloors = ctx.catchUpFloors;
   const {
