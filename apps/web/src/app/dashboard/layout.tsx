@@ -20,7 +20,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const billing = await loadBillingState(session.user.id);
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 pb-8 pt-6 sm:max-w-4xl lg:max-w-6xl xl:max-w-7xl">
+    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 pb-8 pt-6 sm:max-w-4xl sm:px-5 lg:max-w-6xl lg:px-6 xl:max-w-7xl 2xl:max-w-[min(100rem,calc(100vw-4rem))] min-[2000px]:max-w-[min(120rem,calc(100vw-5rem))]">
       <header className="mb-4 flex items-center justify-between">
         <Link href="/dashboard/plan" className="text-sm font-semibold tracking-tight">
           Calendar Automations

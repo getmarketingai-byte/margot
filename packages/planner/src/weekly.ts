@@ -31,7 +31,8 @@
  *      default one-way drive as calendar gym legs). That block is scheduled
  *      **before** other goals at the same commitment/floor tier so earlier list
  *      order cannot occupy those drive windows first. Optional
- *      `placementIdealClockTimes` bias gap choice and in-gap start alignment.
+ *      `placementIdealClockTimes` (optionally narrowed by
+ *      `placementIdealClockFilter`) bias gap choice and in-gap start alignment.
  *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
@@ -2169,13 +2170,29 @@ function scoreBatteryPlacement(
   return score;
 }
 
+/** Ideal clock rows that participate in placement nudges after optional filter. */
+function effectivePlacementIdealClockTimes(
+  goal: WeeklyGoal
+): readonly { hour: number; minute: number }[] | undefined {
+  const raw = goal.placementIdealClockTimes;
+  if (!raw?.length) return undefined;
+  const f = goal.placementIdealClockFilter;
+  if (!f) return raw;
+  const boundaryMin = f.hour * 60 + f.minute;
+  const filtered = raw.filter((t) => {
+    const m = t.hour * 60 + t.minute;
+    return f.kind === "after" ? m >= boundaryMin : m < boundaryMin;
+  });
+  return filtered.length > 0 ? filtered : undefined;
+}
+
 function scoreGapForPlacementIdeals(
   gap: Interval,
   goal: WeeklyGoal,
   tz: string,
   blockMinutes: number
 ): number {
-  const ideals = goal.placementIdealClockTimes;
+  const ideals = effectivePlacementIdealClockTimes(goal);
   if (!ideals || ideals.length === 0 || blockMinutes <= 0) return 0;
   const blockMs = blockMinutes * MS_PER_MIN;
   const latestStart = gap.endMs - blockMs;
@@ -2567,7 +2584,7 @@ function placeBlockInGap(
   if (fitMs <= 0) {
     return { startMs: inner.startMs, endMs: inner.startMs };
   }
-  const ideals = goal.placementIdealClockTimes;
+  const ideals = effectivePlacementIdealClockTimes(goal);
   if (ideals && ideals.length > 0) {
     const dk = dateKeyInTz(Math.floor((inner.startMs + inner.endMs) / 2), tz);
     const segs = dk.split("-");

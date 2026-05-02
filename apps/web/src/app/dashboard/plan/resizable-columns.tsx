@@ -4,8 +4,8 @@ import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useStat
 
 const STORAGE_KEY = "dashboard.plan.split.leftPercent";
 const DEFAULT_LEFT_PERCENT = 60;
-const MIN_LEFT_PERCENT = 30;
-const MAX_LEFT_PERCENT = 75;
+const MIN_LEFT_PERCENT = 26;
+const MAX_LEFT_PERCENT = 72;
 
 function clampPercent(v: number): number {
   return Math.min(MAX_LEFT_PERCENT, Math.max(MIN_LEFT_PERCENT, v));

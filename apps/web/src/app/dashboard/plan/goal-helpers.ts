@@ -12,6 +12,7 @@ import type {
   EnergyMode,
   EnergyPolarity,
   GoalGroup,
+  PlacementIdealClockFilter,
   PpfPillarKey,
   SpecialGoalType,
   WeeklyGoal,
@@ -19,6 +20,14 @@ import type {
 } from "@calendar-automations/schema";
 import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
 import { computePass2AllocMinutesFromShareOfWeek } from "@calendar-automations/planner/weekly";
+
+function formatPlacementIdealClockFilterSuffix(
+  filter: PlacementIdealClockFilter | undefined
+): string {
+  if (!filter) return "";
+  const t = `${filter.hour}:${String(filter.minute).padStart(2, "0")}`;
+  return filter.kind === "after" ? ` (after ${t})` : ` (before ${t})`;
+}
 
 export type ChipKind =
   | "min-week"
@@ -176,12 +185,13 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
       (t) => `${t.hour}:${String(t.minute).padStart(2, "0")}`
     );
     const shown = labels.slice(0, 3).join(", ");
+    const suf = formatPlacementIdealClockFilterSuffix(goal.placementIdealClockFilter);
     chips.push({
       key: "ideal-times",
       label:
         labels.length > 3
-          ? `Ideal ~${shown}…`
-          : `Ideal ${shown}`
+          ? `Ideal ~${shown}…${suf}`
+          : `Ideal ${shown}${suf}`
     });
   }
   if (goal.energyMode && goal.energyMode !== "neutral") {
@@ -415,8 +425,9 @@ function aggregateSchedulingPartsForGoalGroup(grp: GoalGroup): string[] {
       (t) => `${t.hour}:${String(t.minute).padStart(2, "0")}`
     );
     const shown = labels.slice(0, 3).join(", ");
+    const suf = formatPlacementIdealClockFilterSuffix(grp.placementIdealClockFilter);
     parts.push(
-      labels.length > 3 ? `∑ Ideal ~${shown}…` : `∑ Ideal ${shown}`
+      labels.length > 3 ? `∑ Ideal ~${shown}…${suf}` : `∑ Ideal ${shown}${suf}`
     );
   }
   return parts;

@@ -8,7 +8,9 @@ import { useRouter } from "next/navigation";
 import {
   ConstraintCard,
   IdealClockTimesField,
+  IdealPlacementClockRelationField,
   normaliseIdealClockTimes,
+  normalisePlacementIdealClockFilter,
   SessionsPerWeekField,
   WeekdayToggleGrid
 } from "@/components/scheduling-constraints";
@@ -382,11 +384,23 @@ function GroupConstraintEditors({
           Place members only in outside / forecast windows (same as goals).
         </label>
       </ConstraintCard>
-      <ConstraintCard label="Ideal clock times" className="sm:col-span-2" onRemove={() => onPatch({ placementIdealClockTimes: undefined })}>
-        <IdealClockTimesField
-          value={normaliseIdealClockTimes(group.placementIdealClockTimes, { hour: 12, minute: 0 })}
-          onChange={(placementIdealClockTimes) => onPatch({ placementIdealClockTimes })}
-        />
+      <ConstraintCard
+        label="Ideal clock times"
+        className="sm:col-span-2"
+        onRemove={() =>
+          onPatch({ placementIdealClockTimes: undefined, placementIdealClockFilter: undefined })
+        }
+      >
+        <div className="flex flex-col gap-2">
+          <IdealClockTimesField
+            value={normaliseIdealClockTimes(group.placementIdealClockTimes, { hour: 12, minute: 0 })}
+            onChange={(placementIdealClockTimes) => onPatch({ placementIdealClockTimes })}
+          />
+          <IdealPlacementClockRelationField
+            value={normalisePlacementIdealClockFilter(group.placementIdealClockFilter)}
+            onChange={(placementIdealClockFilter) => onPatch({ placementIdealClockFilter })}
+          />
+        </div>
       </ConstraintCard>
     </div>
   );

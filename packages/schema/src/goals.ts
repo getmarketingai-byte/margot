@@ -66,6 +66,17 @@ export const dayOfWeek = z.enum([
 ]);
 export type DayOfWeek = z.infer<typeof dayOfWeek>;
 
+/**
+ * When set together with `placementIdealClockTimes`, only ideal times on the matching
+ * side of this local wall clock participate in placement nudges.
+ */
+export const placementIdealClockFilterSchema = z.object({
+  kind: z.enum(["after", "before"]),
+  hour: z.number().int().min(0).max(23),
+  minute: z.number().int().min(0).max(59)
+});
+export type PlacementIdealClockFilter = z.infer<typeof placementIdealClockFilterSchema>;
+
 export const specialGoalType = z.enum([
   "morning-routine",
   "shutdown-routine",
@@ -171,6 +182,11 @@ export const weeklyGoalSchema = z.object({
     .max(8)
     .optional(),
   /**
+   * Optional filter: only ideal clock rows matching `kind` relative to the boundary
+   * are used for gap scoring and in-gap start alignment (weak signal).
+   */
+  placementIdealClockFilter: placementIdealClockFilterSchema.optional(),
+  /**
    * Optional semantic type used by the UI for routine presets that map to
    * existing timemap/sleep/travel patterns.
    */
@@ -238,6 +254,7 @@ export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalSchema.pick({
   earliestHour: true,
   latestHour: true,
   placementIdealClockTimes: true,
+  placementIdealClockFilter: true,
   allocationSharePercent: true,
   scheduleInNiceWeather: true
 });

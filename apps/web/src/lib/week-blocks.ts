@@ -45,6 +45,45 @@ const MINUTE_MS = 60 * 1000;
 /** Logged sleep rows must overlap the night window by at least this much to suppress modeled sleep. */
 const ACTUAL_SLEEP_NIGHT_OVERLAP_MS = 30 * MINUTE_MS;
 
+/** Matches `computeSleepBlocks` / fingerprinting — always trim so titles from {@link computeTravelBlocks} align. */
+function normaliseDriveEventTag(raw?: string | null): string {
+  return (raw ?? "[Drive]").trim() || "[Drive]";
+}
+
+/**
+ * Outbound drive leg titles. `includeDirect` is for scheduler-emitted blocks only
+ * (`[Drive] <A> → <B>`) — do not use for external calendar rows (avoid false
+ * positives on arbitrary "X → Y" summaries).
+ */
+function isOutboundDriveLegTitle(
+  rawTitle: string,
+  tag: string,
+  mode: "strict" | "includeDirect"
+): boolean {
+  const t = rawTitle.trim();
+  if (
+    t.startsWith(`${tag} →`) ||
+    t.startsWith(`${tag} To:`) ||
+    t.startsWith(`${tag} ->`)
+  ) {
+    return true;
+  }
+  if (mode === "includeDirect" && t.startsWith(`${tag} `) && t.includes(" → ")) {
+    return true;
+  }
+  return false;
+}
+
+function isInboundDriveLegTitle(rawTitle: string, tag: string): boolean {
+  const t = rawTitle.trim();
+  return (
+    t.startsWith(`${tag} ←`) ||
+    t.startsWith(`${tag} <-`) ||
+    t === `${tag} Home` ||
+    t.startsWith(`${tag} Home`)
+  );
+}
+
 /**
  * Calendar rows that log real sleep (e.g. `[Sleep][Actual]` or `[Sleep] [Actual]`) — busy only.
  * Case-insensitive; tolerates whitespace between tags (collapsed check + substring fallback).
@@ -74,23 +113,11 @@ function loggedActualSleepIntervalsFromBusy(calendarBusy: readonly BusyEvent[]):
  */
 function internalTravelDriveLeg(ev: BusyEvent, driveTag: string): boolean {
   if (ev.source !== "internal") return false;
-  const tag = (driveTag || "[Drive]").trim() || "[Drive]";
+  const tag = normaliseDriveEventTag(driveTag);
   const title = (ev.title || "").trim();
-  if (
-    title.startsWith(`${tag} →`) ||
-    title.startsWith(`${tag} To:`) ||
-    title.includes(" → ")
-  ) {
-    return true;
-  }
-  if (
-    title.startsWith(`${tag} ←`) ||
-    title === `${tag} Home` ||
-    title.startsWith(`${tag} Home`)
-  ) {
-    return true;
-  }
-  return false;
+  return (
+    isOutboundDriveLegTitle(title, tag, "includeDirect") || isInboundDriveLegTitle(title, tag)
+  );
 }
 
 function nightCoversLoggedActualSleep(
@@ -169,7 +196,7 @@ export async function computeTravelBlocks(
 ): Promise<SystemBlock[]> {
   const fallbackMs = travel.fallbackDurationMinutes * MINUTE_MS;
   if (fallbackMs <= 0) return [];
-  const tag = travel.driveEventTag || "[Drive]";
+  const tag = normaliseDriveEventTag(travel.driveEventTag);
   const arriveBufferMs = Math.max(0, travel.arriveMinutesBefore) * MINUTE_MS;
   const minHomeMs = travel.minHomeMinutes * MINUTE_MS;
   const home = travel.homeAddress?.trim() || "";
@@ -505,26 +532,22 @@ export function computeSleepBlocks(
   void nowMs;
   const out: SystemBlock[] = [];
   const ignoreTitles = (sleep.ignoreEventTitles ?? []).map((t) => t.toLowerCase());
-  const tag = (driveEventTag || "[Drive]").trim() || "[Drive]";
+  const tag = normaliseDriveEventTag(driveEventTag);
 
   // Pre-bucket travel blocks for fast per-day lookup.
   const drivePre: BusyEvent[] = [];
   const driveHome: BusyEvent[] = [];
   for (const ev of busy) {
-    const isInternal = ev.source === "internal";
-    if (!isInternal) continue;
     const title = (ev.title || "").trim();
-    if (
-      title.startsWith(`${tag} →`) ||
-      title.startsWith(`${tag} To:`) ||
-      title.includes(" → ") // drive-direct also pulls wake earlier
-    ) {
+    const outbound =
+      ev.source === "internal"
+        ? isOutboundDriveLegTitle(title, tag, "includeDirect")
+        : isOutboundDriveLegTitle(title, tag, "strict");
+    if (outbound) {
       drivePre.push(ev);
-    } else if (
-      title.startsWith(`${tag} ←`) ||
-      title === `${tag} Home` ||
-      title.startsWith(`${tag} Home`)
-    ) {
+      continue;
+    }
+    if (isInboundDriveLegTitle(title, tag)) {
       driveHome.push(ev);
     }
   }
@@ -789,7 +812,7 @@ export function gymGoalTravelBlocksFromProposed(
   travel: TravelSettings,
   gym: GymSettings
 ): SystemBlock[] {
-  const tag = travel.driveEventTag || "[Drive]";
+  const tag = normaliseDriveEventTag(travel.driveEventTag);
   const goalById = new Map(goals.map((g) => [g.id, g] as const));
   const out: SystemBlock[] = [];
   for (const b of blocks) {
@@ -885,7 +908,7 @@ export async function computeSystemBlocks(
 ): Promise<SystemBlock[]> {
   const travelBlocks = await computeTravelBlocks(busy, travel, gym, resolver);
   const busyWithTravel = [...busy, ...travelBlocks];
-  const driveTag = (travel.driveEventTag || "[Drive]").trim() || "[Drive]";
+  const driveTag = normaliseDriveEventTag(travel.driveEventTag);
   const sleepBlocks = computeSleepBlocks(
     weekStartMs,
     busyWithTravel,

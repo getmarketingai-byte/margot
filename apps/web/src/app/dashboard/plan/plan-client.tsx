@@ -31,7 +31,9 @@ import { addGoal, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } f
 import {
   ConstraintCard,
   IdealClockTimesField,
+  IdealPlacementClockRelationField,
   normaliseIdealClockTimes,
+  normalisePlacementIdealClockFilter,
   SessionsPerWeekField,
   WeekdayToggleGrid
 } from "@/components/scheduling-constraints";
@@ -1081,6 +1083,10 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.placementIdealClockTimes !== undefined && goal.placementIdealClockTimes.length > 0) {
     draft.placementIdealClockTimes = [...goal.placementIdealClockTimes];
   }
+  if (goal.placementIdealClockFilter !== undefined) {
+    const nf = normalisePlacementIdealClockFilter(goal.placementIdealClockFilter);
+    if (nf) draft.placementIdealClockFilter = nf;
+  }
   return draft;
 }
 
@@ -1195,7 +1201,10 @@ function OptionsEditor({
       initialise: () => ({
         placementIdealClockTimes: normaliseIdealClockTimes(undefined, { hour: 12, minute: 0 })
       }),
-      clear: () => ({ placementIdealClockTimes: undefined })
+      clear: () => ({
+        placementIdealClockTimes: undefined,
+        placementIdealClockFilter: undefined
+      })
     }
   ];
 
@@ -1435,6 +1444,10 @@ function ConstraintBody({
           <IdealClockTimesField
             value={clocks}
             onChange={(placementIdealClockTimes) => update({ placementIdealClockTimes })}
+          />
+          <IdealPlacementClockRelationField
+            value={normalisePlacementIdealClockFilter(draft.placementIdealClockFilter)}
+            onChange={(placementIdealClockFilter) => update({ placementIdealClockFilter })}
           />
           <p className="text-[11px] text-ink-400">
             Nudges gap choice and tries to start blocks at these local times when the gap allows

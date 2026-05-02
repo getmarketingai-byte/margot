@@ -129,6 +129,23 @@ describe("WeeklyGoal energy classification fields", () => {
     expect(norm.maxMinutesPerWeek).toBeUndefined();
     expect(norm.maxMinutesPerDay).toBe(480);
   });
+
+  it("accepts placementIdealClockFilter with ideal clock times", () => {
+    const goal = weeklyGoalSchema.parse({
+      id: "g1",
+      title: "Run",
+      placementIdealClockTimes: [
+        { hour: 6, minute: 0 },
+        { hour: 18, minute: 0 }
+      ],
+      placementIdealClockFilter: { kind: "after", hour: 12, minute: 0 }
+    });
+    expect(goal.placementIdealClockFilter).toEqual({
+      kind: "after",
+      hour: 12,
+      minute: 0
+    });
+  });
   it("derives min/week from min/day × 7 when cadence is unconstrained", () => {
     const norm = normaliseGoalTime(
       weeklyGoalSchema.parse({

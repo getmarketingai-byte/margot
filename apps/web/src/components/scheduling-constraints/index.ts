@@ -1,7 +1,9 @@
 export { ConstraintCard } from "./constraint-card";
 export {
   IdealClockTimesField,
+  IdealPlacementClockRelationField,
   normaliseIdealClockTimes,
+  normalisePlacementIdealClockFilter,
   type IdealClockTime
 } from "./ideal-clock-times-field";
 export { SessionsPerWeekField } from "./sessions-per-week-field";

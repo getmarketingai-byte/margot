@@ -117,7 +117,7 @@ describe("computeSleepBlocks + timemap routines", () => {
       startMs: tue0730,
       endMs: tue0815,
       busy: true,
-      source: "internal"
+      source: "google"
     };
     const sleep: SleepSettings = {
       ...baseSleep,
