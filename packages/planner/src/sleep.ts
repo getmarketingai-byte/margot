@@ -17,11 +17,13 @@
  *      the night across them. If even that fails we fall back to the largest
  *      remaining gap and flag it as `underMinimum` so the caller can warn.
  *
- * The legacy code also refuses to "sleep in" off a late drive home — that
- * concern is handled by the caller (`computeSleepBlocks`), which extends
- * inbound drive end times by shutdown routine minutes **or** (when shutdown
- * is off) `bufferAfterDriveHomeMinutes`, not both. By the time we see the
- * busy stream that wind-down already shows up as occupied.
+ * When timemap **shutdown** / **morning** routines are enabled, the caller
+ * passes `reserveBeforeSleepMs` / `reserveAfterSleepMs` so the placer treats
+ * `[sleepStart − shutdown, sleepEnd + morning]` as busy-free against merged
+ * calendar busy (routines sit between commitments and sleep / after wake).
+ * Inbound drive home still extends by `bufferAfterDriveHomeMinutes` when
+ * shutdown is off; when shutdown is on, that wind-down is the same strip as
+ * `reserveBeforeSleepMs` so the drive leg is not double-extended.
  *
  * **Product rule (see ALLOCATOR_BUSINESS_RULES.md):** among scheduler-owned
  * busy, only travel/drive intervals (`isTravelLikeConflictTitle`) may displace
@@ -152,6 +154,16 @@ export interface PlaceSleepOptions {
    * morning/shutdown routines, so dragging sleep automatically moves them.
    */
   override?: { startMs: number; endMs: number };
+  /**
+   * Timemap shutdown routine: require merged busy not to overlap
+   * `[sleepStart − reserveBeforeSleepMs, sleepEnd + reserveAfterSleepMs]`.
+   * Busy collection is clipped to `[windowStartMs − before, windowEndMs + after]`
+   * so evening events before the nominal sleep window can still block the
+   * shutdown strip.
+   */
+  reserveBeforeSleepMs?: number;
+  /** Timemap morning routine: free time required after `sleepEnd` before busy. */
+  reserveAfterSleepMs?: number;
 }
 
 /**
@@ -192,7 +204,11 @@ export function placeSleepBlock(
     }
   }
 
-  const merged = collectBusyIntervals(busy, windowStartMs, windowEndMs);
+  const preMs = Math.max(0, options.reserveBeforeSleepMs ?? 0);
+  const postMs = Math.max(0, options.reserveAfterSleepMs ?? 0);
+  const clipStart = windowStartMs - preMs;
+  const clipEnd = windowEndMs + postMs;
+  const merged = collectBusyIntervals(busy, clipStart, clipEnd);
   const desiredMs = sleep.durationHours * MS_PER_HOUR;
   const minMs = sleep.minBlockHours * MS_PER_HOUR;
 
@@ -208,7 +224,10 @@ export function placeSleepBlock(
     targetOverlapTraceTitle
   } = targetOverlapMeta(busy, targetStart, targetEnd);
 
-  if (targetEnd - targetStart >= minMs && !overlapsAny(targetStart, targetEnd, merged)) {
+  if (
+    targetEnd - targetStart >= minMs &&
+    !overlapsPaddedSleep(targetStart, targetEnd, preMs, postMs, merged)
+  ) {
     return [
       {
         startMs: targetStart,
@@ -225,17 +244,24 @@ export function placeSleepBlock(
 
   // 2. Search window: prefer the latest gap that fits — that keeps sleep
   //    near the target wake when the conflict was earlier in the night.
-  const gaps = freeGaps(windowStartMs, windowEndMs, merged);
+  const gaps = freeGaps(clipStart, clipEnd, merged);
   if (gaps.length === 0) return [];
 
   for (let i = gaps.length - 1; i >= 0; i--) {
     const gap = gaps[i]!;
-    if (gap.endMs - gap.startMs >= desiredMs) {
-      const start = Math.max(gap.startMs, gap.endMs - desiredMs);
+    const placed = placeSleepInGap(
+      gap,
+      desiredMs,
+      preMs,
+      postMs,
+      windowStartMs,
+      windowEndMs
+    );
+    if (placed) {
       return [
         {
-          startMs: start,
-          endMs: gap.endMs,
+          startMs: placed.startMs,
+          endMs: placed.endMs,
           split: false,
           underMinimum: false,
           placement: "gap",
@@ -248,6 +274,8 @@ export function placeSleepBlock(
   }
 
   // 3. Split fallback: two largest gaps meeting minBlockHours.
+  //    Reserves are not applied here (split halves do not each carry full
+  //    routine wrapping in the UI); keeps behaviour stable for rare splits.
   const eligible = gaps.filter((g) => g.endMs - g.startMs >= minMs);
   if (eligible.length >= 2) {
     eligible.sort((a, b) => b.endMs - b.startMs - (a.endMs - a.startMs));
@@ -289,4 +317,42 @@ function overlapsAny(startMs: number, endMs: number, busy: readonly Interval[]):
     if (b.startMs < endMs && b.endMs > startMs) return true;
   }
   return false;
+}
+
+function overlapsPaddedSleep(
+  sleepStartMs: number,
+  sleepEndMs: number,
+  preMs: number,
+  postMs: number,
+  busy: readonly Interval[]
+): boolean {
+  return overlapsAny(sleepStartMs - preMs, sleepEndMs + postMs, busy);
+}
+
+/**
+ * Right-aligns sleep in a free gap while reserving `preMs` before sleep and
+ * `postMs` after (shutdown / morning). Returns null if the gap cannot fit.
+ */
+function placeSleepInGap(
+  gap: Interval,
+  desiredMs: number,
+  preMs: number,
+  postMs: number,
+  windowStartMs: number,
+  windowEndMs: number
+): { startMs: number; endMs: number } | null {
+  const need = preMs + desiredMs + postMs;
+  if (gap.endMs - gap.startMs < need) return null;
+
+  let endMs = Math.min(gap.endMs - postMs, windowEndMs);
+  let startMs = endMs - desiredMs;
+
+  if (startMs < Math.max(gap.startMs + preMs, windowStartMs)) {
+    startMs = Math.max(gap.startMs + preMs, windowStartMs);
+    endMs = startMs + desiredMs;
+    if (endMs > Math.min(gap.endMs - postMs, windowEndMs)) return null;
+  }
+
+  if (startMs - preMs < gap.startMs || endMs + postMs > gap.endMs) return null;
+  return { startMs, endMs };
 }

@@ -502,9 +502,11 @@ export interface SleepOverride {
  *      drive starts (no gap for `bufferBeforeLeave` between routine and leave).
  *      Otherwise use `looseWake`. Drives that start *after* ideal wake still
  *      participate (each leg can only move wake earlier).
- *   2. Inbound `[Drive] ←` / Home legs: extend `endMs` by wind-down before sleep
- *      may start — **either** shutdown routine minutes (when enabled) **or**
- *      `bufferAfterDriveHomeMinutes` when shutdown is off (same role, not both).
+ *   2. Inbound `[Drive] ←` / Home legs: always enter the sleep busy stream; when
+ *      shutdown routine is off, extend each leg's `endMs` by
+ *      `bufferAfterDriveHomeMinutes`. When shutdown is on, pre-sleep wind-down is
+ *      enforced only via `placeSleepBlock` `reserveBeforeSleepMs` (not also on
+ *      the leg, to avoid double-counting).
  *   3. Events whose title matches `sleep.ignoreEventTitles` (e.g. "Gym")
  *      do not block sleep.
  *   4. Sleep is still placed for every night in the week window even when that
@@ -519,9 +521,11 @@ export interface SleepOverride {
  *      omitted — the calendar interval alone reserves time (no duplicate stack).
  *   7. When `timemap` is passed: enabled **morning routine** minutes are
  *      subtracted from outbound drive leave times when computing the wake
- *      target (sleep ends, then morning, then drive). Enabled **shutdown**
- *      minutes extend busy `endMs` for sleep gap search after calendar events
- *      and replace `bufferAfterDriveHome` on inbound drive legs (no double stack).
+ *      target (sleep ends, then morning, then drive) and are passed as
+ *      `reserveAfterSleepMs` when placing sleep. Enabled **shutdown** is
+ *      `reserveBeforeSleepMs` (wider busy clip in the planner so time before the
+ *      nominal sleep window can block the shutdown strip). Inbound drive legs do
+ *      not add the same minutes again when shutdown is on.
  *   8. Internal busy that is **not** a travel/drive leg (`driveEventTag`, same
  *      shapes as {@link internalTravelDriveLeg}) is omitted from sleep collision
  *      so scheduler-owned rows cannot move modelled sleep; Google/ICS/Microsoft
@@ -567,8 +571,12 @@ export function computeSleepBlocks(
     timemap?.morningRoutine.enabled === true ? timemap.morningRoutine.minutes * MINUTE_MS : 0;
   const shutdownPadMs =
     timemap?.shutdownRoutine.enabled === true ? timemap.shutdownRoutine.minutes * MINUTE_MS : 0;
-  /** After `[Drive] ←`: shutdown routine *or* legacy home buffer, never both. */
-  const driveHomeWindDownMs = shutdownPadMs > 0 ? shutdownPadMs : homeBufferMs;
+  /**
+   * After `[Drive] ←` / Home: extend busy by `bufferAfterDriveHomeMinutes` when
+   * shutdown routine is off. When shutdown is on, the same wind-down is enforced
+   * via `placeSleepBlock` `reserveBeforeSleepMs` (avoid double-counting).
+   */
+  const driveHomeWindDownMs = shutdownPadMs > 0 ? 0 : homeBufferMs;
 
   function appendSleepForNight(
     nightIndexLabel: string,
@@ -621,16 +629,8 @@ export function computeSleepBlocks(
       if (ev.source === "internal" && !internalTravelDriveLeg(ev, tag)) {
         continue;
       }
-      // Shutdown precedes sleep on calendar rows; inbound drive legs use
-      // `driveHomeWindDownMs` below (shutdown replaces home buffer when on).
-      const padShutdown = shutdownPadMs > 0 && ev.source !== "internal";
-      sleepBusy.push(
-        padShutdown ? { ...ev, endMs: ev.endMs + shutdownPadMs } : ev
-      );
+      sleepBusy.push(ev);
     }
-
-    const durationMs = sleep.durationHours * HOUR_MS;
-    const preliminaryTargetStart = Math.max(nightStartMs, targetEndMs - durationMs);
 
     for (const drive of driveHome) {
       if (drive.endMs <= nightStartMs || drive.startMs >= nightEndMs) continue;
@@ -639,16 +639,14 @@ export function computeSleepBlocks(
         roundMin,
         timezone
       );
-      // Evening `[Drive] ←` legs that finish (including wind-down) before the
-      // modeled sleep block would start cannot overlap the target window — do
-      // not let them displace sleep or appear as spurious "conflicts" Thu/Fri.
-      if (extendedEnd <= preliminaryTargetStart) continue;
       sleepBusy.push({ ...drive, endMs: extendedEnd });
     }
 
     const placed = placeSleepBlock(nightStartMs, nightEndMs, sleepBusy, sleep, {
       targetEndMs,
-      override: override ? { startMs: override.startMs, endMs: override.endMs } : undefined
+      override: override ? { startMs: override.startMs, endMs: override.endMs } : undefined,
+      reserveBeforeSleepMs: shutdownPadMs > 0 ? shutdownPadMs : undefined,
+      reserveAfterSleepMs: morningPadMs > 0 ? morningPadMs : undefined
     });
     const primaryIdx = placed.findIndex((p) => !p.split);
     for (let pi = 0; pi < placed.length; pi++) {
