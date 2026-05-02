@@ -27,6 +27,7 @@ import {
 } from "@/lib/perfect-week-this-week-allocation";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
+import { inngest } from "@/lib/inngest";
 import { refreshPlannedSnapshotsForCurrentWeek } from "@/lib/refresh-review-planned-snapshots";
 import { requestUserRegenerate } from "@/lib/request-user-regenerate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
@@ -40,6 +41,22 @@ function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): 
 function afterPlanMutation(userId: string, options?: { includeReviews?: boolean }): void {
   invalidateUserAllocationCache(userId);
   revalidatePlanningRoutes(options);
+}
+
+/**
+ * Queue a full refresh: live Google Calendar busy, fresh Open-Meteo / sunrise
+ * data, recomputed sleep and routines, cleared travel-duration cache (geocodes
+ * kept), then ICS snapshot regeneration — same ordered pipeline as a manual
+ * “catch everything up” without racing separate jobs.
+ */
+export async function requestFullScheduleRefresh(): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  await inngest.send({
+    name: "user/schedule.full-refresh-requested",
+    data: { userId: session.user.id }
+  });
+  revalidatePlanningRoutes({ includeReviews: true });
 }
 
 /** Persist Personal Perfect Week profile (guided + advanced rules). */

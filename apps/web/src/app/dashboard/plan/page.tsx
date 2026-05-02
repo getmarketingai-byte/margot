@@ -27,6 +27,7 @@ import { goalIdsReferencedInDaySheetSlotsFromReviews } from "@/lib/purge-goal-fr
 import { loadAllDailyReviewsForUser } from "@/lib/review-store";
 import { processExpiredWeeklyPlanTrash } from "@/lib/weekly-plan-trash";
 import { updateWeeklyIntent } from "./actions";
+import { ForceScheduleRefreshButton } from "./force-schedule-refresh-button";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
 import { WeeklyIntentCard } from "./weekly-intent-card";
@@ -286,16 +287,19 @@ export default async function PlanPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <header>
-        <h1 className="text-2xl font-semibold">My Perfect Week</h1>
-        <p className="text-sm text-ink-600 dark:text-ink-200">
-          List the things you want each week. Type a goal and press Enter — we&apos;ll find the
-          time.           Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
-          <Link className="underline" href="/dashboard/planner#framework-methods">
-            Planner
-          </Link>{" "}
-          with your frameworks.
-        </p>
+      <header className="flex flex-col gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">My Perfect Week</h1>
+          <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
+            List the things you want each week. Type a goal and press Enter — we&apos;ll find the
+            time. Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
+            <Link className="underline" href="/dashboard/planner#framework-methods">
+              Planner
+            </Link>{" "}
+            with your frameworks.
+          </p>
+        </div>
+        <ForceScheduleRefreshButton />
       </header>
 
       <WeeklyIntentCard initial={plan.weeklyIntent} save={updateWeeklyIntent} />

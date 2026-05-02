@@ -12,6 +12,9 @@ export type Events = {
   "user/google-busy.refresh-requested": {
     data: { userId: string; reason: "cron" };
   };
+  "user/schedule.full-refresh-requested": {
+    data: { userId: string };
+  };
   "user/snapshot.completed": {
     data: { userId: string };
   };
