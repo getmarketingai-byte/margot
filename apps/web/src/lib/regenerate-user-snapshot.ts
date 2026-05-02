@@ -19,6 +19,8 @@ import { loadSettings } from "./settings-store";
 import { filterInvertedTimemapFromProposedBlocks } from "./proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "./merge-orphan-goal-override-blocks";
 import { saveSnapshot } from "./snapshots";
+import { loadBillingState } from "./billing-state-server";
+import { clipIntervalBlocksToHorizon } from "./effective-schedule-horizon";
 import {
   gymGoalTravelBlocksFromProposed,
   sleepIntervalsForAllocation,
@@ -128,35 +130,60 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     return { eventCount: 0 };
   }
 
+  const billing = await loadBillingState(userId);
   const ctx = await getCachedPlanWeekAllocationInputs({
     userId,
     plan,
     settings,
-    nowMs
+    nowMs,
+    billing
   });
 
-  const proposedBlocksRaw = filterInvertedTimemapFromProposedBlocks(
-      mergeOrphanGoalOverrideBlocks(
-      allocateWeek({
-        plan,
-        busy: [...ctx.busy, ...ctx.daySheetGoalBusyThisWeek, ...ctx.systemBlocks],
-        goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
-        niceWeatherWindows: ctx.niceWeatherThisWeek,
-        settings,
-        weekStartMs: ctx.weekStartMs,
-        weekEndMs: ctx.weekEndMs,
-        catchUpFloors: ctx.catchUpFloors,
-        weekAnchorDate: plan.weekStart,
-        goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-        nowMs,
-        sleepIntervals: sleepIntervalsForAllocation(ctx.systemBlocks, ctx.busy)
-      }).blocks,
+  const mergeWindows = ctx.weekSlices.map((s) => ({
+    weekStartMs: s.weekStartMs,
+    weekEndMs: s.weekEndMs
+  }));
+
+  const allocationSlices = ctx.weekSlices.map((slice, idx) =>
+    allocateWeek({
       plan,
-      [{ weekStartMs: ctx.weekStartMs, weekEndMs: ctx.weekEndMs }]
-    ),
+      busy: [...slice.busy, ...slice.daySheetGoalBusy, ...slice.systemBlocks],
+      goalAvailabilityWindows: ctx.busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: slice.niceWeatherWindows,
+      settings,
+      weekStartMs: slice.weekStartMs,
+      weekEndMs: slice.weekEndMs,
+      catchUpFloors:
+        idx === 0
+          ? ctx.catchUpFloors
+          : settings.allocator.catchUpMode === "automated"
+            ? {}
+            : undefined,
+      weekAnchorDate: idx === 0 ? plan.weekStart : slice.weekAnchorDate,
+      goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+      nowMs,
+      sleepIntervals: sleepIntervalsForAllocation(slice.systemBlocks, slice.busy)
+    })
+  );
+
+  let mergedGoalBlocks = mergeOrphanGoalOverrideBlocks(
+    allocationSlices.flatMap((a) => a.blocks),
+    plan,
+    mergeWindows
+  );
+
+  let proposedBlocksRaw = filterInvertedTimemapFromProposedBlocks(
+    mergedGoalBlocks,
     plan,
     settings.calendars.sources
   );
+
+  if (ctx.scheduleHorizon.trialRollingClip) {
+    proposedBlocksRaw = clipIntervalBlocksToHorizon(
+      proposedBlocksRaw,
+      ctx.scheduleHorizon.horizonEndMs
+    );
+  }
 
   const proposedBlocks = coalesceAdjacentWeeklyGoalBlocksForIcs(proposedBlocksRaw);
   const events = proposedBlocks.map((b) => toGeneratedEvent(userId, plan, b));
@@ -167,7 +194,7 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     settings.gym
   );
   const systemEvents = [
-    ...ctx.systemBlocks.map((b) => toGeneratedSystemEvent(userId, b)),
+    ...ctx.weekSlices.flatMap((s) => s.systemBlocks.map((b) => toGeneratedSystemEvent(userId, b))),
     ...gymTravelBlocks.map((b) => toGeneratedSystemEvent(userId, b))
   ];
 

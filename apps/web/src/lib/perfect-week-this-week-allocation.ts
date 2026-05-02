@@ -15,6 +15,7 @@ import { allocateWeek, goalOverrideSourcesFromPlan, type AllocateResult } from "
 import { db, schema } from "@/lib/db";
 import { localMondayIso } from "@/lib/week";
 import { getCachedPlanWeekAllocationInputs } from "@/lib/cached-plan-week-allocation-inputs";
+import { loadBillingState } from "@/lib/billing-state-server";
 import { sleepIntervalsForAllocation } from "@/lib/week-blocks";
 
 async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
@@ -76,11 +77,13 @@ export async function runThisWeekAllocationForPlan(
 } | null> {
   if (!db) return null;
 
+  const billing = await loadBillingState(userId);
   const ctx = await getCachedPlanWeekAllocationInputs({
     userId,
     plan,
     settings,
-    nowMs: Date.now()
+    nowMs: Date.now(),
+    billing
   });
 
   const allocation = allocateWeek({

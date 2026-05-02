@@ -12,6 +12,7 @@ import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overla
 import type { SystemBlock } from "@/lib/week-blocks";
 import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
+import { WEEK_MS } from "@/lib/effective-schedule-horizon";
 import { WeekCalendar } from "../week-calendar";
 
 type CalendarRangeMode = "calendar-week" | "next-7-days";
@@ -86,6 +87,8 @@ function todayOffsetFromWeekStart(weekStartMs: number, timezone: string): number
 
 export function RangeToggleCalendar({
   weekStartMs,
+  calendarWeekStartsMs,
+  previewWeekLabels,
   timezone,
   busy,
   daySheetGoalBusy = [],
@@ -97,6 +100,8 @@ export function RangeToggleCalendar({
   wheelAreas
 }: {
   weekStartMs: number;
+  calendarWeekStartsMs?: readonly number[];
+  previewWeekLabels?: readonly string[];
   timezone: string;
   busy: readonly BusyEvent[];
   daySheetGoalBusy?: readonly BusyEvent[];
@@ -112,6 +117,42 @@ export function RangeToggleCalendar({
   const [mode, setMode] = useState<CalendarRangeMode>("calendar-week");
   const [showWeather, setShowWeather] = useState(true);
   const [invertedVisibility, setInvertedVisibility] = useState<Record<string, boolean>>({});
+  const [previewWeekIdx, setPreviewWeekIdx] = useState(0);
+
+  const weekStarts =
+    calendarWeekStartsMs && calendarWeekStartsMs.length > 0 ? calendarWeekStartsMs : [weekStartMs];
+
+  useEffect(() => {
+    setPreviewWeekIdx(0);
+  }, [calendarWeekStartsMs?.join("|") ?? String(weekStartMs)]);
+
+  const safeWeekIdx = Math.min(previewWeekIdx, Math.max(0, weekStarts.length - 1));
+  const anchorWeekStartMs = weekStarts[safeWeekIdx]!;
+
+  const useRollingStrip = mode === "next-7-days";
+  const calendarAnchorMs = useRollingStrip ? weekStartMs : anchorWeekStartMs;
+  const calendarAnchorEndMs = calendarAnchorMs + WEEK_MS;
+
+  function clipToCalendarAnchor<T extends { startMs: number; endMs: number }>(xs: readonly T[]): T[] {
+    return xs.filter((x) => x.startMs < calendarAnchorEndMs && x.endMs > calendarAnchorMs);
+  }
+
+  const busyShown = useMemo(
+    () => (useRollingStrip ? [...busy] : clipToCalendarAnchor(busy)),
+    [busy, useRollingStrip, calendarAnchorMs, calendarAnchorEndMs]
+  );
+  const daySheetShown = useMemo(
+    () => (useRollingStrip ? [...daySheetGoalBusy] : clipToCalendarAnchor(daySheetGoalBusy)),
+    [daySheetGoalBusy, useRollingStrip, calendarAnchorMs, calendarAnchorEndMs]
+  );
+  const systemShown = useMemo(
+    () => (useRollingStrip ? [...system] : clipToCalendarAnchor(system)),
+    [system, useRollingStrip, calendarAnchorMs, calendarAnchorEndMs]
+  );
+  const proposedShown = useMemo(
+    () => (useRollingStrip ? [...proposed] : clipToCalendarAnchor(proposed)),
+    [proposed, useRollingStrip, calendarAnchorMs, calendarAnchorEndMs]
+  );
 
   const taggableFrameworkRows = useMemo(
     () =>
@@ -158,8 +199,8 @@ export function RangeToggleCalendar({
   }, [proposedSig]);
 
   const displayProposed = useMemo(
-    () => applyProposedOptimisticTimes(proposed, timePatch),
-    [proposed, timePatch]
+    () => applyProposedOptimisticTimes(proposedShown, timePatch),
+    [proposedShown, timePatch]
   );
 
   const handleProposedDragCommit = (updates: Record<string, { startMs: number; endMs: number }>) => {
@@ -240,14 +281,14 @@ export function RangeToggleCalendar({
 
   const visibleSystem = useMemo(
     () =>
-      system.filter((s) => {
+      systemShown.filter((s) => {
         if (s.system === "weather" && !showWeather) return false;
         if (s.system === "inverted-timemap" && s.invertedGoalId) {
           return isInvertedGoalShown(invertedVisibility, s.invertedGoalId);
         }
         return true;
       }),
-    [showWeather, invertedVisibility, system]
+    [showWeather, invertedVisibility, systemShown]
   );
 
   const rollingSpansTwoIsoWeeks = useMemo(
@@ -286,6 +327,37 @@ export function RangeToggleCalendar({
           Next 7 days
         </button>
       </div>
+      {weekStarts.length > 1 && mode === "calendar-week" ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
+          <button
+            type="button"
+            disabled={safeWeekIdx <= 0}
+            onClick={() => setPreviewWeekIdx((i) => Math.max(0, i - 1))}
+            className={`rounded border px-2 py-1 ${
+              safeWeekIdx <= 0
+                ? "cursor-not-allowed border-ink-200 opacity-40 dark:border-ink-600"
+                : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+            }`}
+          >
+            Previous week
+          </button>
+          <span className="min-w-0 flex-1 text-center text-[11px] text-ink-600 dark:text-ink-300">
+            {previewWeekLabels?.[safeWeekIdx] ?? `Week ${safeWeekIdx + 1}`}
+          </span>
+          <button
+            type="button"
+            disabled={safeWeekIdx >= weekStarts.length - 1}
+            onClick={() => setPreviewWeekIdx((i) => Math.min(weekStarts.length - 1, i + 1))}
+            className={`rounded border px-2 py-1 ${
+              safeWeekIdx >= weekStarts.length - 1
+                ? "cursor-not-allowed border-ink-200 opacity-40 dark:border-ink-600"
+                : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+            }`}
+          >
+            Next week
+          </button>
+        </div>
+      ) : null}
       {rollingSpansTwoIsoWeeks ? (
         <p className="px-1 text-[11px] leading-snug text-ink-500 dark:text-ink-400">
           This rolling view can show two ISO weeks at once. Each week is still planned as a full
@@ -295,10 +367,10 @@ export function RangeToggleCalendar({
         </p>
       ) : null}
       <WeekCalendar
-        weekStartMs={weekStartMs}
+        weekStartMs={calendarAnchorMs}
         timezone={timezone}
-        busy={busy}
-        daySheetGoalBusy={daySheetGoalBusy}
+        busy={busyShown}
+        daySheetGoalBusy={daySheetShown}
         system={visibleSystem}
         proposed={displayProposed}
         compact={compact}

@@ -18,6 +18,7 @@ import {
   getCachedPlanWeekAllocationInputs,
   invalidateUserAllocationCache
 } from "@/lib/cached-plan-week-allocation-inputs";
+import { loadBillingState } from "@/lib/billing-state-server";
 import { db, schema } from "@/lib/db";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
@@ -105,7 +106,14 @@ export default async function PlannerHubPage() {
   );
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
   const nowMs = Date.now();
-  const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const billing = await loadBillingState(userId);
+  const ctx = await getCachedPlanWeekAllocationInputs({
+    userId,
+    plan,
+    settings,
+    nowMs,
+    billing
+  });
   const {
     busyFetch,
     weekStartMs,

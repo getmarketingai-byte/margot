@@ -7,6 +7,7 @@ import {
 } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
+import { loadBillingState } from "@/lib/billing-state-server";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { geocodeAddressToCoords } from "@/lib/geocode-address";
 import {
@@ -28,6 +29,17 @@ async function updateBasics(formData: FormData): Promise<void> {
   if (!session?.user?.id) return;
   const userId = session.user.id;
   const settings = await loadSettings(userId);
+  const billing = await loadBillingState(userId);
+  let scheduleHorizonWeeks = settings.calendars.scheduleHorizonWeeks;
+  if (billing.mode === "subscription" || billing.mode === "bypass") {
+    scheduleHorizonWeeks = Math.max(
+      1,
+      Math.min(
+        8,
+        Number(formData.get("scheduleHorizonWeeks") ?? settings.calendars.scheduleHorizonWeeks)
+      )
+    );
+  }
   const idealWake = parseIdealWakeInput(String(formData.get("idealWakeTime") ?? ""), {
     hour: settings.sleep.idealWakeHour,
     minute: settings.sleep.idealWakeMinute
@@ -40,7 +52,8 @@ async function updateBasics(formData: FormData): Promise<void> {
       schedulingWindowDays: Math.max(
         7,
         Math.min(365, Number(formData.get("schedulingWindowDays") ?? settings.calendars.schedulingWindowDays))
-      )
+      ),
+      scheduleHorizonWeeks
     },
     sleep: {
       ...settings.sleep,
@@ -185,6 +198,8 @@ export default async function SettingsPage({
   const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
+  const billing = await loadBillingState(userId);
+  const canPickScheduleHorizonWeeks = billing.mode === "subscription" || billing.mode === "bypass";
   const params = await searchParams;
   const banner = params.e ? SETTINGS_BANNERS[params.e] : undefined;
 
@@ -223,6 +238,36 @@ export default async function SettingsPage({
               defaultValue={settings.calendars.schedulingWindowDays}
               className="field"
             />
+            <span className="text-[11px] font-normal text-ink-400">
+              How far ahead we fetch calendar busy data and weather overlays — separate from planned
+              goal weeks below.
+            </span>
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Weeks of planned goals
+            <select
+              name="scheduleHorizonWeeks"
+              defaultValue={settings.calendars.scheduleHorizonWeeks}
+              disabled={!canPickScheduleHorizonWeeks}
+              className="field disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {[1, 2, 3, 4, 5, 6, 7, 8].map((w) => (
+                <option key={w} value={w}>
+                  {w} {w === 1 ? "week" : "weeks"}
+                </option>
+              ))}
+            </select>
+            {!canPickScheduleHorizonWeeks ? (
+              <span className="text-[11px] font-normal text-ink-400">
+                Trial plans up to 7 days ahead. Subscribe to unlock 1–8 weeks in Perfect Week preview
+                and iCal goal blocks.
+              </span>
+            ) : (
+              <span className="text-[11px] font-normal text-ink-400">
+                How many ISO weeks of proposed goal blocks we compute for My Perfect Week and your
+                feeds (default 2).
+              </span>
+            )}
           </label>
           <label className="flex flex-col gap-1 text-xs">
             Sleep duration

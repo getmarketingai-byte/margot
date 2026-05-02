@@ -10,9 +10,12 @@ import { createHash } from "crypto";
 import { unstable_cache } from "next/cache";
 import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
 
+import type { BillingState } from "@/lib/subscription";
 import type { PlanWeekAllocationInputs } from "./allocation-run-context";
 import { loadPlanWeekAllocationInputs } from "./allocation-run-context";
 import { userAllocationCacheTag } from "./allocation-cache-invalidation";
+import { effectiveScheduleHorizon } from "./effective-schedule-horizon";
+import { localMondayMidnightMs } from "./week";
 
 const ALLOC_CACHE_HOUR_MS = 60 * 60 * 1000;
 
@@ -37,14 +40,22 @@ export async function getCachedPlanWeekAllocationInputs(options: {
   plan: WeeklyPlan;
   settings: UserSettings;
   nowMs: number;
+  billing: BillingState;
 }): Promise<PlanWeekAllocationInputs> {
-  const { userId, plan, settings, nowMs } = options;
+  const { userId, plan, settings, nowMs, billing } = options;
   const fp = fingerprint(plan, settings);
   const hourBucket = Math.floor(nowMs / ALLOC_CACHE_HOUR_MS);
+  const baseMonday = localMondayMidnightMs(settings.timezone, new Date(nowMs));
+  const hzSeg = effectiveScheduleHorizon({
+    billing,
+    storedScheduleHorizonWeeks: settings.calendars.scheduleHorizonWeeks,
+    nowMs,
+    baseWeekStartMs: baseMonday
+  }).cacheKeySegment;
 
   const cached = await unstable_cache(
     async (): Promise<CachedPlanWeekAllocationInputs> => {
-      const inputs = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+      const inputs = await loadPlanWeekAllocationInputs({ userId, plan, settings, nowMs, billing });
       return {
         ...inputs,
         reviewsByDateEntries: [...inputs.reviewsByDate.entries()]
@@ -54,7 +65,7 @@ export async function getCachedPlanWeekAllocationInputs(options: {
     // and any time-dependent system placement. Key must move forward in time or
     // the first request freezes the whole week (stale busy + inflated capacity).
     // Hour bucket limits cache churn while keeping dashboard data fresh.
-    ["plan-week-alloc-inputs-v3", userId, fp, String(hourBucket)],
+    ["plan-week-alloc-inputs-v4", userId, fp, String(hourBucket), hzSeg],
     { tags: [userAllocationCacheTag(userId)] }
   )();
 

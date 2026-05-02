@@ -19,7 +19,7 @@ import {
 import { fetchGoogleBusy } from "@/lib/google-busy-cache";
 import { isoCalendarDay, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, computeSystemBlocksWithSleepRoutineCache, overridesFromPlan } from "@/lib/system-blocks-server";
-import { sleepIntervalsForAllocation } from "@/lib/week-blocks";
+import { sleepIntervalsForAllocation, type SystemBlock } from "@/lib/week-blocks";
 import { createLegResolver } from "@/lib/routing";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
@@ -36,39 +36,47 @@ import {
   computeGoalRollups
 } from "@/lib/review-rollup";
 import { daySheetGoalBusyEvents } from "@/lib/day-sheet-goal-busy";
+import type { BillingState } from "@/lib/subscription";
+import {
+  DAY_MS,
+  WEEK_MS,
+  effectiveScheduleHorizon,
+  type EffectiveScheduleHorizon
+} from "@/lib/effective-schedule-horizon";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Blend logged day-sheet energy (slot-level) into the coarse calendar drain score. */
-function reviewEnergyDrainBump(review: DailyReview | undefined): number {
-  const slots = review?.slots;
-  if (!slots?.length) return 0;
-  let drain = 0;
-  let energise = 0;
-  for (const s of slots) {
-    if (s.energy === "drain") drain++;
-    if (s.energy === "energise") energise++;
-  }
-  if (drain > energise) return 0.06;
-  if (energise > drain) return -0.04;
-  return 0;
+/** Per ISO week inputs aligned with {@link loadPlanWeekAllocationInputs}. */
+export interface PlanWeekSlice {
+  weekIndex: number;
+  weekStartMs: number;
+  weekEndMs: number;
+  weekDates: string[];
+  weekAnchorDate: string;
+  busy: BusyEvent[];
+  systemBlocks: SystemBlock[];
+  niceWeatherWindows: ReturnType<typeof outsideNiceWeatherIntervalsInRange>;
+  daySheetGoalBusy: BusyEvent[];
 }
 
 export interface PlanWeekAllocationInputs {
+  billing: BillingState;
+  scheduleHorizon: EffectiveScheduleHorizon;
+  /** Full horizon — merged slices for callers that iterate weeks. */
+  weekSlices: PlanWeekSlice[];
   nowMs: number;
   /** Google + invert-free-busy window (covers current ISO week through scheduling horizon). */
   fetchStartMs: number;
   fetchEndMs: number;
   weekStartMs: number;
   weekEndMs: number;
+  /** Weeks 1.. when present — mirrors {@link weekSlices}[1]. */
   nextWeekStartMs: number;
   nextWeekEndMs: number;
   snapshotEndMs: number;
   busyFetch: Awaited<ReturnType<typeof fetchGoogleBusy>>;
   busy: BusyEvent[];
   busyNextWeek: BusyEvent[];
-  systemBlocks: Awaited<ReturnType<typeof buildSystemBlocks>>;
-  nextWeekSystemBlocks: Awaited<ReturnType<typeof computeSystemBlocksWithSleepRoutineCache>>;
+  systemBlocks: SystemBlock[];
+  nextWeekSystemBlocks: SystemBlock[];
   weatherTimemapEvents: GeneratedEvent[];
   niceWeatherThisWeek: ReturnType<typeof outsideNiceWeatherIntervalsInRange>;
   niceWeatherNextWeek: ReturnType<typeof outsideNiceWeatherIntervalsInRange>;
@@ -87,24 +95,47 @@ export interface PlanWeekAllocationInputs {
   dayCalendarDrainThisWeek?: number[];
 }
 
+/** Blend logged day-sheet energy (slot-level) into the coarse calendar drain score. */
+function reviewEnergyDrainBump(review: DailyReview | undefined): number {
+  const slots = review?.slots;
+  if (!slots?.length) return 0;
+  let drain = 0;
+  let energise = 0;
+  for (const s of slots) {
+    if (s.energy === "drain") drain++;
+    if (s.energy === "energise") energise++;
+  }
+  if (drain > energise) return 0.06;
+  if (energise > drain) return -0.04;
+  return 0;
+}
+
 export async function loadPlanWeekAllocationInputs(options: {
   userId: string;
   plan: WeeklyPlan;
   settings: UserSettings;
   nowMs: number;
+  billing: BillingState;
 }): Promise<PlanWeekAllocationInputs> {
-  const { userId, plan, settings, nowMs } = options;
+  const { userId, plan, settings, nowMs, billing } = options;
   const tz = settings.timezone;
   const schedulingDays = settings.calendars.schedulingWindowDays;
   const snapshotEndMs = nowMs + schedulingDays * DAY_MS;
 
   const weekStartMs = localMondayMidnightMs(tz, new Date(nowMs));
-  const weekEndMs = weekStartMs + 7 * DAY_MS;
-  const nextWeekStartMs = weekEndMs;
-  const nextWeekEndMs = nextWeekStartMs + 7 * DAY_MS;
+  const weekEndMs = weekStartMs + WEEK_MS;
+
+  const scheduleHorizon = effectiveScheduleHorizon({
+    billing,
+    storedScheduleHorizonWeeks: settings.calendars.scheduleHorizonWeeks,
+    nowMs,
+    baseWeekStartMs: weekStartMs
+  });
+
+  const allocationSpanEndMs = weekStartMs + scheduleHorizon.isoWeekCount * WEEK_MS;
 
   const fetchStartMs = Math.min(weekStartMs, nowMs);
-  const fetchEndMs = Math.max(snapshotEndMs, nextWeekEndMs);
+  const fetchEndMs = Math.max(snapshotEndMs, allocationSpanEndMs);
 
   const busyFetch = await fetchGoogleBusy(
     userId,
@@ -114,38 +145,67 @@ export async function loadPlanWeekAllocationInputs(options: {
   ).catch(() => ({ busyEvents: [] as BusyEvent[], goalAvailabilityWindows: {} }));
 
   const busyAll = busyFetch.busyEvents;
-  const busy = busyAll.filter((e) => e.endMs > weekStartMs && e.startMs < weekEndMs);
-  const busyNextWeek = busyAll.filter(
-    (e) => e.endMs > nextWeekStartMs && e.startMs < nextWeekEndMs
-  );
 
   const travelResolver = createLegResolver({
     travel: settings.travel,
     cache: settings.travelCache
   });
 
-  const systemBlocks = await buildSystemBlocks({
-    userId,
-    settings,
-    weekStartMs,
-    busy,
-    overrides: overridesFromPlan(plan),
-    nowMs,
-    travelResolver
-  });
-  const nextWeekSystemBlocks = await computeSystemBlocksWithSleepRoutineCache({
-    userId,
-    weekStartMs: nextWeekStartMs,
-    busy: busyNextWeek,
-    sleep: settings.sleep,
-    travel: settings.travel,
-    gym: settings.gym,
-    timezone: tz,
-    resolver: travelResolver,
-    timemap: settings.timemap,
-    overrides: {},
-    nowMs
-  });
+  type SliceDraft = {
+    weekIndex: number;
+    weekStartMs: number;
+    weekEndMs: number;
+    busy: BusyEvent[];
+    systemBlocks: SystemBlock[];
+    weekDates: string[];
+    weekAnchorDate: string;
+  };
+
+  const drafts: SliceDraft[] = [];
+
+  for (let w = 0; w < scheduleHorizon.isoWeekCount; w++) {
+    const ws = weekStartMs + w * WEEK_MS;
+    const we = ws + WEEK_MS;
+    const busyW = busyAll.filter((e) => e.endMs > ws && e.startMs < we);
+
+    let systemW: SystemBlock[];
+    if (w === 0) {
+      systemW = await buildSystemBlocks({
+        userId,
+        settings,
+        weekStartMs: ws,
+        busy: busyW,
+        overrides: overridesFromPlan(plan),
+        nowMs,
+        travelResolver
+      });
+    } else {
+      systemW = await computeSystemBlocksWithSleepRoutineCache({
+        userId,
+        weekStartMs: ws,
+        busy: busyW,
+        sleep: settings.sleep,
+        travel: settings.travel,
+        gym: settings.gym,
+        timezone: tz,
+        resolver: travelResolver,
+        timemap: settings.timemap,
+        overrides: {},
+        nowMs
+      });
+    }
+
+    const weekDates = isoDatesForWeek(ws, tz);
+    drafts.push({
+      weekIndex: w,
+      weekStartMs: ws,
+      weekEndMs: we,
+      busy: busyW,
+      systemBlocks: systemW,
+      weekDates,
+      weekAnchorDate: isoCalendarDay(ws, tz)
+    });
+  }
 
   const travelCacheUpdates = travelResolver.takeCacheUpdates();
   if (travelCacheUpdates) {
@@ -156,12 +216,14 @@ export async function loadPlanWeekAllocationInputs(options: {
     }
   }
 
-  const sleepBlockMs = sleepIntervalsForAllocation(
-    [...systemBlocks, ...nextWeekSystemBlocks],
-    [...busy, ...busyNextWeek]
+  const allSystemBlocks = drafts.flatMap((d) => d.systemBlocks);
+  const busyForSleep = busyAll.filter(
+    (e) => e.endMs > weekStartMs && e.startMs < allocationSpanEndMs
   );
 
-  const weatherWindowEnd = Math.max(fetchEndMs, nextWeekEndMs);
+  const sleepBlockMs = sleepIntervalsForAllocation(allSystemBlocks, busyForSleep);
+
+  const weatherWindowEnd = Math.max(fetchEndMs, allocationSpanEndMs);
   const weatherTimemapEvents = await buildWeatherTimemapEvents({
     userId,
     windowStartMs: weekStartMs,
@@ -173,30 +235,50 @@ export async function loadPlanWeekAllocationInputs(options: {
     sleepBlockMs
   });
 
-  const niceWeatherThisWeek = outsideNiceWeatherIntervalsInRange(
-    weatherTimemapEvents,
-    weekStartMs,
-    weekEndMs
-  );
-  const niceWeatherNextWeek = outsideNiceWeatherIntervalsInRange(
-    weatherTimemapEvents,
-    nextWeekStartMs,
-    nextWeekEndMs
-  );
-
-  const weekDates = isoDatesForWeek(weekStartMs, tz);
-  const nextWeekDates = isoDatesForWeek(nextWeekStartMs, tz);
-  const dailyReviews = await loadDailyReviewsInRange(
-    userId,
-    weekDates[0]!,
-    nextWeekDates[nextWeekDates.length - 1]!
-  );
+  const reviewStartIso = drafts[0]!.weekDates[0]!;
+  const reviewEndIso = drafts[drafts.length - 1]!.weekDates[6]!;
+  const dailyReviews = await loadDailyReviewsInRange(userId, reviewStartIso, reviewEndIso);
   const reviewsByDate = new Map(dailyReviews.map((r) => [r.date, r] as const));
   const todayIso = todayIsoInTz(tz);
-  const todayIdx = weekDates.indexOf(todayIso);
+  const todayIdx = drafts[0]!.weekDates.indexOf(todayIso);
   const dayIndex = todayIdx >= 0 ? todayIdx : 6;
-  const nextWeekAnchor = isoCalendarDay(nextWeekStartMs, tz);
+
   const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
+  const goalTitleById = new Map(schedulingGoals.map((g) => [g.id, g.title] as const));
+
+  const weekSlices: PlanWeekSlice[] = drafts.map((d) => ({
+    ...d,
+    niceWeatherWindows: outsideNiceWeatherIntervalsInRange(
+      weatherTimemapEvents,
+      d.weekStartMs,
+      d.weekEndMs
+    ),
+    daySheetGoalBusy: daySheetGoalBusyEvents({
+      reviewsByDate,
+      weekDates: d.weekDates,
+      timezone: tz,
+      weekStartMs: d.weekStartMs,
+      weekEndMs: d.weekEndMs,
+      goalTitleById
+    })
+  }));
+
+  const slice0 = weekSlices[0]!;
+  const slice1 = weekSlices[1];
+
+  const busy = slice0.busy;
+  const busyNextWeek = slice1?.busy ?? [];
+  const systemBlocks = slice0.systemBlocks;
+  const nextWeekSystemBlocks = slice1?.systemBlocks ?? [];
+  const niceWeatherThisWeek = slice0.niceWeatherWindows;
+  const niceWeatherNextWeek = slice1?.niceWeatherWindows ?? [];
+  const weekDates = slice0.weekDates;
+  const nextWeekStartMs = slice1?.weekStartMs ?? weekEndMs;
+  const nextWeekEndMs = slice1?.weekEndMs ?? weekEndMs + WEEK_MS;
+  const nextWeekAnchor = slice1?.weekAnchorDate ?? isoCalendarDay(nextWeekStartMs, tz);
+  const daySheetGoalBusyThisWeek = slice0.daySheetGoalBusy;
+  const daySheetGoalBusyNextWeek = slice1?.daySheetGoalBusy ?? [];
+
   const userSchedulingGoalsNoRoutines = filterSchedulingGoals(plan.goals).filter(
     (g) => g.specialGoalType !== "gym"
   );
@@ -234,8 +316,6 @@ export async function loadPlanWeekAllocationInputs(options: {
       dayIndex
     });
     catchUpFloors = catchUpFloorsFromGoalRollups(baselineRollups);
-    // Keep unconstrained plans truly "even": automated catch-up should not
-    // turn all-but-one equal-share goals into floor-only rows.
     const allGoalsUnconstrained = userSchedulingGoalsNoRoutines.every((g) => {
       const norm = normaliseGoalTime(g);
       const onlyDailyMinimum =
@@ -257,23 +337,6 @@ export async function loadPlanWeekAllocationInputs(options: {
     });
     if (allGoalsUnconstrained) catchUpFloors = {};
   }
-  const goalTitleById = new Map(schedulingGoals.map((g) => [g.id, g.title] as const));
-  const daySheetGoalBusyThisWeek = daySheetGoalBusyEvents({
-    reviewsByDate,
-    weekDates,
-    timezone: tz,
-    weekStartMs,
-    weekEndMs,
-    goalTitleById
-  });
-  const daySheetGoalBusyNextWeek = daySheetGoalBusyEvents({
-    reviewsByDate,
-    weekDates: nextWeekDates,
-    timezone: tz,
-    weekStartMs: nextWeekStartMs,
-    weekEndMs: nextWeekEndMs,
-    goalTitleById
-  });
 
   const showEnergyPreview =
     settings.personalSystem.enabled || settings.personalSystem.energyBatterySchedulingEnabled;
@@ -296,6 +359,9 @@ export async function loadPlanWeekAllocationInputs(options: {
   }
 
   return {
+    billing,
+    scheduleHorizon,
+    weekSlices,
     nowMs,
     fetchStartMs,
     fetchEndMs,

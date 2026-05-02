@@ -21,6 +21,8 @@ import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
 import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
+import { loadBillingState } from "@/lib/billing-state-server";
+import { clipIntervalBlocksToHorizon } from "@/lib/effective-schedule-horizon";
 import { updateWeeklyIntent } from "./actions";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
@@ -74,14 +76,36 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   };
 }
 
+function dedupeIntervalLayers<T extends { startMs: number; endMs: number }>(
+  xs: readonly T[],
+  keyFn: (x: T) => string = (x) => `${x.startMs}|${x.endMs}`
+): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const x of xs) {
+    const k = keyFn(x);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(x);
+  }
+  return out;
+}
+
 export default async function PlanPage() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
+  const billing = await loadBillingState(userId);
   const catchUpMode = settings.allocator.catchUpMode;
   const nowMs = Date.now();
-  const ctx = await getCachedPlanWeekAllocationInputs({ userId, plan, settings, nowMs });
+  const ctx = await getCachedPlanWeekAllocationInputs({
+    userId,
+    plan,
+    settings,
+    nowMs,
+    billing
+  });
   const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
   const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
     (g) => g.specialGoalType !== "gym"
@@ -91,55 +115,50 @@ export default async function PlanPage() {
     busyFetch,
     weekStartMs,
     weekEndMs,
-    nextWeekStartMs,
-    nextWeekEndMs,
-    busy,
-    busyNextWeek,
-    systemBlocks,
-    nextWeekSystemBlocks,
     weatherTimemapEvents,
-    niceWeatherThisWeek,
-    niceWeatherNextWeek,
     weekDates,
     reviewsByDate,
     dayIndex,
-    nextWeekAnchor,
-    daySheetGoalBusyThisWeek,
-    daySheetGoalBusyNextWeek
+    weekSlices,
+    scheduleHorizon
   } = ctx;
 
-  const allocation = allocateWeek({
-    plan,
-    busy: [...busy, ...daySheetGoalBusyThisWeek, ...systemBlocks],
-    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-    niceWeatherWindows: niceWeatherThisWeek,
-    settings,
-    weekStartMs,
-    weekEndMs,
-    catchUpFloors: resolvedCatchUpFloors,
-    weekAnchorDate: plan.weekStart,
-    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-    nowMs,
-    sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
-  });
+  const allocationSlices = ctx.weekSlices.map((slice, idx) =>
+    allocateWeek({
+      plan,
+      busy: [...slice.busy, ...slice.daySheetGoalBusy, ...slice.systemBlocks],
+      goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+      niceWeatherWindows: slice.niceWeatherWindows,
+      settings,
+      weekStartMs: slice.weekStartMs,
+      weekEndMs: slice.weekEndMs,
+      catchUpFloors:
+        idx === 0 ? resolvedCatchUpFloors : catchUpMode === "automated" ? {} : undefined,
+      weekAnchorDate: idx === 0 ? plan.weekStart : slice.weekAnchorDate,
+      goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+      nowMs,
+      sleepIntervals: sleepIntervalsForAllocation(slice.systemBlocks, slice.busy)
+    })
+  );
 
-  const allocationNextWeek = allocateWeek({
-    plan,
-    busy: [...busyNextWeek, ...daySheetGoalBusyNextWeek, ...nextWeekSystemBlocks],
-    goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-    niceWeatherWindows: niceWeatherNextWeek,
-    settings,
-    weekStartMs: nextWeekStartMs,
-    weekEndMs: nextWeekEndMs,
-    catchUpFloors: catchUpMode === "automated" ? {} : undefined,
-    weekAnchorDate: nextWeekAnchor,
-    goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-    nowMs,
-    sleepIntervals: sleepIntervalsForAllocation(nextWeekSystemBlocks, busyNextWeek)
-  });
+  const allocation = allocationSlices[0]!;
+  const mergedGoalBlocks = allocationSlices.flatMap((a) => a.blocks);
 
-  const busyForCalendar = [...busy, ...busyNextWeek];
-  const daySheetGoalBusyForCalendar = [...daySheetGoalBusyThisWeek, ...daySheetGoalBusyNextWeek];
+  const mergeWindows = weekSlices.map((s) => ({
+    weekStartMs: s.weekStartMs,
+    weekEndMs: s.weekEndMs
+  }));
+
+  const busyForCalendar = dedupeIntervalLayers(
+    weekSlices.flatMap((s) => s.busy),
+    (e) => `${e.sourceId ?? ""}|${e.startMs}|${e.endMs}`
+  );
+  const daySheetGoalBusyForCalendar = dedupeIntervalLayers(
+    weekSlices.flatMap((s) => s.daySheetGoalBusy),
+    (e) => `${e.sourceId ?? ""}|${e.startMs}|${e.endMs}`
+  );
+
+  const allocationHorizonEndMs = weekSlices[weekSlices.length - 1]!.weekEndMs;
   const weatherPreviewBlocks = weatherTimemapEvents
     .filter((e) => e.title === "[Outside]")
     .map((e) => ({
@@ -157,7 +176,7 @@ export default async function PlanPage() {
     goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
     calendarSources: settings.calendars.sources,
     windowStartMs: weekStartMs,
-    windowEndMs: nextWeekEndMs,
+    windowEndMs: allocationHorizonEndMs,
     stableUid: buildStableUid
   }).map((e) => {
     const goalTag = e.tags.find((t) => t.startsWith("goal:"));
@@ -173,18 +192,17 @@ export default async function PlanPage() {
       ...(invertedGoalId ? { invertedGoalId } : {})
     };
   });
-  const proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
-    mergeOrphanGoalOverrideBlocks(
-      [...allocation.blocks, ...allocationNextWeek.blocks],
-      plan,
-      [
-        { weekStartMs, weekEndMs },
-        { weekStartMs: nextWeekStartMs, weekEndMs: nextWeekEndMs }
-      ]
-    ),
+  let proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
+    mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows),
     plan,
     settings.calendars.sources
   );
+  if (scheduleHorizon.trialRollingClip) {
+    proposedForCalendar = clipIntervalBlocksToHorizon(
+      proposedForCalendar,
+      scheduleHorizon.horizonEndMs
+    );
+  }
   const gymGoalTravelOverlay = gymGoalTravelBlocksFromProposed(
     proposedForCalendar,
     schedulingGoals,
@@ -192,12 +210,23 @@ export default async function PlanPage() {
     settings.gym
   );
   const systemBlocksForCalendar = [
-    ...systemBlocks,
-    ...nextWeekSystemBlocks,
+    ...weekSlices.flatMap((s) => s.systemBlocks),
     ...weatherPreviewBlocks,
     ...invertedTimemapPreviewBlocks,
     ...gymGoalTravelOverlay
   ];
+
+  const calendarWeekStartsMs = weekSlices.map((s) => s.weekStartMs);
+  const previewWeekLabels = weekSlices.map((s) => {
+    const fmt = new Intl.DateTimeFormat("en-AU", {
+      month: "short",
+      day: "numeric",
+      timeZone: settings.timezone
+    });
+    const start = fmt.format(new Date(s.weekStartMs));
+    const end = fmt.format(new Date(s.weekEndMs - 24 * 60 * 60 * 1000));
+    return `${start} – ${end}`;
+  });
 
   const scheduledByGoal: Record<string, number> = {};
   const effectiveTargetByGoal: Record<string, number> = {};
@@ -317,6 +346,8 @@ export default async function PlanPage() {
               <div className="hidden lg:block">
                 <CalendarPreview
                   weekStartMs={weekStartMs}
+                  calendarWeekStartsMs={calendarWeekStartsMs}
+                  previewWeekLabels={previewWeekLabels}
                   timezone={settings.timezone}
                   busy={busyForCalendar}
                   daySheetGoalBusy={daySheetGoalBusyForCalendar}
@@ -333,6 +364,8 @@ export default async function PlanPage() {
                 <div className="mt-3">
                   <RangeToggleCalendar
                     weekStartMs={weekStartMs}
+                    calendarWeekStartsMs={calendarWeekStartsMs}
+                    previewWeekLabels={previewWeekLabels}
                     timezone={settings.timezone}
                     busy={busyForCalendar}
                     daySheetGoalBusy={daySheetGoalBusyForCalendar}
@@ -354,6 +387,8 @@ export default async function PlanPage() {
 
 function CalendarPreview({
   weekStartMs,
+  calendarWeekStartsMs,
+  previewWeekLabels,
   timezone,
   busy,
   daySheetGoalBusy,
@@ -365,6 +400,8 @@ function CalendarPreview({
   wheelAreas
 }: {
   weekStartMs: number;
+  calendarWeekStartsMs?: readonly number[];
+  previewWeekLabels?: readonly string[];
   timezone: string;
   busy: Parameters<typeof WeekCalendar>[0]["busy"];
   daySheetGoalBusy: Parameters<typeof WeekCalendar>[0]["daySheetGoalBusy"];
@@ -378,6 +415,8 @@ function CalendarPreview({
   return (
     <RangeToggleCalendar
       weekStartMs={weekStartMs}
+      calendarWeekStartsMs={calendarWeekStartsMs}
+      previewWeekLabels={previewWeekLabels}
       timezone={timezone}
       busy={busy}
       daySheetGoalBusy={daySheetGoalBusy}

@@ -18,6 +18,7 @@ import {
 import { db, schema } from "@/lib/db";
 import { fetchGoogleBusyLive } from "@/lib/google-calendar";
 import { googleBusyFetchWindowForPlanner } from "@/lib/google-busy-fetch-window";
+import { loadBillingState } from "@/lib/billing-state-server";
 import { loadSettings } from "@/lib/settings-store";
 
 /**
@@ -74,8 +75,9 @@ async function upsertGoogleBusyCacheRow(options: {
 export async function refreshGoogleBusyCacheForUser(userId: string): Promise<void> {
   if (!db) return;
   const settings = await loadSettings(userId);
+  const billing = await loadBillingState(userId);
   const nowMs = Date.now();
-  const { fetchStartMs, fetchEndMs } = googleBusyFetchWindowForPlanner(settings, nowMs);
+  const { fetchStartMs, fetchEndMs } = googleBusyFetchWindowForPlanner(settings, nowMs, billing);
   const fp = fingerprintGoogleCalendarSources(settings.calendars.sources);
   const live = await fetchGoogleBusyLive(
     userId,
@@ -145,7 +147,8 @@ export async function fetchGoogleBusy(
   }
 
   const settings = await loadSettings(userId);
-  const { fetchStartMs, fetchEndMs } = googleBusyFetchWindowForPlanner(settings, now);
+  const billing = await loadBillingState(userId);
+  const { fetchStartMs, fetchEndMs } = googleBusyFetchWindowForPlanner(settings, now, billing);
 
   const live = await fetchGoogleBusyLive(userId, sources, fetchStartMs, fetchEndMs);
   await upsertGoogleBusyCacheRow({

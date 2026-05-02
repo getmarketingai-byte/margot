@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { CalendarOptionsForm } from "../calendar-options-form";
+import { CalendarsPageTabs } from "./calendars-page-tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -272,98 +273,109 @@ export default async function CalendarsPage() {
       <header>
         <h1 className="text-2xl font-semibold">Calendars</h1>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Choose which Google calendars count as busy time when allocating goals.
+          Connect Google calendars for busy time, and subscribe to ICS feeds for generated events.
         </p>
       </header>
 
-      {calendarsLoadError ? (
-        <p className="card text-sm">
-          We could not load your Google calendars. You are signed in, but your Google account tokens
-          could not be read. Run DB migrations for the same production `DATABASE_URL`, then sign out
-          and sign in again.
-        </p>
-      ) : calendars.length === 0 ? (
-        <p className="card text-sm">
-          No calendars found. Sign in with Google with calendar.readonly scopes and reload.
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {sortedCalendars.map((c) => {
-            const isSelected = selected.has(c.id);
-            const source = googleSourcesByExternalId.get(c.id);
-            const normalized = source ? normaliseCalendarSource(source) : undefined;
-            const busyMode: BusyHandlingMode = normalized
-              ? (calendarBusyModeForSource(normalized) as BusyHandlingMode)
-              : "busy-only";
-            const colorValue = source?.color ?? c.backgroundColor ?? "#9aa0a6";
-            const linkedGoalTitle =
-              goalOptions.find((goal) => goal.id === normalized?.availabilityGoalId)?.title ?? "";
-            return (
-              <li key={c.id} className="card flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">{c.summary}</div>
-                    <div className="text-xs text-ink-400">{c.id}</div>
+      <CalendarsPageTabs
+        calendarsPanel={
+          <>
+            <p className="text-sm text-ink-600 dark:text-ink-200">
+              Choose which Google calendars count as busy time when allocating goals.
+            </p>
+            {calendarsLoadError ? (
+              <p className="card text-sm">
+                We could not load your Google calendars. You are signed in, but your Google account
+                tokens could not be read. Run DB migrations for the same production `DATABASE_URL`,
+                then sign out and sign in again.
+              </p>
+            ) : calendars.length === 0 ? (
+              <p className="card text-sm">
+                No calendars found. Sign in with Google with calendar.readonly scopes and reload.
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {sortedCalendars.map((c) => {
+                  const isSelected = selected.has(c.id);
+                  const source = googleSourcesByExternalId.get(c.id);
+                  const normalized = source ? normaliseCalendarSource(source) : undefined;
+                  const busyMode: BusyHandlingMode = normalized
+                    ? (calendarBusyModeForSource(normalized) as BusyHandlingMode)
+                    : "busy-only";
+                  const colorValue = source?.color ?? c.backgroundColor ?? "#9aa0a6";
+                  const linkedGoalTitle =
+                    goalOptions.find((goal) => goal.id === normalized?.availabilityGoalId)?.title ??
+                    "";
+                  return (
+                    <li key={c.id} className="card flex flex-col gap-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">{c.summary}</div>
+                          <div className="text-xs text-ink-400">{c.id}</div>
+                        </div>
+                        <form action={toggleCalendar}>
+                          <input type="hidden" name="externalId" value={c.id} />
+                          <input type="hidden" name="displayName" value={c.summary} />
+                          <button type="submit" className={isSelected ? "btn-primary" : "btn-secondary"}>
+                            {isSelected ? "Connected" : "Use"}
+                          </button>
+                        </form>
+                      </div>
+
+                      {isSelected ? (
+                        <CalendarOptionsForm
+                          action={updateCalendarOptions}
+                          externalId={c.id}
+                          displayName={c.summary}
+                          defaultColor={colorValue}
+                          defaultBusyMode={busyMode}
+                          defaultInvertedTimemapLabel={linkedGoalTitle}
+                        />
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        }
+        feedsPanel={
+          <section id="ical-feeds" className="flex flex-col gap-2">
+            <header>
+              <h2 className="text-xl font-semibold">iCal feeds</h2>
+              <p className="text-sm text-ink-600 dark:text-ink-200">
+                Subscribe to these URLs in Apple Calendar, Google Calendar (<em>From URL</em>), or
+                Outlook. Most clients refresh every 5-60 minutes.
+              </p>
+            </header>
+            <ul className="flex flex-col gap-2">
+              {feedRows.map((feed) => (
+                <li key={feed.kind} className="card">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">{feed.name}</div>
+                      <div className="text-xs text-ink-400">{feed.description}</div>
+                    </div>
+                    <form action={rotateFeed}>
+                      <input type="hidden" name="kind" value={feed.kind} />
+                      <input type="hidden" name="name" value={feed.name} />
+                      <button type="submit" className="btn-secondary text-xs">
+                        Rotate
+                      </button>
+                    </form>
                   </div>
-                  <form action={toggleCalendar}>
-                    <input type="hidden" name="externalId" value={c.id} />
-                    <input type="hidden" name="displayName" value={c.summary} />
-                    <button type="submit" className={isSelected ? "btn-primary" : "btn-secondary"}>
-                      {isSelected ? "Connected" : "Use"}
-                    </button>
-                  </form>
-                </div>
-
-                {isSelected ? (
-                  <CalendarOptionsForm
-                    action={updateCalendarOptions}
-                    externalId={c.id}
-                    displayName={c.summary}
-                    defaultColor={colorValue}
-                    defaultBusyMode={busyMode}
-                    defaultInvertedTimemapLabel={linkedGoalTitle}
+                  <input
+                    readOnly
+                    className="field mt-2 select-all font-mono text-xs"
+                    value={feed.url}
+                    aria-label={`${feed.name} ICS URL`}
                   />
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      <section id="ical-feeds" className="flex flex-col gap-2">
-        <header className="mt-2">
-          <h2 className="text-xl font-semibold">iCal feeds</h2>
-          <p className="text-sm text-ink-600 dark:text-ink-200">
-            Subscribe to these URLs in Apple Calendar, Google Calendar (<em>From URL</em>), or
-            Outlook. Most clients refresh every 5-60 minutes.
-          </p>
-        </header>
-        <ul className="flex flex-col gap-2">
-          {feedRows.map((feed) => (
-            <li key={feed.kind} className="card">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-medium">{feed.name}</div>
-                  <div className="text-xs text-ink-400">{feed.description}</div>
-                </div>
-                <form action={rotateFeed}>
-                  <input type="hidden" name="kind" value={feed.kind} />
-                  <input type="hidden" name="name" value={feed.name} />
-                  <button type="submit" className="btn-secondary text-xs">
-                    Rotate
-                  </button>
-                </form>
-              </div>
-              <input
-                readOnly
-                className="field mt-2 select-all font-mono text-xs"
-                value={feed.url}
-                aria-label={`${feed.name} ICS URL`}
-              />
-            </li>
-          ))}
-        </ul>
-      </section>
+                </li>
+              ))}
+            </ul>
+          </section>
+        }
+      />
     </div>
   );
 }

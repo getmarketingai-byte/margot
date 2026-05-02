@@ -18,6 +18,7 @@ describe("UserSettings schema", () => {
     expect(parsed.ppf.targets).toHaveLength(3);
     expect(parsed.schedulerFrameworkInclusion.commitment).toBe(false);
     expect(parsed.schedulerFrameworkInclusion.workLayer).toBe(false);
+    expect(parsed.calendars.scheduleHorizonWeeks).toBe(2);
     expect(parsed.allocator.starvationMode).toBe("proportional");
     expect(parsed.allocator.allocationMode).toBe("even");
     expect(parsed.allocator.catchUpMode).toBe("automated");
@@ -56,6 +57,15 @@ describe("UserSettings schema", () => {
           sessionMinutesMin: 60,
           sessionMinutesMax: 45
         }
+      })
+    ).toThrow();
+  });
+
+  it("rejects calendars.scheduleHorizonWeeks outside 1–8", () => {
+    expect(() =>
+      userSettingsSchema.parse({
+        schemaVersion: SETTINGS_SCHEMA_VERSION,
+        calendars: { ...DEFAULT_USER_SETTINGS.calendars, scheduleHorizonWeeks: 9 }
       })
     ).toThrow();
   });

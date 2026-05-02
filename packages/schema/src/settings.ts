@@ -74,7 +74,12 @@ export function normaliseCalendarSource(source: CalendarSource): CalendarSource 
 export const calendarsSettingsSchema = z.object({
   sources: z.array(calendarSourceSchema).default([]),
   excludedNames: z.array(z.string()).default([]),
-  schedulingWindowDays: positiveInt.max(365).default(60)
+  schedulingWindowDays: positiveInt.max(365).default(60),
+  /**
+   * How many ISO weeks (Mon–Sun) of goal allocation we compute for preview + ICS (paid users).
+   * Trial accounts are capped at 7 rolling days regardless of this value.
+   */
+  scheduleHorizonWeeks: z.number().int().min(1).max(8).default(2)
 });
 export type CalendarsSettings = z.infer<typeof calendarsSettingsSchema>;
 
@@ -853,7 +858,8 @@ export const userSettingsSchema = z.object({
   calendars: calendarsSettingsSchema.default({
     sources: [],
     excludedNames: [],
-    schedulingWindowDays: 60
+    schedulingWindowDays: 60,
+    scheduleHorizonWeeks: 2
   }),
   timemap: timemapSettingsSchema.default({} as never),
   sleep: sleepSettingsSchema.default({} as never),
