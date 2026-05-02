@@ -349,22 +349,33 @@ export type GoalAllocationRowSummary = Pick<
   | "freeMinutes"
 >;
 
+/** Day-sheet vs future blocks from the planner (see `WeekMetrics.perGoal`). */
+export type GoalPlanMinutes = {
+  loggedMinutes: number;
+  proposedFutureMinutes: number;
+};
+
+/** Collapsed goal row: logged, proposed (future blocks), weekly min, weekly max / share hint. */
+export type GoalAllocationRowDisplay = {
+  loggedLabel: string;
+  proposedLabel: string;
+  minTargetLabel: string;
+  maxTargetLabel: string;
+  title: string;
+};
+
 /**
- * Builds the collapsed goals-list time string: achieved / weekly min — weekly max (or unconstrained-share hint).
- *
- * Third segment is an explicit `maxMinutesPerWeek` when set; otherwise this goal’s
- * share of post-floor remainder from [`summariseAllocation`].`remainderHintByGoalId`
- * (`% of full-week time` capped by remainder R, same as Pass 2). When `remainderHintByGoalId` is absent (legacy callers),
- * falls back to `perEqualShareMinutes` only if `equalShareGoals > 0`.
+ * Builds labels for the collapsed goals-list row: four values — day-sheet logged time,
+ * allocator blocks from now through week end, weekly minimum, and weekly maximum or Pass-2 share hint.
  */
 export function goalAllocationRowDisplay(
   goal: WeeklyGoal,
   summary: GoalAllocationRowSummary,
-  scheduledMinutes: number
-): { line: string; title: string } {
+  planMinutes: GoalPlanMinutes
+): GoalAllocationRowDisplay {
   const norm = normaliseGoalTime(goal);
   const minFloor = norm.minMinutesPerWeek ?? 0;
-  const minLabel = minFloor > 0 ? formatMinutes(minFloor) : "—";
+  const minTargetLabel = minFloor > 0 ? formatMinutes(minFloor) : "—";
 
   const hasExplicitWeeklyMax = norm.maxMinutesPerWeek !== undefined;
   const hintMap = summary.remainderHintByGoalId;
@@ -380,30 +391,37 @@ export function goalAllocationRowDisplay(
           ? summary.perEqualShareMinutes
           : undefined;
 
-  const scheduledLabel = formatMinutes(scheduledMinutes);
-  const maxLabel =
-    maxMinutes !== undefined ? formatMinutes(Math.max(maxMinutes, 0)) : undefined;
+  const maxTargetLabel =
+    maxMinutes !== undefined ? formatMinutes(Math.max(maxMinutes, 0)) : "—";
 
-  const line =
-    maxLabel !== undefined ? `${scheduledLabel} / ${minLabel} - ${maxLabel}` : `${scheduledLabel} / ${minLabel}`;
+  const loggedLabel = formatMinutes(planMinutes.loggedMinutes);
+  const proposedLabel = formatMinutes(planMinutes.proposedFutureMinutes);
 
   const thirdExplain = hasExplicitWeeklyMax
     ? "weekly ceiling"
     : hasPerGoalHints && idHint !== undefined
       ? "your approximate share after weekly minimums (% of full-week schedulable time, capped by what is left — same as planner Pass 2)"
-      : "approx. minutes each unconstrained goal would get after minimums reserve time (budget chip)";
-  let title = `Scheduled (logs plus calendar blocks) / Weekly minimum (${minFloor > 0 ? "explicit floor" : "none"}`;
-  title += `) • Upper: ${maxLabel !== undefined ? `${maxLabel} — ${thirdExplain}` : "not shown (no remainder share for this row and no weekly max)"}`;
+      : maxMinutes !== undefined
+        ? "approx. minutes each unconstrained goal would get after minimums reserve time (budget chip)"
+        : "";
+  let title =
+    "Logged: day-sheet time this week. Proposed: planner blocks from now through end of week (merged). ";
+  title +=
+    "Logged and proposed can occupy the same clock time — Total achieved uses one merged count elsewhere. ";
+  title += `Min target: ${minFloor > 0 ? "weekly floor" : "none"}. `;
+  title += `Max target: ${
+    maxMinutes !== undefined ? `${maxTargetLabel} (${thirdExplain})` : "not set for this row"
+  }.`;
 
   if (goal.allocationSharePercent !== undefined) {
     title +=
-      ". `%` is a fraction of full-week schedulable time; Pass 2 never assigns more than the post–minimum pool; caps and placement can change the final plan.";
+      " `%` is a fraction of full-week schedulable time; Pass 2 never assigns more than the post–minimum pool; caps and placement can change the final plan.";
   } else if (summary.hasWeightedShare) {
     title +=
-      ". Some goals use `% of week`; others split whatever is left after those targets.";
+      " Some goals use `% of week`; others split whatever is left after those targets.";
   }
 
-  return { line, title };
+  return { loggedLabel, proposedLabel, minTargetLabel, maxTargetLabel, title };
 }
 
 const PASS2_WARN_SLACK_MIN = 15;

@@ -163,11 +163,20 @@ export interface WeekMetrics {
    * goalId -> progress vs weekly plan.
    * - `targetMinutes`: Pass 1+2 planned weekly minutes (full-week free budget), before day-sheet credit.
    * - `scheduledMinutes`: achieved = merged union of day-sheet (`daysheet-goal:`) and goal block intervals (see ALLOCATOR_BUSINESS_RULES.md).
+   * - `loggedMinutes` / `proposedFutureMinutes`: day-sheet-only and future-block-only (for UI); can overlap the same wall time, so they need not sum to `scheduledMinutes`.
    * - `unplacedMinutes`: placement demand after log credit still unmet by calendar blocks (>= 0).
    */
   perGoal: Record<
     string,
-    { scheduledMinutes: number; targetMinutes: number; unplacedMinutes: number }
+    {
+      scheduledMinutes: number;
+      targetMinutes: number;
+      unplacedMinutes: number;
+      /** Day-sheet (`daysheet-goal:`) minutes merged in the week window. */
+      loggedMinutes: number;
+      /** Allocator goal blocks from `now` through week end (merged); full week when `nowMs` omitted. */
+      proposedFutureMinutes: number;
+    }
   >;
   /** wheelAreaId -> scheduled minutes (for areas listed in settings). */
   wheelAreaMinutes: Record<string, number>;
@@ -2509,6 +2518,49 @@ export function achievedMinutesForGoal(
   return mergedGoalCoverageMinutes(goalId, busy, blocks, weekStartMs, weekEndMs);
 }
 
+/**
+ * Minutes from day-sheet review entries only (`daysheet-goal:<goalId>:`), merged in the week window.
+ */
+export function loggedMinutesForGoal(
+  goalId: string,
+  busy: readonly BusyEvent[],
+  weekStartMs: number,
+  weekEndMs: number
+): number {
+  const raw: Interval[] = [];
+  const prefix = `daysheet-goal:${goalId}:`;
+  for (const ev of busy) {
+    if (!ev.sourceId?.startsWith(prefix)) continue;
+    const c = clipIntervalToWindow({ startMs: ev.startMs, endMs: ev.endMs }, weekStartMs, weekEndMs);
+    if (c) raw.push(c);
+  }
+  const merged = mergeIntervalsSorted(raw);
+  return merged.reduce((acc, iv) => acc + Math.floor((iv.endMs - iv.startMs) / MS_PER_MIN), 0);
+}
+
+/**
+ * Minutes from allocator goal blocks from `nowMs` through week end (merged).
+ * When `nowMs` is omitted, uses the full week (same as `weekStartMs`).
+ */
+export function proposedFutureMinutesForGoal(
+  goalId: string,
+  blocks: readonly AllocatedBlock[],
+  weekStartMs: number,
+  weekEndMs: number,
+  nowMs: number | undefined
+): number {
+  const clipStart = Math.max(weekStartMs, nowMs ?? weekStartMs);
+  if (clipStart >= weekEndMs) return 0;
+  const raw: Interval[] = [];
+  for (const b of blocks) {
+    if (b.segment || b.goalId !== goalId) continue;
+    const c = clipIntervalToWindow({ startMs: b.startMs, endMs: b.endMs }, clipStart, weekEndMs);
+    if (c) raw.push(c);
+  }
+  const merged = mergeIntervalsSorted(raw);
+  return merged.reduce((acc, iv) => acc + Math.floor((iv.endMs - iv.startMs) / MS_PER_MIN), 0);
+}
+
 function clipIntervalToWindow(iv: Interval, windowStartMs: number, windowEndMs: number): Interval | null {
   const startMs = Math.max(iv.startMs, windowStartMs);
   const endMs = Math.min(iv.endMs, windowEndMs);
@@ -2606,10 +2658,20 @@ function computeMetrics(
       placementDemandBeforePass3?.get(g.id) ?? p?.effectiveMinutes ?? 0;
     const placedBlocks = goalBlockMinutesPlaced(g.id, blocks);
     const achieved = achievedMinutesForGoal(g.id, busy, blocks, weekStartMs, weekEndMs);
+    const loggedMinutes = loggedMinutesForGoal(g.id, busy, weekStartMs, weekEndMs);
+    const proposedFutureMinutes = proposedFutureMinutesForGoal(
+      g.id,
+      blocks,
+      weekStartMs,
+      weekEndMs,
+      nowMs
+    );
     perGoal[g.id] = {
       targetMinutes: target,
       scheduledMinutes: achieved,
-      unplacedMinutes: Math.max(0, placementDemand - placedBlocks)
+      unplacedMinutes: Math.max(0, placementDemand - placedBlocks),
+      loggedMinutes,
+      proposedFutureMinutes
     };
   }
 

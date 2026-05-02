@@ -40,35 +40,45 @@ describe("summariseAllocation", () => {
 });
 
 describe("goalAllocationRowDisplay", () => {
-  it("omits upper hint for floor-only goals that do not take remainder", () => {
+  it("shows max as — for floor-only goals that do not take remainder", () => {
     const g = baseGoal({ minMinutesPerWeek: 480 });
     const summary = summariseAllocation([g], 1000);
-    const { line } = goalAllocationRowDisplay(g, summary, 480);
-    expect(line).toBe("8h / 8h");
+    const row = goalAllocationRowDisplay(g, summary, { loggedMinutes: 10, proposedFutureMinutes: 470 });
+    expect(row.loggedLabel).toBe("10 min");
+    expect(row.proposedLabel).toBe("7h 50m");
+    expect(row.minTargetLabel).toBe("8h");
+    expect(row.maxTargetLabel).toBe("—");
   });
 
-  it("uses explicit weekly max as the third segment", () => {
+  it("uses explicit weekly max for max target", () => {
     const g = baseGoal({ minMinutesPerWeek: 120, maxMinutesPerWeek: 600 });
     const summary = summariseAllocation([g], 5000);
-    const { line } = goalAllocationRowDisplay(g, summary, 200);
-    expect(line).toBe("3h 20m / 2h - 10h");
+    const row = goalAllocationRowDisplay(g, summary, { loggedMinutes: 30, proposedFutureMinutes: 90 });
+    expect(row.loggedLabel).toBe("30 min");
+    expect(row.proposedLabel).toBe("1h 30m");
+    expect(row.minTargetLabel).toBe("2h");
+    expect(row.maxTargetLabel).toBe("10h");
   });
 
-  it("omits third segment when there is no remainder cohort", () => {
+  it("shows min only row with — max when no share cohort", () => {
     const g = baseGoal({ minMinutesPerWeek: 480 });
     const summary = summariseAllocation([g], 480);
-    const { line } = goalAllocationRowDisplay(g, summary, 480);
-    expect(line).toBe("8h / 8h");
+    const row = goalAllocationRowDisplay(g, summary, { loggedMinutes: 0, proposedFutureMinutes: 480 });
+    expect(row.minTargetLabel).toBe("8h");
+    expect(row.maxTargetLabel).toBe("—");
   });
 
   it("shows equal-share upper hint for a single unconstrained goal", () => {
     const g = baseGoal();
     const summary = summariseAllocation([g], 420);
-    const { line } = goalAllocationRowDisplay(g, summary, 120);
-    expect(line).toBe("2h / — - 7h");
+    const row = goalAllocationRowDisplay(g, summary, { loggedMinutes: 120, proposedFutureMinutes: 60 });
+    expect(row.loggedLabel).toBe("2h");
+    expect(row.proposedLabel).toBe("1h");
+    expect(row.minTargetLabel).toBe("—");
+    expect(row.maxTargetLabel).toBe("7h");
   });
 
-  it("shows weighted remainder share, not an even split of the pool", () => {
+  it("shows weighted remainder share for max target", () => {
     const floor = baseGoal({ id: "floor", title: "Floored", minMinutesPerWeek: 120 });
     const eq = baseGoal({ id: "eq", title: "Equal" });
     const wt = baseGoal({
@@ -79,7 +89,10 @@ describe("goalAllocationRowDisplay", () => {
     const summary = summariseAllocation([floor, eq, wt], 614);
     const wtHint = summary.remainderHintByGoalId["wt"]!;
     expect(wtHint).toBe(246);
-    const { line } = goalAllocationRowDisplay(wt, summary, 1614);
-    expect(line).toBe(`26h 54m / — - ${formatMinutes(wtHint)}`);
+    const row = goalAllocationRowDisplay(wt, summary, { loggedMinutes: 800, proposedFutureMinutes: 814 });
+    expect(row.loggedLabel).toBe("13h 20m");
+    expect(row.proposedLabel).toBe("13h 34m");
+    expect(row.minTargetLabel).toBe("—");
+    expect(row.maxTargetLabel).toBe(formatMinutes(wtHint));
   });
 });

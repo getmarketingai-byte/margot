@@ -6,7 +6,9 @@ import {
   comparePreparedGoalsForPass3Placement,
   computeAllocationRemainderFractions,
   computePass2AllocMinutesFromShareOfWeek,
-  computeDayCalendarDrainScores
+  computeDayCalendarDrainScores,
+  loggedMinutesForGoal,
+  proposedFutureMinutesForGoal
 } from "../src/weekly";
 import type { PreparedGoal } from "../src/weekly";
 import type { AllocatedBlock } from "../src/weekly";
@@ -820,6 +822,37 @@ describe("allocateWeek", () => {
       endMs: weekStartMs + 13 * HOUR_MS
     };
     expect(achievedMinutesForGoal("overlap", [busy], [blockShifted], weekStartMs, weekEndMs)).toBe(180);
+  });
+
+  it("splits loggedMinutes vs proposedFutureMinutes (legacy overlap case)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const logStart = weekStartMs + 10 * HOUR_MS;
+    const logEnd = weekStartMs + 12 * HOUR_MS;
+    const busy: BusyEvent = {
+      sourceId: `daysheet-goal:overlap:${logStart}:${logEnd}`,
+      title: "Logged",
+      startMs: logStart,
+      endMs: logEnd,
+      busy: true,
+      source: "internal"
+    };
+    const block: AllocatedBlock = {
+      goalId: "overlap",
+      title: "Overlap",
+      startMs: logStart,
+      endMs: logEnd,
+      energyMode: "neutral"
+    };
+    const blockShifted: AllocatedBlock = {
+      ...block,
+      startMs: weekStartMs + 11 * HOUR_MS,
+      endMs: weekStartMs + 13 * HOUR_MS
+    };
+    expect(loggedMinutesForGoal("overlap", [busy], weekStartMs, weekEndMs)).toBe(120);
+    const nowMs = weekStartMs + 12 * HOUR_MS;
+    expect(proposedFutureMinutesForGoal("overlap", [blockShifted], weekStartMs, weekEndMs, nowMs)).toBe(60);
+    expect(proposedFutureMinutesForGoal("overlap", [block], weekStartMs, weekEndMs, weekStartMs)).toBe(120);
   });
 
   it("applies weekly and daily caps together when both are set", () => {

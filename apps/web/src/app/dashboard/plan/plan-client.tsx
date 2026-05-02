@@ -19,7 +19,8 @@ import {
   summaryChipsForGoal,
   formatMinutes,
   summariseAllocation,
-  type GoalAllocationRowSummary
+  type GoalAllocationRowSummary,
+  type GoalPlanMinutes
 } from "./goal-helpers";
 import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
@@ -72,7 +73,8 @@ interface PlanClientProps {
     busyTrueEventCount: number;
   };
   wheelAreas: WheelOption[];
-  scheduledByGoal: Record<string, number>;
+  /** Logged (day-sheet) vs proposed (future blocks) from `WeekMetrics.perGoal`. */
+  planMinutesByGoal: Record<string, { loggedMinutes: number; proposedFutureMinutes: number }>;
   effectiveTargetByGoal: Record<string, number>;
   /**
    * Per-goal pace info derived from this week's daily reviews. When omitted
@@ -124,7 +126,7 @@ export function PlanClient({
   remainingWeekMinutes,
   remainingFromNowMinutes,
   wheelAreas,
-  scheduledByGoal,
+  planMinutesByGoal,
   effectiveTargetByGoal,
   paceByGoal,
   goalGroupTitles
@@ -276,7 +278,7 @@ export function PlanClient({
               wheelAreas={wheelAreas}
               wheelLabel={wheelLabel}
               allocationSummary={summary}
-              scheduledMinutes={scheduledByGoal[goal.id]}
+              planMinutes={planMinutesByGoal[goal.id]}
               effectiveTarget={effectiveTargetByGoal[goal.id]}
               pace={paceByGoal?.[goal.id]}
               onUpdate={(next) => handleUpdate(goal.id, next)}
@@ -487,7 +489,7 @@ function GoalRow({
   wheelAreas,
   wheelLabel,
   allocationSummary,
-  scheduledMinutes,
+  planMinutes,
   effectiveTarget,
   pace,
   onUpdate,
@@ -505,7 +507,7 @@ function GoalRow({
   wheelAreas: WheelOption[];
   wheelLabel: (id: string) => string;
   allocationSummary: GoalAllocationRowSummary;
-  scheduledMinutes?: number;
+  planMinutes?: GoalPlanMinutes;
   effectiveTarget?: number;
   pace?: GoalPaceInfo;
   onUpdate: (next: GoalInput) => void;
@@ -541,10 +543,10 @@ function GoalRow({
   const draft: GoalDraft = draftDirty ?? extractDraft(goal);
 
   const allocationRow =
-    scheduledMinutes !== undefined &&
+    planMinutes !== undefined &&
     effectiveTarget !== undefined &&
     effectiveTarget > 0
-      ? goalAllocationRowDisplay(goal, allocationSummary, scheduledMinutes)
+      ? goalAllocationRowDisplay(goal, allocationSummary, planMinutes)
       : undefined;
 
   const shareOverBudget =
@@ -615,65 +617,135 @@ function GoalRow({
           ⋮⋮
         </button>
         <div className="flex flex-1 flex-col">
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="flex flex-1 flex-wrap items-center gap-2 text-left"
-            aria-expanded={expanded}
-          >
-            <span
-              aria-hidden
-              className="h-2.5 w-2.5 rounded-full"
-              style={{ backgroundColor: goalColor }}
-            />
-            <span className="text-sm font-medium" style={{ color: goalColor }}>
-              {goal.title}
-            </span>
-            {pace && pace.status !== "no-data" && (
-              <PacePill pace={pace} />
-            )}
-            {rowChips.length === 0 && hiddenChips.length === 0 && !(goal.groupIds?.length) ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
-                Equal share
-                {effectiveTarget && effectiveTarget > 0
-                  ? ` · ~${formatMinutes(effectiveTarget)}/wk`
-                  : ""}
+          <div className="flex flex-1 flex-wrap items-center gap-2 text-left min-w-0">
+            <div
+              role="button"
+              tabIndex={0}
+              aria-expanded={expanded}
+              onClick={() => setExpanded((v) => !v)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setExpanded((v) => !v);
+                }
+              }}
+              className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <span
+                aria-hidden
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: goalColor }}
+              />
+              <span className="text-sm font-medium" style={{ color: goalColor }}>
+                {goal.title}
               </span>
-            ) : (
+              {pace && pace.status !== "no-data" && <PacePill pace={pace} />}
+              {rowChips.length === 0 && hiddenChips.length === 0 && !(goal.groupIds?.length) ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
+                  Equal share
+                  {effectiveTarget && effectiveTarget > 0
+                    ? ` · ~${formatMinutes(effectiveTarget)}/wk`
+                    : ""}
+                </span>
+              ) : (
+                <>
+                  {rowChips.map((chip) => (
+                    <span
+                      key={chip.key}
+                      className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
+                    >
+                      {chip.label}
+                    </span>
+                  ))}
+                  {hiddenChips.length > 0 ? (
+                    <span
+                      title={hiddenChipSummary}
+                      className="inline-flex shrink-0 items-center rounded-full border border-dashed border-ink-200 px-1.5 py-0.5 text-[11px] tabular-nums text-ink-500 dark:border-ink-600 dark:text-ink-300"
+                    >
+                      +{hiddenChips.length}
+                    </span>
+                  ) : null}
+                  {(goal.groupIds ?? []).map((gid) => (
+                    <span
+                      key={`grp-${gid}`}
+                      title="Goal group — edit on Planner"
+                      className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent dark:text-accent"
+                    >
+                      {goalGroupTitles?.[gid] ?? gid.slice(0, 8)}
+                    </span>
+                  ))}
+                </>
+              )}
+            </div>
+            {allocationRow ? (
               <>
-                {rowChips.map((chip) => (
-                  <span
-                    key={chip.key}
-                    className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-600 dark:bg-ink-900/40 dark:text-ink-200"
+                <details className="group mt-0.5 w-full shrink-0 basis-full lg:hidden">
+                  <summary
+                    className="cursor-pointer list-none text-right text-[10px] leading-none text-ink-400/90 outline-none marker:content-none [&::-webkit-details-marker]:hidden focus-visible:ring-2 focus-visible:ring-accent/40"
+                    title={allocationRow.title}
+                    aria-label={`Schedule: logged ${allocationRow.loggedLabel}, proposed ${allocationRow.proposedLabel}, min ${allocationRow.minTargetLabel}, max ${allocationRow.maxTargetLabel}. Open for labels.`}
                   >
-                    {chip.label}
-                  </span>
-                ))}
-                {hiddenChips.length > 0 ? (
-                  <span
-                    title={hiddenChipSummary}
-                    className="inline-flex shrink-0 items-center rounded-full border border-dashed border-ink-200 px-1.5 py-0.5 text-[11px] tabular-nums text-ink-500 dark:border-ink-600 dark:text-ink-300"
-                  >
-                    +{hiddenChips.length}
-                  </span>
-                ) : null}
-                {(goal.groupIds ?? []).map((gid) => (
-                  <span
-                    key={`grp-${gid}`}
-                    title="Goal group — edit on Planner"
-                    className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent dark:text-accent"
-                  >
-                    {goalGroupTitles?.[gid] ?? gid.slice(0, 8)}
-                  </span>
-                ))}
+                    <span className="tabular-nums">
+                      {allocationRow.loggedLabel}
+                      <span className="px-1 text-ink-300/50" aria-hidden>
+                        ·
+                      </span>
+                      {allocationRow.proposedLabel}
+                      <span className="px-1 text-ink-300/50" aria-hidden>
+                        ·
+                      </span>
+                      {allocationRow.minTargetLabel}
+                      <span className="px-1 text-ink-300/50" aria-hidden>
+                        ·
+                      </span>
+                      {allocationRow.maxTargetLabel}
+                    </span>
+                  </summary>
+                  <dl className="mt-1 space-y-0.5 text-right text-[10px] leading-snug text-ink-500 dark:text-ink-400">
+                    <div className="flex justify-end gap-2">
+                      <dt className="font-normal text-ink-400/75">Logged</dt>
+                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.loggedLabel}</dd>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <dt className="font-normal text-ink-400/75">Proposed</dt>
+                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.proposedLabel}</dd>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <dt className="font-normal text-ink-400/75">Min</dt>
+                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.minTargetLabel}</dd>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <dt className="font-normal text-ink-400/75">Max</dt>
+                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.maxTargetLabel}</dd>
+                    </div>
+                  </dl>
+                </details>
+                <div
+                  className="mt-0.5 hidden text-ink-400 lg:ml-auto lg:mt-0 lg:flex lg:shrink-0"
+                  title={allocationRow.title}
+                >
+                  <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[10px] leading-none text-ink-400/85 [word-spacing:-0.02em] dark:text-ink-500">
+                    <span className="whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+                      <span className="font-normal text-ink-400/70">Logged </span>
+                      {allocationRow.loggedLabel}
+                    </span>
+                    <span className="whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+                      <span className="font-normal text-ink-400/70">Proposed </span>
+                      {allocationRow.proposedLabel}
+                    </span>
+                    <span className="whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+                      <span className="font-normal text-ink-400/70">Min </span>
+                      {allocationRow.minTargetLabel}
+                    </span>
+                    <span className="whitespace-nowrap tabular-nums">
+                      <span className="font-normal text-ink-400/70">Max </span>
+                      {allocationRow.maxTargetLabel}
+                    </span>
+                  </div>
+                </div>
               </>
-            )}
-            {allocationRow && (
-              <span className="ml-auto text-xs text-ink-400" title={allocationRow.title}>
-                {allocationRow.line}
-              </span>
-            )}
-          </button>
+            ) : null}
+          </div>
           {shareOverBudget ? (
             <p className="mt-1 text-right text-[11px] text-amber-700 dark:text-amber-300" role="status">
               Planner target is above this row&apos;s fair % of the week (or a simple even slice when

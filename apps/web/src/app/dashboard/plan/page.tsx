@@ -201,9 +201,15 @@ export default async function PlanPage() {
 
   const scheduledByGoal: Record<string, number> = {};
   const effectiveTargetByGoal: Record<string, number> = {};
+  const planMinutesByGoal: Record<string, { loggedMinutes: number; proposedFutureMinutes: number }> =
+    {};
   for (const [id, m] of Object.entries(allocation.metrics.perGoal)) {
     scheduledByGoal[id] = m.scheduledMinutes;
     effectiveTargetByGoal[id] = m.targetMinutes;
+    planMinutesByGoal[id] = {
+      loggedMinutes: m.loggedMinutes,
+      proposedFutureMinutes: m.proposedFutureMinutes
+    };
   }
 
   // Pace rollups: day-sheet vs final allocator targets for badges.
@@ -274,7 +280,7 @@ export default async function PlanPage() {
               remainingWeekMinutes={allocation.metrics.utilisation.availableMinutes}
               remainingFromNowMinutes={allocation.metrics.utilisation.availableFromNowMinutes}
               wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
-              scheduledByGoal={scheduledByGoal}
+              planMinutesByGoal={planMinutesByGoal}
               effectiveTargetByGoal={effectiveTargetByGoal}
               paceByGoal={paceByGoal}
               goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
