@@ -5,16 +5,13 @@
 
 import { NextResponse } from "next/server";
 import { authOrPreview } from "@/lib/auth";
-import { inngest } from "@/lib/inngest";
+import { requestUserRegenerate } from "@/lib/request-user-regenerate";
 
 export const runtime = "nodejs";
 
 export async function POST(): Promise<NextResponse> {
   const session = await authOrPreview();
   if (!session?.user?.id) return new NextResponse("Unauthorized", { status: 401 });
-  await inngest.send({
-    name: "user/regenerate.requested",
-    data: { userId: session.user.id, reason: "user" }
-  });
+  await requestUserRegenerate(session.user.id);
   return NextResponse.json({ queued: true });
 }

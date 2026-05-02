@@ -28,7 +28,7 @@ import {
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { refreshPlannedSnapshotsForCurrentWeek } from "@/lib/refresh-review-planned-snapshots";
-import { runRegenerateForUser } from "@/lib/regenerate-user-snapshot";
+import { requestUserRegenerate } from "@/lib/request-user-regenerate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 
 function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
@@ -311,6 +311,7 @@ export async function setBlockOverride(
   plan.overrides = [...filtered, parsed];
   await savePlan(userId, plan);
   afterPlanMutation(userId);
+  await requestUserRegenerate(userId);
 }
 
 /** Remove an override by `kind` + `key`. No-op if no matching override exists. */
@@ -328,6 +329,7 @@ export async function clearBlockOverride(
   if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
   afterPlanMutation(userId);
+  await requestUserRegenerate(userId);
 }
 
 /**
@@ -353,6 +355,7 @@ export async function setGoalBlockOverridesBatch(
   plan.overrides = next;
   await savePlan(userId, plan);
   afterPlanMutation(userId);
+  await requestUserRegenerate(userId);
 }
 
 /** Remove all goal drag overrides matching `keys` in one write (merged-bar reset). */
@@ -369,6 +372,7 @@ export async function clearGoalDragOverrides(keys: readonly string[]): Promise<v
   if (plan.overrides.length === before) return;
   await savePlan(userId, plan);
   afterPlanMutation(userId);
+  await requestUserRegenerate(userId);
 }
 
 function isActualGoalOverride(o: BlockOverride): boolean {
@@ -380,7 +384,7 @@ function isActualGoalOverride(o: BlockOverride): boolean {
  * "actual"`). Pairs each slot to the baseline allocator block with the
  * greatest time overlap on that day (each `dragKey` at most once). Falls back
  * to `plannedBlocksSnapshot` overlap when needed. Manual drag overrides are
- * preserved. Triggers snapshot regeneration so iCal stays in sync.
+ * preserved. Queues snapshot regeneration so iCal stays in sync.
  */
 export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
   const session = await authOrPreview();
@@ -526,7 +530,7 @@ export async function syncActualGoalOverridesFromDayLogs(): Promise<void> {
     await savePlan(userId, planFull);
     await refreshPlannedSnapshotsForCurrentWeek(userId, planFull, settings);
     afterPlanMutation(userId, { includeReviews: true });
-    await runRegenerateForUser(userId);
+    await requestUserRegenerate(userId);
   } catch (err) {
     console.warn("syncActualGoalOverridesFromDayLogs failed", err);
   }
