@@ -85,6 +85,15 @@ async function loadGroupOptions(userId: string): Promise<GroupOption[]> {
   return groups;
 }
 
+/** ICS `goal:` tags use block `goalId` — segment blocks use `segment:<id>`. */
+function segmentOptionsForFeeds(settings: Awaited<ReturnType<typeof loadSettings>>): GoalOption[] {
+  const segments = settings.consistency?.segments ?? [];
+  return segments
+    .filter((s) => s.id && s.title)
+    .map((s) => ({ id: `segment:${s.id}`, title: s.title }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
 async function toggleCalendar(formData: FormData): Promise<void> {
   "use server";
   const session = await authOrPreview();
@@ -277,6 +286,7 @@ export default async function CalendarsPage() {
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const goalOptions = await loadGoalOptions(userId);
+  const segmentOptions = segmentOptionsForFeeds(settings);
   let calendars: Awaited<ReturnType<typeof listGoogleCalendars>> = [];
   let calendarsLoadError = false;
   try {
@@ -463,6 +473,7 @@ export default async function CalendarsPage() {
                     <FeedRuleFields
                       defaults={rules.include}
                       goalOptions={goalOptions}
+                      segmentOptions={segmentOptions}
                       groupOptions={groupOptions}
                     />
                     <button type="submit" className="btn-primary w-fit text-sm">
@@ -476,7 +487,8 @@ export default async function CalendarsPage() {
             <div className="card flex flex-col gap-3 border-dashed">
               <div className="text-sm font-medium">New custom feed</div>
               <p className="text-xs text-ink-500">
-                Combine sleep, routines, gym, travel, goal groups, and more. Limit {CUSTOM_FEED_LIMIT}{" "}
+                Combine sleep, routines, gym, travel, specific goals or segments, goal groups, and more.
+                Limit {CUSTOM_FEED_LIMIT}{" "}
                 custom feeds per account.
               </p>
               {customFeedRows.length >= CUSTOM_FEED_LIMIT ? (
@@ -493,7 +505,11 @@ export default async function CalendarsPage() {
                       maxLength={120}
                     />
                   </label>
-                  <FeedRuleFields goalOptions={goalOptions} groupOptions={groupOptions} />
+                  <FeedRuleFields
+                    goalOptions={goalOptions}
+                    segmentOptions={segmentOptions}
+                    groupOptions={groupOptions}
+                  />
                   <button type="submit" className="btn-primary w-fit text-sm">
                     Create feed
                   </button>

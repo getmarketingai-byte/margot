@@ -9,10 +9,11 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import type { TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
+import type { GoalGroup, TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
 import Link from "next/link";
 import {
   STARTER_GOALS,
+  aggregateGroupConstraintSummariesForGoal,
   chipsForGoal,
   goalAllocationRowDisplay,
   goalExceedsDeclaredWeekShare,
@@ -84,6 +85,8 @@ interface PlanClientProps {
   paceByGoal?: Record<string, GoalPaceInfo>;
   /** Map goal-group id → title (from `WeeklyPlan.goalGroups`). */
   goalGroupTitles?: Record<string, string>;
+  /** Cohort definitions; used to show ∑ aggregate rules on each goal row. */
+  goalGroups?: readonly GoalGroup[];
   /** Soft-deleted goals (restore within 7 days). */
   initialDeletedGoals: TrashedGoalEntry[];
   /**
@@ -162,6 +165,7 @@ export function PlanClient({
   effectiveTargetByGoal,
   paceByGoal,
   goalGroupTitles,
+  goalGroups = [],
   goalIdsWithDaySheetHistory = []
 }: PlanClientProps) {
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(850);
@@ -350,6 +354,7 @@ export function PlanClient({
         weekCapacityFromNowMinutes={weekCapacityFromNowMinutes}
         remainingWeekMinutes={remainingWeekMinutes}
         remainingFromNowMinutes={remainingFromNowMinutes}
+        hasAnyGoalGroupMembership={summary.hasAnyGoalGroupMembership}
       />
 
       {goals.length === 0 ? (
@@ -376,6 +381,7 @@ export function PlanClient({
               focusedGoalId={focusRequest?.goalId}
               focusNonce={focusRequest?.nonce}
               goalGroupTitles={goalGroupTitles}
+              goalGroups={goalGroups}
             />
           ))}
           <li className="list-none">
@@ -477,13 +483,15 @@ function BudgetChip({
   capacityBreakdown,
   weekCapacityFromNowMinutes,
   remainingWeekMinutes,
-  remainingFromNowMinutes
+  remainingFromNowMinutes,
+  hasAnyGoalGroupMembership
 }: {
   summary: ReturnType<typeof summariseAllocation>;
   capacityBreakdown?: PlanClientProps["capacityBreakdown"];
   weekCapacityFromNowMinutes?: number;
   remainingWeekMinutes?: number;
   remainingFromNowMinutes?: number;
+  hasAnyGoalGroupMembership?: boolean;
 }) {
   if (summary.goalCount === 0) {
     return (
@@ -547,6 +555,13 @@ function BudgetChip({
           Sum of &quot;% of week&quot; constraints is {summary.allocationSharePercentSum}% (over 100%).
           The planner scales these down proportionally so the week still balances; lower some
           percentages so targets match what you intend.
+        </p>
+      ) : null}
+      {hasAnyGoalGroupMembership ? (
+        <p className="text-xs text-ink-500 dark:text-ink-400">
+          Weekly split hints above don&apos;t include <strong>goal-group</strong> pools (% and caps apply
+          to the <strong>sum</strong> of members). Use each goal&apos;s Max column (planner target) for
+          post-cohort numbers.
         </p>
       ) : null}
       {capacityBreakdown ? (
@@ -652,6 +667,11 @@ function PacePill({ pace }: { pace: GoalPaceInfo }) {
 
 /* ─────────────────────────── Goal row (collapsed + expanded) ─────────────── */
 
+function truncateCohortSummaryLine(line: string, maxChars = 44): string {
+  if (line.length <= maxChars) return line;
+  return `${line.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
 function GoalRow({
   goal,
   index,
@@ -669,7 +689,8 @@ function GoalRow({
   onDropAt,
   focusedGoalId,
   focusNonce,
-  goalGroupTitles
+  goalGroupTitles,
+  goalGroups = []
 }: {
   goal: WeeklyGoal;
   index: number;
@@ -688,6 +709,7 @@ function GoalRow({
   focusedGoalId?: string;
   focusNonce?: number;
   goalGroupTitles?: Record<string, string>;
+  goalGroups?: readonly GoalGroup[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editTitle, setEditTitle] = useState(goal.title);
@@ -712,11 +734,13 @@ function GoalRow({
 
   const draft: GoalDraft = draftDirty ?? extractDraft(goal);
 
+  const cohortSummaries = aggregateGroupConstraintSummariesForGoal(goal, goalGroups);
+
   const allocationRow =
     planMinutes !== undefined &&
     effectiveTarget !== undefined &&
     effectiveTarget > 0
-      ? goalAllocationRowDisplay(goal, allocationSummary, planMinutes)
+      ? goalAllocationRowDisplay(goal, allocationSummary, planMinutes, effectiveTarget)
       : undefined;
 
   const shareOverBudget =
@@ -844,6 +868,22 @@ function GoalRow({
                       {goalGroupTitles?.[gid] ?? gid.slice(0, 8)}
                     </span>
                   ))}
+                  {cohortSummaries.length > 0 ? (
+                    <span
+                      title={cohortSummaries.map((s) => s.line).join("\n")}
+                      className="inline-flex max-w-[min(100%,16rem)] shrink-0 items-center gap-1 truncate rounded-full border border-dashed border-accent/35 bg-accent/5 px-2 py-1 text-[11px] text-accent/95 dark:border-accent/40 dark:bg-accent/10 dark:text-accent"
+                    >
+                      <span className="shrink-0 font-medium" aria-hidden>
+                        ∑
+                      </span>
+                      <span className="min-w-0 truncate">
+                        {truncateCohortSummaryLine(cohortSummaries[0]!.line)}
+                        {cohortSummaries.length > 1
+                          ? ` +${cohortSummaries.length - 1}`
+                          : ""}
+                      </span>
+                    </span>
+                  ) : null}
                 </>
               )}
             </div>
@@ -966,6 +1006,22 @@ function GoalRow({
               defaultAllocationSharePercent={defaultAllocationSharePercent}
             />
           </div>
+          {cohortSummaries.length > 0 ? (
+            <div
+              className="mt-3 rounded-md border border-dashed border-accent/30 bg-accent/5 px-3 py-2 dark:border-accent/35 dark:bg-accent/10"
+              role="region"
+              aria-label="Cohort scheduling rules for this goal"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-accent/90 dark:text-accent">
+                Cohort rules (sum of group members)
+              </p>
+              <ul className="mt-1.5 list-disc space-y-1 pl-4 text-xs text-ink-600 dark:text-ink-300">
+                {cohortSummaries.map((s) => (
+                  <li key={s.groupId}>{s.line}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       )}
     </li>

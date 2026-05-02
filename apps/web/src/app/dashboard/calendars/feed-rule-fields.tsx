@@ -22,14 +22,35 @@ function LabeledCheckbox(props: {
   );
 }
 
+function GoalOrSegmentPick(props: {
+  value: string;
+  label: string;
+  defaultChecked: boolean;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-sm leading-snug">
+      <input
+        type="checkbox"
+        name="goalIds"
+        value={props.value}
+        defaultChecked={props.defaultChecked}
+      />
+      {props.label}
+    </label>
+  );
+}
+
 export function FeedRuleFields(props: {
   defaults?: IcsFeedRulesInclude;
   goalOptions: readonly { id: string; title: string }[];
+  /** IDs must be `segment:<segmentId>` to match ICS tags for reserved segment blocks. */
+  segmentOptions: readonly { id: string; title: string }[];
   groupOptions: readonly { id: string; title: string }[];
 }) {
   const inc = props.defaults ?? {};
-  const selGoals = inc.goalIds ?? [];
+  const selGoals = new Set(inc.goalIds ?? []);
   const selGroups = inc.groupIds ?? [];
+  const hasPickList = props.goalOptions.length > 0 || props.segmentOptions.length > 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -43,8 +64,57 @@ export function FeedRuleFields(props: {
         <LabeledCheckbox
           name="allGoalsAndSegments"
           label="All goal blocks & consistency segments"
+          hint="Turn this off to choose specific weekly goals and segments below."
           defaultChecked={Boolean(inc.allGoalsAndSegments)}
         />
+        {hasPickList ? (
+          <div className="ml-1 flex flex-col gap-2 border-l-2 border-ink-200 pl-3 dark:border-ink-600">
+            <p className="text-xs text-ink-500 dark:text-ink-400">
+              When &quot;All goal blocks &amp; consistency segments&quot; is off, only checked items
+              in this list contribute goal-like events (plus any goal groups you select further down).
+            </p>
+            {props.goalOptions.length ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400">
+                  Weekly goals
+                </span>
+                <div className="flex flex-col gap-1">
+                  {props.goalOptions.map((g) => (
+                    <GoalOrSegmentPick
+                      key={g.id}
+                      value={g.id}
+                      label={g.title}
+                      defaultChecked={selGoals.has(g.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {props.segmentOptions.length ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400">
+                  Consistency segments
+                </span>
+                <div className="flex flex-col gap-1">
+                  {props.segmentOptions.map((s) => (
+                    <GoalOrSegmentPick
+                      key={s.id}
+                      value={s.id}
+                      label={s.title}
+                      defaultChecked={selGoals.has(s.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-xs text-ink-500 dark:text-ink-400 pl-0.5">
+            Add weekly goals on the Planner or consistency segments in Settings to cherry-pick
+            individual blocks; until then, use the &quot;all&quot; option above for every goal-like
+            event.
+          </p>
+        )}
         <LabeledCheckbox
           name="sleep"
           label="Sleep"
@@ -98,29 +168,6 @@ export function FeedRuleFields(props: {
           defaultChecked={Boolean(inc.errand)}
         />
       </fieldset>
-
-      {props.goalOptions.length ? (
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-semibold text-ink-600 dark:text-ink-300">
-            Individual goals (optional)
-          </span>
-          <select
-            name="goalIds"
-            multiple
-            className="field min-h-[140px]"
-            defaultValue={selGoals}
-          >
-            {props.goalOptions.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.title}
-              </option>
-            ))}
-          </select>
-          <span className="text-xs text-ink-500">Hold Cmd/Ctrl to select several.</span>
-        </label>
-      ) : (
-        <p className="text-xs text-ink-500">Add weekly goals on the Planner to target specific goals.</p>
-      )}
 
       {props.groupOptions.length ? (
         <label className="flex flex-col gap-1">

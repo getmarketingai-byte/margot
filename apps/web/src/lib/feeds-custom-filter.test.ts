@@ -86,6 +86,24 @@ describe("filterEventsForCustomRules", () => {
     expect(out.map((e) => e.uid)).toEqual(["u2"]);
   });
 
+  it("targets a consistency segment by segment-prefixed goal id", () => {
+    const segEvents: GeneratedEvent[] = [
+      ev({
+        uid: "seg1",
+        kind: "consistency-segment",
+        title: "Morning block",
+        startMs: 0,
+        endMs: 1,
+        tags: ["goal:segment:seg-a", "neutral"]
+      })
+    ];
+    const out = filterEventsForCustomRules(segEvents, {
+      version: 1,
+      include: { goalIds: ["segment:seg-a"] }
+    });
+    expect(out.map((e) => e.uid)).toEqual(["seg1"]);
+  });
+
   it("matches weather overlay", () => {
     const out = filterEventsForCustomRules(events, {
       version: 1,

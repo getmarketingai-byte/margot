@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
+import type { AllocatedBlock, BusyEvent, WeekMetrics } from "@calendar-automations/planner";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
   type FrameworkRegistryId,
   type FrameworkSystem,
+  type GoalGroup,
   type WeeklyGoal
 } from "@calendar-automations/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
@@ -14,12 +15,35 @@ import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRef
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { WEEK_MS } from "@/lib/effective-schedule-horizon";
 import { WeekCalendar } from "../week-calendar";
+import { formatMinutes, goalGroupAggregateSummaryLine } from "./goal-helpers";
 
 type CalendarRangeMode = "calendar-week" | "next-7-days";
 
 const STORAGE_KEY = "dashboard.plan.calendar.rangeMode";
 const WEATHER_STORAGE_KEY = "dashboard.plan.calendar.showWeather";
 const INVERTED_TIMEMAP_STORAGE_KEY = "dashboard.plan.calendar.invertedTimemapVisibility";
+
+const DOW_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+
+function formatGoalGroupGapLine(
+  gap: WeekMetrics["goalGroupGaps"][number],
+  groupTitle: string
+): string {
+  const m = formatMinutes(Math.max(0, Math.round(gap.shortMinutes)));
+  switch (gap.reason) {
+    case "weeklyCap":
+      return `${groupTitle}: cohort weekly cap leaves ~${m} unmet across members (after floors).`;
+    case "weeklyFloor":
+      return `${groupTitle}: cohort weekly floor short ~${m}.`;
+    case "dailyCap": {
+      const day =
+        gap.dayIndex !== undefined && gap.dayIndex >= 0 && gap.dayIndex < 7
+          ? DOW_SHORT[gap.dayIndex]
+          : "one day";
+      return `${groupTitle}: on ${day}, cohort combined time exceeds the daily cap by ~${m}.`;
+    }
+  }
+}
 
 function loadInvertedVisibilityMap(): Record<string, boolean> {
   try {
@@ -97,7 +121,10 @@ export function RangeToggleCalendar({
   compact,
   schedulingGoals,
   frameworkSystem,
-  wheelAreas
+  wheelAreas,
+  goalGroups = [],
+  goalGroupGaps = [],
+  goalGroupMinutes = {}
 }: {
   weekStartMs: number;
   calendarWeekStartsMs?: readonly number[];
@@ -111,6 +138,9 @@ export function RangeToggleCalendar({
   schedulingGoals?: readonly WeeklyGoal[];
   frameworkSystem?: FrameworkSystem;
   wheelAreas?: ReadonlyArray<{ id: string; label: string }>;
+  goalGroups?: readonly GoalGroup[];
+  goalGroupGaps?: ReadonlyArray<WeekMetrics["goalGroupGaps"][number]>;
+  goalGroupMinutes?: Readonly<Record<string, number>>;
 }) {
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(750);
   const [timePatch, setTimePatch] = useState<Record<string, { startMs: number; endMs: number }>>({});
@@ -426,6 +456,82 @@ export function RangeToggleCalendar({
           );
         })}
       </div>
+      {goalGroupGaps.length > 0 ? (
+        <div
+          className="mx-1 mt-2 rounded-md border border-amber-300/50 bg-amber-500/10 px-2 py-2 text-[11px] text-amber-950 dark:border-amber-700/40 dark:bg-amber-500/15 dark:text-amber-100"
+          role="status"
+        >
+          <div className="font-semibold">Goal-group pressure</div>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {goalGroupGaps.map((gap, i) => {
+              const title =
+                goalGroups.find((g) => g.id === gap.groupId)?.title ?? gap.groupId.slice(0, 8);
+              return (
+                <li key={`${gap.groupId}-${gap.reason}-${String(gap.dayIndex ?? "w")}-${i}`}>
+                  {formatGoalGroupGapLine(gap, title)}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+      {goalGroups.length > 0 && schedulingGoals?.length ? (
+        <details className="mt-2 px-1 text-xs">
+          <summary className="cursor-pointer font-medium text-ink-600 dark:text-ink-300">
+            Goal groups
+          </summary>
+          <ul className="mt-2 flex flex-col gap-2">
+            {goalGroups.map((grp) => {
+              const members = (schedulingGoals ?? []).filter((g) => g.groupIds?.includes(grp.id));
+              const line = goalGroupAggregateSummaryLine(grp);
+              const totalMin = goalGroupMinutes[grp.id];
+              return (
+                <li
+                  key={grp.id}
+                  className="rounded-md border border-ink-200/80 p-2 dark:border-ink-600"
+                >
+                  <div className="font-medium text-ink-800 dark:text-ink-100">{grp.title}</div>
+                  {line ? (
+                    <div className="mt-0.5 text-[11px] leading-snug text-ink-600 dark:text-ink-300">
+                      {line}
+                    </div>
+                  ) : null}
+                  {totalMin !== undefined && totalMin > 0 ? (
+                    <div className="mt-0.5 text-[11px] tabular-nums text-ink-500 dark:text-ink-400">
+                      Achieved this week (sum of members): {formatMinutes(Math.round(totalMin))}
+                    </div>
+                  ) : null}
+                  {members.length > 0 ? (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {members.map((g) => {
+                        const short =
+                          g.title.length > 22 ? `${g.title.slice(0, 20).trimEnd()}…` : g.title;
+                        return (
+                          <span
+                            key={g.id}
+                            className="inline-flex max-w-[11rem] items-center gap-1 truncate rounded border border-ink-200 px-1.5 py-0.5 text-[10px] dark:border-ink-600"
+                          >
+                            <span
+                              aria-hidden
+                              className="h-2 w-2 shrink-0 rounded-sm border border-ink-300/60 dark:border-ink-500/60"
+                              style={{ backgroundColor: goalColorFromKey(g.id) }}
+                            />
+                            <span className="truncate">{short}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-ink-400 dark:text-ink-500">
+                      No member goals in this planner list.
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      ) : null}
       {taggableFrameworkRows.length > 0 && schedulingGoals?.length ? (
         <div className="flex flex-wrap items-center gap-1 px-1 text-xs">
           {taggableFrameworkRows.map((row) => {

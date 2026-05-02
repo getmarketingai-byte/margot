@@ -326,6 +326,7 @@ export default async function PlanPage() {
               effectiveTargetByGoal={effectiveTargetByGoal}
               paceByGoal={paceByGoal}
               goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
+              goalGroups={plan.goalGroups ?? []}
               goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
             />
 
@@ -371,6 +372,9 @@ export default async function PlanPage() {
                   schedulingGoals={schedulingGoals}
                   frameworkSystem={settings.frameworkSystem}
                   wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
+                  goalGroups={plan.goalGroups ?? []}
+                  goalGroupGaps={allocation.metrics.goalGroupGaps}
+                  goalGroupMinutes={allocation.metrics.goalGroupMinutes}
                 />
               </div>
               <details className="card lg:hidden" open>
@@ -388,6 +392,9 @@ export default async function PlanPage() {
                     schedulingGoals={schedulingGoals}
                     frameworkSystem={settings.frameworkSystem}
                     wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
+                    goalGroups={plan.goalGroups ?? []}
+                    goalGroupGaps={allocation.metrics.goalGroupGaps}
+                    goalGroupMinutes={allocation.metrics.goalGroupMinutes}
                   />
                 </div>
               </details>
@@ -411,7 +418,10 @@ function CalendarPreview({
   compact,
   schedulingGoals,
   frameworkSystem,
-  wheelAreas
+  wheelAreas,
+  goalGroups,
+  goalGroupGaps,
+  goalGroupMinutes
 }: {
   weekStartMs: number;
   calendarWeekStartsMs?: readonly number[];
@@ -425,6 +435,9 @@ function CalendarPreview({
   schedulingGoals: Parameters<typeof RangeToggleCalendar>[0]["schedulingGoals"];
   frameworkSystem: Parameters<typeof RangeToggleCalendar>[0]["frameworkSystem"];
   wheelAreas: Parameters<typeof RangeToggleCalendar>[0]["wheelAreas"];
+  goalGroups?: Parameters<typeof RangeToggleCalendar>[0]["goalGroups"];
+  goalGroupGaps?: Parameters<typeof RangeToggleCalendar>[0]["goalGroupGaps"];
+  goalGroupMinutes?: Parameters<typeof RangeToggleCalendar>[0]["goalGroupMinutes"];
 }) {
   return (
     <RangeToggleCalendar
@@ -440,6 +453,9 @@ function CalendarPreview({
       schedulingGoals={schedulingGoals}
       frameworkSystem={frameworkSystem}
       wheelAreas={wheelAreas}
+      goalGroups={goalGroups}
+      goalGroupGaps={goalGroupGaps}
+      goalGroupMinutes={goalGroupMinutes}
     />
   );
 }

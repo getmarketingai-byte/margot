@@ -11,6 +11,7 @@ import type {
   AttentionMode,
   EnergyMode,
   EnergyPolarity,
+  GoalGroup,
   PpfPillarKey,
   SpecialGoalType,
   WeeklyGoal,
@@ -277,6 +278,8 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
    * Goals with a weekly floor and no `% share` are omitted — they do not take remainder.
    */
   remainderHintByGoalId: Record<string, number>;
+  /** True when any scheduling goal references at least one goal group. */
+  hasAnyGoalGroupMembership: boolean;
 } {
   const schedulingGoals = filterSchedulingGoals(goals);
   const hasWeightedShare = schedulingGoals.some((g) => g.allocationSharePercent !== undefined);
@@ -321,6 +324,8 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
     }
   }
 
+  const hasAnyGoalGroupMembership = schedulingGoals.some((g) => (g.groupIds?.length ?? 0) > 0);
+
   return {
     freeMinutes,
     goalCount: schedulingGoals.length,
@@ -332,7 +337,8 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
     allocationSharePercentSum,
     allocationSharePercentOverflow,
     equalSliceOfWeekMinutes,
-    remainderHintByGoalId
+    remainderHintByGoalId,
+    hasAnyGoalGroupMembership
   };
 }
 
@@ -347,6 +353,7 @@ export type GoalAllocationRowSummary = Pick<
   | "allocationSharePercentOverflow"
   | "allocationSharePercentSum"
   | "freeMinutes"
+  | "hasAnyGoalGroupMembership"
 >;
 
 /** Day-sheet vs future blocks from the planner (see `WeekMetrics.perGoal`). */
@@ -364,14 +371,103 @@ export type GoalAllocationRowDisplay = {
   title: string;
 };
 
+const PLANNER_VS_HINT_SLACK_MIN = 15;
+
+function aggregateSchedulingPartsForGoalGroup(grp: GoalGroup): string[] {
+  const parts: string[] = [];
+  if (grp.minMinutesPerWeek !== undefined) {
+    parts.push(`∑ ≥ ${formatMinutes(grp.minMinutesPerWeek)}/wk`);
+  }
+  if (grp.maxMinutesPerWeek !== undefined) {
+    parts.push(`∑ ≤ ${formatMinutes(grp.maxMinutesPerWeek)}/wk`);
+  }
+  if (grp.minMinutesPerDay !== undefined) {
+    parts.push(`∑ ≥ ${formatMinutes(grp.minMinutesPerDay)}/day`);
+  }
+  if (grp.maxMinutesPerDay !== undefined) {
+    parts.push(`∑ ≤ ${formatMinutes(grp.maxMinutesPerDay)}/day`);
+  }
+  if (grp.allocationSharePercent !== undefined) {
+    parts.push(`∑ ${grp.allocationSharePercent}% of week`);
+  }
+  if (grp.frequencyPerWeek !== undefined) {
+    parts.push(`∑ ${grp.frequencyPerWeek}×/wk`);
+  }
+  const pinnedDays = grp.daysOfWeek?.length
+    ? grp.daysOfWeek
+    : grp.dayOfWeek
+      ? [grp.dayOfWeek]
+      : [];
+  if (pinnedDays.length > 0) {
+    parts.push(`∑ ${pinnedDays.map((d) => DAY_LABELS[d] ?? d).join(" ")}`);
+  }
+  if (grp.earliestHour !== undefined || grp.latestHour !== undefined) {
+    const e =
+      grp.earliestHour !== undefined ? `${grp.earliestHour}:00` : "…";
+    const l = grp.latestHour !== undefined ? `${grp.latestHour}:00` : "…";
+    parts.push(`∑ ${e}–${l}`);
+  }
+  if (grp.scheduleInNiceWeather === true) {
+    parts.push("∑ Nice weather");
+  }
+  if (grp.placementIdealClockTimes && grp.placementIdealClockTimes.length > 0) {
+    const labels = grp.placementIdealClockTimes.map(
+      (t) => `${t.hour}:${String(t.minute).padStart(2, "0")}`
+    );
+    const shown = labels.slice(0, 3).join(", ");
+    parts.push(
+      labels.length > 3 ? `∑ Ideal ~${shown}…` : `∑ Ideal ${shown}`
+    );
+  }
+  return parts;
+}
+
+/** One-line cohort rule summary for a goal group (no title prefix). Null when no scheduling fields set. */
+export function goalGroupAggregateSummaryLine(group: GoalGroup): string | null {
+  const parts = aggregateSchedulingPartsForGoalGroup(group);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+export interface AggregateGroupConstraintSummary {
+  groupId: string;
+  /** e.g. "Screens: ∑ ≤ 8h/wk · ∑ ≤ 2h/day" */
+  line: string;
+}
+
+/**
+ * Human-readable aggregate constraint lines for each goal group this goal belongs to.
+ * Empty when the goal has no groups or groups have no scheduling fields.
+ */
+export function aggregateGroupConstraintSummariesForGoal(
+  goal: WeeklyGoal,
+  goalGroups: readonly GoalGroup[]
+): AggregateGroupConstraintSummary[] {
+  const ids = goal.groupIds ?? [];
+  if (ids.length === 0 || goalGroups.length === 0) return [];
+  const byId = new Map(goalGroups.map((g) => [g.id, g] as const));
+  const out: AggregateGroupConstraintSummary[] = [];
+  for (const gid of ids) {
+    const grp = byId.get(gid);
+    if (!grp) continue;
+    const parts = aggregateSchedulingPartsForGoalGroup(grp);
+    if (parts.length === 0) continue;
+    out.push({ groupId: grp.id, line: `${grp.title}: ${parts.join(" · ")}` });
+  }
+  return out;
+}
+
 /**
  * Builds labels for the collapsed goals-list row: four values — day-sheet logged time,
  * allocator blocks from now through week end, weekly minimum, and weekly maximum or Pass-2 share hint.
+ *
+ * When `plannerTargetMinutes` is set (&gt; 0), the **Max** column matches the planner’s weekly target
+ * for this goal (after weekly goal-group caps). Otherwise the max follows field hints and budget chips only.
  */
 export function goalAllocationRowDisplay(
   goal: WeeklyGoal,
   summary: GoalAllocationRowSummary,
-  planMinutes: GoalPlanMinutes
+  planMinutes: GoalPlanMinutes,
+  plannerTargetMinutes?: number
 ): GoalAllocationRowDisplay {
   const norm = normaliseGoalTime(goal);
   const minFloor = norm.minMinutesPerWeek ?? 0;
@@ -382,7 +478,7 @@ export function goalAllocationRowDisplay(
   const hasPerGoalHints = hintMap !== undefined;
   const idHint = hasPerGoalHints && Object.hasOwn(hintMap, goal.id) ? hintMap[goal.id] : undefined;
 
-  const maxMinutes =
+  const heuristicMaxMinutes =
     hasExplicitWeeklyMax
       ? norm.maxMinutesPerWeek!
       : idHint !== undefined
@@ -391,8 +487,16 @@ export function goalAllocationRowDisplay(
           ? summary.perEqualShareMinutes
           : undefined;
 
-  const maxTargetLabel =
-    maxMinutes !== undefined ? formatMinutes(Math.max(maxMinutes, 0)) : "—";
+  const usePlannerTarget =
+    plannerTargetMinutes !== undefined &&
+    plannerTargetMinutes > 0 &&
+    Number.isFinite(plannerTargetMinutes);
+
+  const maxTargetLabel = usePlannerTarget
+    ? formatMinutes(Math.max(0, Math.round(plannerTargetMinutes!)))
+    : heuristicMaxMinutes !== undefined
+      ? formatMinutes(Math.max(heuristicMaxMinutes, 0))
+      : "—";
 
   const loggedLabel = formatMinutes(planMinutes.loggedMinutes);
   const proposedLabel = formatMinutes(planMinutes.proposedFutureMinutes);
@@ -401,17 +505,31 @@ export function goalAllocationRowDisplay(
     ? "weekly ceiling"
     : hasPerGoalHints && idHint !== undefined
       ? "your approximate share after weekly minimums (% of full-week schedulable time, capped by what is left — same as planner Pass 2)"
-      : maxMinutes !== undefined
+      : heuristicMaxMinutes !== undefined
         ? "approx. minutes each unconstrained goal would get after minimums reserve time (budget chip)"
         : "";
+
   let title =
     "Logged: day-sheet time this week. Proposed: planner blocks from now through end of week (merged). ";
   title +=
     "Logged and proposed can occupy the same clock time — Total achieved uses one merged count elsewhere. ";
   title += `Min target: ${minFloor > 0 ? "weekly floor" : "none"}. `;
-  title += `Max target: ${
-    maxMinutes !== undefined ? `${maxTargetLabel} (${thirdExplain})` : "not set for this row"
-  }.`;
+
+  if (usePlannerTarget) {
+    title += `Max target: ${maxTargetLabel} — allocator weekly target for this goal (after Pass 1–2 and weekly goal-group caps; day-sheet credit affects placement demand separately).`;
+    if (
+      heuristicMaxMinutes !== undefined &&
+      heuristicMaxMinutes - plannerTargetMinutes! > PLANNER_VS_HINT_SLACK_MIN
+    ) {
+      title += ` A field- and chip-only estimate would be up to ${formatMinutes(Math.max(0, heuristicMaxMinutes))} (${thirdExplain || "hint"}), higher because local hints ignore cohort pools.`;
+    }
+  } else {
+    title += `Max target: ${
+      heuristicMaxMinutes !== undefined
+        ? `${maxTargetLabel} (${thirdExplain})`
+        : "not set for this row"
+    }.`;
+  }
 
   if (goal.allocationSharePercent !== undefined) {
     title +=
