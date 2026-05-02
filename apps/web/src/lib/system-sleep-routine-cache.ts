@@ -34,7 +34,9 @@ export function fingerprintSleepRoutineInputs(params: {
       b: e.busy,
       loc: e.location ?? null,
       src: e.source ?? null,
-      t: e.title ?? ""
+      t: e.title ?? "",
+      /** Bust cache when calendar display names appear or change on busy rows. */
+      cdn: e.calendarDisplayName ?? ""
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 

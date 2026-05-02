@@ -226,6 +226,7 @@ describe("computeSleepBlocks + timemap routines", () => {
     const calendarWork: BusyEvent = {
       sourceId: "cal-neutrino",
       title: "Neutrino Code",
+      calendarDisplayName: "Work calendar",
       startMs: tue5am,
       endMs: tue6am,
       busy: true,
@@ -244,6 +245,7 @@ describe("computeSleepBlocks + timemap routines", () => {
     expect(monNight).toBeDefined();
     expect(monNight!.title).not.toBe("Sleep");
     expect(monNight!.title).toContain("conflicts:");
+    expect(monNight!.title).toContain("Work calendar");
   });
 
   it("includes sleep for nights whose wake is already past (full-week busy budget)", () => {

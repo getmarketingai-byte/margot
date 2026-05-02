@@ -26,6 +26,7 @@ import {
   formatSleepBlockTitle,
   gymTravelPadMinutesForGoal,
   mergeIntervals,
+  PLANNER_TRAVEL_BUSY_CALENDAR,
   placeSleepBlock
 } from "@calendar-automations/planner";
 import type { AllocatedBlock, BusyEvent, Interval } from "@calendar-automations/planner";
@@ -285,6 +286,7 @@ export async function computeTravelBlocks(
       out.push({
         sourceId: `${ev.sourceId}-drive-pre`,
         title: `${tag} → ${ev.title}`,
+        calendarDisplayName: PLANNER_TRAVEL_BUSY_CALENDAR,
         startMs: preEnd - (driveMin * MINUTE_MS + evArriveBuffer),
         endMs: preEnd,
         busy: true,
@@ -302,6 +304,7 @@ export async function computeTravelBlocks(
       out.push({
         sourceId: `${ev.sourceId}-drive-post`,
         title: `${tag} ← ${ev.title}`,
+        calendarDisplayName: PLANNER_TRAVEL_BUSY_CALENDAR,
         startMs: ev.endMs,
         endMs: ev.endMs + postMin * MINUTE_MS,
         busy: true,
@@ -332,6 +335,7 @@ export async function computeTravelBlocks(
       out.push({
         sourceId: `${ev.sourceId}-direct-${next.sourceId}`,
         title: `${tag} ${ev.title} → ${next.title}`,
+        calendarDisplayName: PLANNER_TRAVEL_BUSY_CALENDAR,
         startMs: decision.startMs,
         endMs: decision.endMs,
         busy: true,
@@ -349,6 +353,7 @@ export async function computeTravelBlocks(
     out.push({
       sourceId: `${ev.sourceId}-drive-post`,
       title: `${tag} ← ${ev.title}`,
+      calendarDisplayName: PLANNER_TRAVEL_BUSY_CALENDAR,
       startMs: ev.endMs,
       endMs: ev.endMs + postMin * MINUTE_MS,
       busy: true,

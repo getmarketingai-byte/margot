@@ -114,6 +114,19 @@ describe("placeSleepBlock", () => {
     expect(block.targetHadOverlap).toBe(true);
   });
 
+  it("suffixes Planner travel on drive-only overlap trace titles", () => {
+    const drive: BusyEvent = {
+      ...ev(24 * HOUR + 6 * HOUR, 24 * HOUR + 7 * HOUR + 30 * 60 * 1000, "[Drive] → Work"),
+      source: "internal"
+    };
+    const result = placeSleepBlock(NIGHT_START, NIGHT_END, [drive], baseSleep, {
+      targetEndMs: IDEAL_WAKE
+    });
+    const block = result[0]!;
+    expect(block.targetOverlapTitle).toBeNull();
+    expect(block.targetOverlapTraceTitle).toBe("[Drive] → Work · Planner travel");
+  });
+
   it("splits across two large gaps when no single gap fits", () => {
     // Mid-night gym shift 02:00-04:00 leaves two ~5h gaps either side.
     const shift = ev(24 * HOUR + 2 * HOUR, 24 * HOUR + 4 * HOUR, "Shift");

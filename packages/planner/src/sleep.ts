@@ -30,7 +30,7 @@
 
 import type { SleepSettings } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
-import { displayBusyEventLabel } from "./busy-label";
+import { sleepConflictBusyLabel } from "./busy-label";
 import { collectBusyIntervals, freeGaps } from "./intervals";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -69,7 +69,7 @@ function targetOverlapMeta(
     if (!(ev.startMs < targetEndMs && ev.endMs > targetStartMs)) continue;
     hadOverlap = true;
     const raw = (ev.title || "").trim();
-    const label = displayBusyEventLabel(ev);
+    const label = sleepConflictBusyLabel(ev);
     if (!bestAny || ev.endMs > bestAny.endMs) bestAny = { endMs: ev.endMs, title: label };
     if (isTravelLikeConflictTitle(raw)) continue;
     if (!bestNonTravel || ev.endMs > bestNonTravel.endMs) bestNonTravel = { endMs: ev.endMs, title: label };
@@ -127,7 +127,7 @@ export function formatSleepBlockTitle(p: PlacedSleep, idealDurationHours: number
   if (p.placement !== "target") {
     const conflictLabel = p.targetOverlapTitle ?? p.targetOverlapTraceTitle;
     if (conflictLabel) {
-      parts.push(`conflicts: ${truncateTitle(conflictLabel, 72)}`);
+      parts.push(`conflicts: ${truncateTitle(conflictLabel, 96)}`);
     } else if (p.targetHadOverlap) {
       parts.push("moved; overlap (unlabelled)");
     }
