@@ -9,7 +9,8 @@ import {
   ConstraintCard,
   IdealClockTimesField,
   normaliseIdealClockTimes,
-  SessionsPerWeekField
+  SessionsPerWeekField,
+  WeekdayToggleGrid
 } from "@/components/scheduling-constraints";
 import {
   chipsForGoal,
@@ -19,16 +20,6 @@ import {
 import { upsertGoalGroup, removeGoalGroup, patchGoal } from "../plan/actions";
 
 type GroupDraft = Omit<GoalGroup, "id" | "title">;
-
-const DAY_OPTIONS = [
-  { value: "monday" as const, label: "Mon" },
-  { value: "tuesday" as const, label: "Tue" },
-  { value: "wednesday" as const, label: "Wed" },
-  { value: "thursday" as const, label: "Thu" },
-  { value: "friday" as const, label: "Fri" },
-  { value: "saturday" as const, label: "Sat" },
-  { value: "sunday" as const, label: "Sun" }
-];
 
 function emptyDraft(): GroupDraft {
   return {};
@@ -61,25 +52,32 @@ function DurationField({
   const thumb = Math.min(max, Math.max(min, value ?? 0));
   return (
     <div className="flex flex-col gap-2 text-xs">
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-2">
         <input
           type="number"
           min={0}
           step={unit === "hours" ? 0.25 : 15}
           value={display}
           onChange={(e) => onInput(e.target.value)}
-          className="field flex-1"
+          className="field !w-auto min-w-[6rem] flex-1 basis-0 tabular-nums"
         />
         <select
           value={unit}
           onChange={(e) => setUnit(e.target.value as "hours" | "minutes")}
-          className="field"
+          className="field !w-auto shrink-0"
           aria-label="Unit"
         >
           <option value="hours">h</option>
           <option value="minutes">m</option>
         </select>
       </div>
+      {value !== undefined ? (
+        <p className="text-[11px] font-medium tabular-nums text-ink-700 dark:text-ink-200">
+          {formatMinutes(value)}
+        </p>
+      ) : (
+        <p className="text-[11px] text-ink-400">No duration set</p>
+      )}
       <input
         type="range"
         min={min}
@@ -88,6 +86,7 @@ function DurationField({
         value={thumb}
         onChange={(e) => onChange(Number(e.target.value))}
         className="h-2 w-full cursor-pointer accent-accent"
+        aria-valuetext={value !== undefined ? formatMinutes(value) : undefined}
       />
       {hint ? <span className="text-[11px] text-ink-400">{hint}</span> : null}
     </div>
@@ -340,34 +339,10 @@ function GroupConstraintEditors({
         />
       </ConstraintCard>
       <ConstraintCard label="Pinned weekdays" className="sm:col-span-2" onRemove={() => onPatch({ daysOfWeek: undefined })}>
-        <div className="grid grid-cols-7 gap-1">
-          {DAY_OPTIONS.map((d) => {
-            const pinned = group.daysOfWeek?.includes(d.value) ?? false;
-            return (
-              <label
-                key={d.value}
-                className={`flex cursor-pointer items-center justify-center rounded border px-1 py-1 text-[11px] ${
-                  pinned
-                    ? "border-accent bg-accent text-accent-fg"
-                    : "border-ink-200 hover:border-accent/40 dark:border-ink-600"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  className="sr-only"
-                  checked={pinned}
-                  onChange={(e) => {
-                    const next = e.target.checked
-                      ? [...(group.daysOfWeek ?? []), d.value]
-                      : (group.daysOfWeek ?? []).filter((x) => x !== d.value);
-                    onPatch({ daysOfWeek: next.length ? next : undefined });
-                  }}
-                />
-                {d.label}
-              </label>
-            );
-          })}
-        </div>
+        <WeekdayToggleGrid
+          selected={group.daysOfWeek}
+          onChange={(next) => onPatch({ daysOfWeek: next?.length ? next : undefined })}
+        />
       </ConstraintCard>
       <ConstraintCard label="Earliest hour" onRemove={() => onPatch({ earliestHour: undefined })}>
         <input

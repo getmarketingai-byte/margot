@@ -4,5 +4,5 @@ export {
   normaliseIdealClockTimes,
   type IdealClockTime
 } from "./ideal-clock-times-field";
-export { PlannerWeekdaysField } from "./planner-weekdays-field";
 export { SessionsPerWeekField } from "./sessions-per-week-field";
+export { WEEKDAY_TOGGLE_OPTIONS, WeekdayToggleGrid } from "./weekday-toggle-grid";

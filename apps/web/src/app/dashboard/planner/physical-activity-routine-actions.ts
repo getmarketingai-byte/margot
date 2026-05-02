@@ -39,14 +39,48 @@ export async function savePhysicalActivityRoutine(formData: FormData): Promise<v
 
   const plannerBlockEnabled = formData.get("planner_block_enabled") === "on";
   const blockLabel = String(formData.get("block_label") ?? "").trim() || "Physical activity";
-  const sessionsPerWeek = Math.max(
-    1,
-    Math.min(14, Number(formData.get("sessions_per_week") ?? settings.gym.sessionsPerWeek))
+  const cadenceFb = settings.gym.sessionsPerWeek;
+  const parseCadence = (key: string, fallback: number): number => {
+    const raw = Number(formData.get(key));
+    const base = Number.isFinite(raw) ? raw : fallback;
+    return Math.max(1, Math.min(14, Math.round(base)));
+  };
+  let sessionsPerWeekMin = parseCadence(
+    "sessions_per_week_min",
+    settings.gym.sessionsPerWeekMin ?? cadenceFb
   );
-  const runMinutes = Math.max(
-    1,
-    Math.min(240, Number(formData.get("run_minutes") ?? settings.gym.runMinutes))
+  let sessionsPerWeekMax = parseCadence(
+    "sessions_per_week_max",
+    settings.gym.sessionsPerWeekMax ?? cadenceFb
   );
+  if (sessionsPerWeekMin > sessionsPerWeekMax) {
+    const t = sessionsPerWeekMin;
+    sessionsPerWeekMin = sessionsPerWeekMax;
+    sessionsPerWeekMax = t;
+  }
+  /** Legacy field: upper cadence bound for older readers. */
+  const sessionsPerWeek = sessionsPerWeekMax;
+  const runFb = settings.gym.runMinutes;
+  const parseSessionMins = (key: string, fallback: number): number => {
+    const raw = Number(formData.get(key));
+    const base = Number.isFinite(raw) ? raw : fallback;
+    return Math.max(1, Math.min(240, Math.round(base)));
+  };
+  let sessionMinutesMin = parseSessionMins(
+    "session_minutes_min",
+    settings.gym.sessionMinutesMin ?? runFb
+  );
+  let sessionMinutesMax = parseSessionMins(
+    "session_minutes_max",
+    settings.gym.sessionMinutesMax ?? runFb
+  );
+  if (sessionMinutesMin > sessionMinutesMax) {
+    const t = sessionMinutesMin;
+    sessionMinutesMin = sessionMinutesMax;
+    sessionMinutesMax = t;
+  }
+  /** Legacy single field: upper bound matches longest session for drive/travel hints. */
+  const runMinutes = sessionMinutesMax;
   const parsedTimes = parseIdealTimesJson(formData.get("ideal_times_json"));
   const idealBlockTimes = parsedTimes ?? settings.gym.idealBlockTimes;
 
@@ -76,7 +110,11 @@ export async function savePhysicalActivityRoutine(formData: FormData): Promise<v
       plannerBlockEnabled,
       blockLabel,
       sessionsPerWeek,
+      sessionsPerWeekMin,
+      sessionsPerWeekMax,
       runMinutes,
+      sessionMinutesMin,
+      sessionMinutesMax,
       idealBlockTimes,
       plannerDaysOfWeek
     }

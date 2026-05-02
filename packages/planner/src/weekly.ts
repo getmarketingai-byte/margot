@@ -14,6 +14,9 @@
  *   3. Allocate each goal greedily by priority, respecting:
  *        - per-day goal constraints (`dayOfWeek` / `daysOfWeek`, earliest/latestHour)
  *        - optional `scheduleInNiceWeather` when `niceWeatherWindows` is non-empty
+ *          — placement iterates favoured days vs overlap with those windows so
+ *            constrained rows precede greedy consumption of sunny pockets by
+ *            unconstrained goals
  *        - the user's `energyOrdering.mode`
  *        - Wheel-of-Life weekly minute floors per area
  *        - PPF minimum-touches and minimum-percent targets
@@ -618,20 +621,28 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       const da = a.effectiveMinutes;
       const db = b.effectiveMinutes;
       if (Math.abs(da - db) < QUANTUM) {
+        const nw = compareGoalsWithNiceWeatherFirst(a.goal, b.goal);
+        if (nw !== 0) return nw;
         const cap = ascendingDailyCapTie(a, b);
         if (cap !== 0) return cap;
         return r % 2 === 0 ? a.index - b.index : b.index - a.index;
       }
+      const nw = compareGoalsWithNiceWeatherFirst(a.goal, b.goal);
+      if (nw !== 0) return nw;
       return db - da;
     });
     const free = pass3RoundRobin.filter((p) => !goalClaimsPctShare(p)).sort((a, b) => {
       const da = a.effectiveMinutes;
       const db = b.effectiveMinutes;
       if (Math.abs(da - db) < QUANTUM) {
+        const nw = compareGoalsWithNiceWeatherFirst(a.goal, b.goal);
+        if (nw !== 0) return nw;
         const cap = ascendingDailyCapTie(a, b);
         if (cap !== 0) return cap;
         return r % 2 === 0 ? a.index - b.index : b.index - a.index;
       }
+      const nw = compareGoalsWithNiceWeatherFirst(a.goal, b.goal);
+      if (nw !== 0) return nw;
       return da - db;
     });
     const seq: PreparedGoal[] = [];
@@ -1480,6 +1491,61 @@ function allocateGoal(
         ? [DAY_INDEX[goal.dayOfWeek]]
         : [0, 1, 2, 3, 4, 5, 6];
 
+  const niceWeatherBiasActive =
+    niceWeatherWindows !== undefined && niceWeatherWindows.length > 0;
+  const orderedPlacementDays =
+    niceWeatherBiasActive && allowedDays.length > 1 ? [...allowedDays] : allowedDays;
+  if (niceWeatherBiasActive && allowedDays.length > 1 && niceWeatherWindows) {
+    const windows = niceWeatherWindows;
+    if (goal.scheduleInNiceWeather === true) {
+      orderedPlacementDays.sort((ia, ib) => {
+        const da = days[ia]!;
+        const db = days[ib]!;
+        const ma = niceOverlapFutureMinutesForBias(
+          da.gaps,
+          da.startMs,
+          da.endMs,
+          windows,
+          availabilityWindows,
+          nowMs
+        );
+        const mb = niceOverlapFutureMinutesForBias(
+          db.gaps,
+          db.startMs,
+          db.endMs,
+          windows,
+          availabilityWindows,
+          nowMs
+        );
+        if (mb !== ma) return mb - ma;
+        return ia - ib;
+      });
+    } else {
+      orderedPlacementDays.sort((ia, ib) => {
+        const da = days[ia]!;
+        const db = days[ib]!;
+        const ma = niceOverlapFutureMinutesForBias(
+          da.gaps,
+          da.startMs,
+          da.endMs,
+          windows,
+          undefined,
+          nowMs
+        );
+        const mb = niceOverlapFutureMinutesForBias(
+          db.gaps,
+          db.startMs,
+          db.endMs,
+          windows,
+          undefined,
+          nowMs
+        );
+        if (ma !== mb) return ma - mb;
+        return ia - ib;
+      });
+    }
+  }
+
   // How many days do we want this goal to occupy? frequencyPerWeek wins,
   // else a day-pinned goal stays on its single day, else spread across all 7.
   const maxDaysForQuantum = Math.max(1, Math.floor(remainingMinutes / QUANTUM));
@@ -1607,7 +1673,7 @@ function allocateGoal(
   const maxPasses = Math.min(2048, Math.max(baselineMaxPasses, demandPasses));
   for (let pass = 0; pass < maxPasses && remainingMinutes > 0; pass++) {
     let daysScheduledThisPass = 0;
-    for (const dayIdx of allowedDays) {
+    for (const dayIdx of orderedPlacementDays) {
       if (remainingMinutes <= 0) break;
       if (norm.frequencyPerWeek !== undefined && pass === 0 && daysScheduledThisPass >= targetDays)
         break;
@@ -1725,6 +1791,7 @@ function allocateGoal(
           : undefined
       );
       if (!slot) continue;
+      if (minPerDay > 0 && slot.minutes < minPerDay) continue;
       // Pass 0 caps each placement at `perDayBudget` for an even spread. Spill passes
       // must use `remainingMinutes` — otherwise `maxMinutesPerDay` / `frequencyPerWeek`
       // kept `preferEvenSplitThisPass` true forever and every round reused `perDayBudget`,
@@ -1935,6 +2002,43 @@ function aggregateGroupDailyHeadroomMinutes(
     hr = Math.min(hr, Math.max(0, cap - used));
   }
   return hr;
+}
+
+/**
+ * Minutes in `(dayGaps [∩ availability] ∩ niceWeatherWindows)` clipped to calendar day,
+ * optionally to the portion after `nowMs`. Used only for weekday iteration biasing —
+ * mirrors `placementWindowsForDay`'s layering for nice-weather goals (`availability`),
+ * unconstrained contests use gaps ∩ nice directly.
+ */
+function niceOverlapFutureMinutesForBias(
+  dayGaps: readonly Interval[],
+  dayStartMs: number,
+  dayEndMs: number,
+  niceWeatherWindows: readonly Interval[],
+  availabilityIntersectFirst: readonly Interval[] | undefined,
+  nowMs: number | undefined
+): number {
+  if (!niceWeatherWindows.length) return 0;
+  let g: Interval[] = dayGaps as Interval[];
+  if (availabilityIntersectFirst && availabilityIntersectFirst.length > 0) {
+    g = intersectWithAvailability(g, availabilityIntersectFirst, dayStartMs, dayEndMs);
+    if (g.length === 0) return 0;
+  }
+  const raw = intersectWithAvailability(g, niceWeatherWindows, dayStartMs, dayEndMs);
+  let ms = 0;
+  for (const w of raw) {
+    const s = nowMs === undefined ? w.startMs : Math.max(w.startMs, nowMs);
+    const e = w.endMs;
+    if (e > s) ms += e - s;
+  }
+  return Math.floor(ms / MS_PER_MIN);
+}
+
+/** Pass 3 ordering: goals constrained to nice-weather windows run before unconstrained peers. */
+function compareGoalsWithNiceWeatherFirst(a: WeeklyGoal, b: WeeklyGoal): number {
+  const aNw = a.scheduleInNiceWeather === true ? 0 : 1;
+  const bNw = b.scheduleInNiceWeather === true ? 0 : 1;
+  return aNw - bNw;
 }
 
 function intersectWithAvailability(
@@ -2195,6 +2299,8 @@ export function comparePreparedGoalsForPass3Placement(
   const aGym = a.goal.specialGoalType === "gym" ? 0 : 1;
   const bGym = b.goal.specialGoalType === "gym" ? 0 : 1;
   if (aGym !== bGym) return aGym - bGym;
+  const nwCmp = compareGoalsWithNiceWeatherFirst(a.goal, b.goal);
+  if (nwCmp !== 0) return nwCmp;
   if (a.index !== b.index) return a.index - b.index;
   return b.effectiveMinutes - a.effectiveMinutes;
 }

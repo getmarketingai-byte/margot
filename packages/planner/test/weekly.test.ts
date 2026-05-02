@@ -117,6 +117,79 @@ describe("allocateWeek", () => {
     }
   });
 
+  it("prefers saturday nice-weather intersections for constrained goals ahead of weekday indoor spill", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const saturday = weekStartMs + 5 * DAY_MS;
+    const sunday = weekStartMs + 6 * DAY_MS;
+    /** Reserve mid-day gaps on weekends so weekdays are the only uninterrupted band for greedy indoor passes. */
+    const busyMidday = (dayStartMs: number): BusyEvent => ({
+      id: `busy-${dayStartMs}`,
+      startMs: dayStartMs + 10 * HOUR_MS,
+      endMs: dayStartMs + 15 * HOUR_MS,
+      busy: true
+    });
+    const busy = [
+      busyMidday(weekStartMs),
+      busyMidday(weekStartMs + DAY_MS),
+      busyMidday(weekStartMs + 2 * DAY_MS),
+      busyMidday(weekStartMs + 3 * DAY_MS),
+      busyMidday(weekStartMs + 4 * DAY_MS),
+      busyMidday(saturday),
+      busyMidday(sunday)
+    ];
+    const niceWeatherWindows = [{ startMs: saturday + 9 * HOUR_MS, endMs: saturday + 16 * HOUR_MS }];
+
+    const indoor = goal({
+      id: "indoor-deep",
+      title: "Indoor blocks",
+      minMinutesPerWeek: 720,
+      priority: 3
+    });
+    const outdoor = goal({
+      id: "outdoor-walk",
+      title: "Outside walk",
+      minMinutesPerWeek: 120,
+      scheduleInNiceWeather: true,
+      priority: 3
+    });
+    const duoPlan: WeeklyPlan = {
+      id: "plan-nwbias",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [indoor, outdoor],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: duoPlan,
+      busy,
+      niceWeatherWindows,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    expect(result.metrics.perGoal["outdoor-walk"]!.scheduledMinutes).toBeGreaterThan(0);
+    const outdoorBlocks = result.blocks.filter((b) => b.goalId === "outdoor-walk");
+    for (const b of outdoorBlocks) {
+      expect(b.startMs).toBeGreaterThanOrEqual(niceWeatherWindows[0]!.startMs);
+      expect(b.endMs).toBeLessThanOrEqual(niceWeatherWindows[0]!.endMs);
+    }
+
+    expect(
+      result.blocks.some(
+        (b) =>
+          b.goalId === "indoor-deep" &&
+          b.startMs >= saturday &&
+          b.endMs <= saturday + DAY_MS
+      )
+    ).toBe(false);
+    expect(result.blocks.filter((b) => b.goalId === "indoor-deep")).not.toHaveLength(0);
+  });
+
   it("places goals into free gaps and reports per-goal scheduled minutes", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const busy: BusyEvent[] = [];

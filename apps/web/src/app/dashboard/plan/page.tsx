@@ -311,7 +311,7 @@ export default async function PlanPage() {
             {/*
               On large screens this column becomes a sticky right rail so the
               calendar stays visible while the goals list scrolls. On small
-              screens it stacks below the goals as a collapsible details block.
+              screens it stacks above the goals as a collapsible details block.
             */}
             <div className="lg:sticky lg:top-6 lg:self-start">
               <div className="hidden lg:block">

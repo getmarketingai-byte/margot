@@ -47,6 +47,32 @@ describe("UserSettings schema", () => {
     expect(reparsed).toEqual(DEFAULT_USER_SETTINGS);
   });
 
+  it("rejects gym sessionMinutesMin greater than sessionMinutesMax", () => {
+    expect(() =>
+      userSettingsSchema.parse({
+        schemaVersion: SETTINGS_SCHEMA_VERSION,
+        gym: {
+          ...DEFAULT_USER_SETTINGS.gym,
+          sessionMinutesMin: 60,
+          sessionMinutesMax: 45
+        }
+      })
+    ).toThrow();
+  });
+
+  it("rejects gym sessionsPerWeekMin greater than sessionsPerWeekMax", () => {
+    expect(() =>
+      userSettingsSchema.parse({
+        schemaVersion: SETTINGS_SCHEMA_VERSION,
+        gym: {
+          ...DEFAULT_USER_SETTINGS.gym,
+          sessionsPerWeekMin: 5,
+          sessionsPerWeekMax: 2
+        }
+      })
+    ).toThrow();
+  });
+
   it("settingsNeedHomeAddress when routing or weather is on", () => {
     expect(
       settingsNeedHomeAddress({

@@ -216,57 +216,99 @@ const plannerDayOfWeek = z.enum([
   "sunday"
 ]);
 
-export const gymSettingsSchema = z.object({
-  enabled: z.boolean().default(false),
-  title: z.string().default("Gym"),
-  locationSubstring: z.string().optional(),
-  driveMinutes: positiveInt.default(10),
-  runMinutes: positiveInt.default(30),
-  /**
-   * When true, the weekly allocator schedules a single physical-activity block
-   * (gym-type padding, drive windows) from these settings instead of a Perfect
-   * Week goal row. Configure label, cadence, and ideal times under Planner →
-   * Daily routines.
-   */
-  plannerBlockEnabled: z.boolean().default(false),
-  /** Shown on the calendar / goal chips for the planner block (not calendar title matching). */
-  blockLabel: z.string().min(1).default("Physical activity"),
-  /**
-   * Preferred local start times for the workout block; the allocator prefers
-   * gaps where the block can start near one of these clocks and aligns the
-   * placed start when the gap is wide enough.
-   */
-  idealBlockTimes: z
-    .array(z.object({ hour: hour, minute: minute }))
-    .min(1)
-    .max(8)
-    .default([{ hour: 11, minute: 30 }]),
-  /** How many sessions to plan per ISO week (paired with `runMinutes` per session). */
-  sessionsPerWeek: z.number().int().min(1).max(14).default(3),
-  /** When set, sessions may only land on these weekdays; when unset, any day is allowed. */
-  plannerDaysOfWeek: z.array(plannerDayOfWeek).min(1).max(7).optional(),
-  earliestStart: z
-    .object({ hour: hour.default(6), minute: minute.default(0) })
-    .default({ hour: 6, minute: 0 }),
-  latestEnd: z
-    .object({ hour: hour.default(20), minute: minute.default(0) })
-    .default({ hour: 20, minute: 0 }),
-  preferredExactStart: z
-    .object({ hour: hour.default(11), minute: minute.default(30) })
-    .default({ hour: 11, minute: 30 }),
-  preferredWindow1: z
-    .object({
-      startHour: hour.default(11),
-      startMinute: minute.default(0),
-      endHour: hour.default(15),
-      endMinute: minute.default(30)
-    })
-    .default({ startHour: 11, startMinute: 0, endHour: 15, endMinute: 30 }),
-  preferredWindow2EndHour: hour.default(9),
-  preferredWindow2EndMinute: minute.default(0),
-  freeMinutesFull: positiveInt.default(360),
-  freeMinutesMin: positiveInt.default(120)
-});
+export const gymSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    title: z.string().default("Gym"),
+    locationSubstring: z.string().optional(),
+    driveMinutes: positiveInt.default(10),
+    /** Inner workout duration used by calendar/travel heuristics; kept in sync with session caps when saving from the planner UI. */
+    runMinutes: positiveInt.default(30),
+    /**
+     * Planner physical-activity block: minimum inner workout minutes per session.
+     * When omitted, `runMinutes` is used.
+     */
+    sessionMinutesMin: z.number().int().min(1).max(240).optional(),
+    /**
+     * Planner physical-activity block: maximum inner workout minutes per session.
+     * When omitted, `runMinutes` is used.
+     */
+    sessionMinutesMax: z.number().int().min(1).max(240).optional(),
+    /**
+     * When true, the weekly allocator schedules a single physical-activity block
+     * (gym-type padding, drive windows) from these settings instead of a Perfect
+     * Week goal row. Configure label, cadence, and ideal times under Planner →
+     * Daily routines.
+     */
+    plannerBlockEnabled: z.boolean().default(false),
+    /** Shown on the calendar / goal chips for the planner block (not calendar title matching). */
+    blockLabel: z.string().min(1).default("Physical activity"),
+    /**
+     * Preferred local start times for the workout block; the allocator prefers
+     * gaps where the block can start near one of these clocks and aligns the
+     * placed start when the gap is wide enough.
+     */
+    idealBlockTimes: z
+      .array(z.object({ hour: hour, minute: minute }))
+      .min(1)
+      .max(8)
+      .default([{ hour: 11, minute: 30 }]),
+    /**
+     * Legacy single cadence value; kept aligned with `sessionsPerWeekMax` when saving from the planner UI.
+     */
+    sessionsPerWeek: z.number().int().min(1).max(14).default(3),
+    /** Planner: minimum sessions per ISO week. When omitted, `sessionsPerWeek` is used. */
+    sessionsPerWeekMin: z.number().int().min(1).max(14).optional(),
+    /** Planner: maximum sessions per ISO week. When omitted, `sessionsPerWeek` is used. */
+    sessionsPerWeekMax: z.number().int().min(1).max(14).optional(),
+    /** When set, sessions may only land on these weekdays; when unset, any day is allowed. */
+    plannerDaysOfWeek: z.array(plannerDayOfWeek).min(1).max(7).optional(),
+    earliestStart: z
+      .object({ hour: hour.default(6), minute: minute.default(0) })
+      .default({ hour: 6, minute: 0 }),
+    latestEnd: z
+      .object({ hour: hour.default(20), minute: minute.default(0) })
+      .default({ hour: 20, minute: 0 }),
+    preferredExactStart: z
+      .object({ hour: hour.default(11), minute: minute.default(30) })
+      .default({ hour: 11, minute: 30 }),
+    preferredWindow1: z
+      .object({
+        startHour: hour.default(11),
+        startMinute: minute.default(0),
+        endHour: hour.default(15),
+        endMinute: minute.default(30)
+      })
+      .default({ startHour: 11, startMinute: 0, endHour: 15, endMinute: 30 }),
+    preferredWindow2EndHour: hour.default(9),
+    preferredWindow2EndMinute: minute.default(0),
+    freeMinutesFull: positiveInt.default(360),
+    freeMinutesMin: positiveInt.default(120)
+  })
+  .superRefine((g, ctx) => {
+    if (
+      g.sessionMinutesMin !== undefined &&
+      g.sessionMinutesMax !== undefined &&
+      g.sessionMinutesMin > g.sessionMinutesMax
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "sessionMinutesMin cannot exceed sessionMinutesMax",
+        path: ["sessionMinutesMax"]
+      });
+    }
+    if (
+      g.sessionsPerWeekMin !== undefined &&
+      g.sessionsPerWeekMax !== undefined &&
+      g.sessionsPerWeekMin > g.sessionsPerWeekMax
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "sessionsPerWeekMin cannot exceed sessionsPerWeekMax",
+        path: ["sessionsPerWeekMax"]
+      });
+    }
+  });
 export type GymSettings = z.infer<typeof gymSettingsSchema>;
 
 /* ─────────────────────────── 6. Work / pay period ───────────────────────── */

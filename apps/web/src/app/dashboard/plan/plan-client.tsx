@@ -9,7 +9,7 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import type { DayOfWeek, WeeklyGoal } from "@calendar-automations/schema";
+import type { WeeklyGoal } from "@calendar-automations/schema";
 import Link from "next/link";
 import {
   STARTER_GOALS,
@@ -31,7 +31,8 @@ import {
   ConstraintCard,
   IdealClockTimesField,
   normaliseIdealClockTimes,
-  SessionsPerWeekField
+  SessionsPerWeekField,
+  WeekdayToggleGrid
 } from "@/components/scheduling-constraints";
 
 type GoalDraft = Omit<WeeklyGoal, "id" | "title">;
@@ -84,16 +85,6 @@ interface PlanClientProps {
   /** Map goal-group id → title (from `WeeklyPlan.goalGroups`). */
   goalGroupTitles?: Record<string, string>;
 }
-
-const DAY_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
-  { value: "monday", label: "Mon" },
-  { value: "tuesday", label: "Tue" },
-  { value: "wednesday", label: "Wed" },
-  { value: "thursday", label: "Thu" },
-  { value: "friday", label: "Fri" },
-  { value: "saturday", label: "Sat" },
-  { value: "sunday", label: "Sun" }
-];
 
 function emptyDraft(): GoalDraft {
   return {
@@ -1180,37 +1171,15 @@ function ConstraintBody({
           ? [draft.dayOfWeek]
           : [];
       return (
-        <div className="grid grid-cols-7 gap-1">
-          {DAY_OPTIONS.map((d) => {
-            const checked = pinnedDays.includes(d.value);
-            return (
-              <label
-                key={d.value}
-                className={`flex cursor-pointer items-center justify-center rounded border px-1 py-1 text-[11px] ${
-                  checked
-                    ? "border-accent bg-accent text-accent-fg"
-                    : "border-ink-200 hover:border-accent/40 dark:border-ink-600"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  className="sr-only"
-                  checked={checked}
-                  onChange={(e) => {
-                    const next = e.target.checked
-                      ? [...pinnedDays, d.value]
-                      : pinnedDays.filter((day) => day !== d.value);
-                    update({
-                      daysOfWeek: next.length > 0 ? next : undefined,
-                      dayOfWeek: undefined
-                    });
-                  }}
-                />
-                {d.label}
-              </label>
-            );
-          })}
-        </div>
+        <WeekdayToggleGrid
+          selected={pinnedDays.length > 0 ? pinnedDays : undefined}
+          onChange={(next) =>
+            update({
+              daysOfWeek: next && next.length > 0 ? next : undefined,
+              dayOfWeek: undefined
+            })
+          }
+        />
       );
     }
     case "nice-weather":
@@ -1283,14 +1252,14 @@ function DurationField({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-2">
         <input
           type="number"
           min={0}
           step={unit === "hours" ? 0.25 : 15}
           value={display}
           onChange={(e) => onInput(e.target.value)}
-          className="field flex-1"
+          className="field !w-auto min-w-[6rem] flex-1 basis-0 tabular-nums"
         />
         <UnitToggle
           value={unit}
@@ -1302,6 +1271,13 @@ function DurationField({
           ]}
         />
       </div>
+      {value !== undefined ? (
+        <p className="text-[11px] font-medium tabular-nums text-ink-700 dark:text-ink-200">
+          {formatMinutes(value)}
+        </p>
+      ) : (
+        <p className="text-[11px] text-ink-400">No duration set</p>
+      )}
       <label className="flex flex-col gap-1">
         <span className="sr-only">Adjust duration with a slider</span>
         <input
@@ -1316,6 +1292,7 @@ function DurationField({
             onChange(next);
           }}
           className="h-2 w-full cursor-pointer accent-accent"
+          aria-valuetext={value !== undefined ? formatMinutes(value) : undefined}
         />
       </label>
       {hint ? <span className="text-[11px] text-ink-400">{hint}</span> : null}

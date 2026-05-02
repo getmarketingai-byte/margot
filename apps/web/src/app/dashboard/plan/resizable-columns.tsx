@@ -86,8 +86,9 @@ export function ResizableColumns({
       style={cssVars}
       className="relative grid gap-5 lg:[grid-template-columns:minmax(0,var(--left-col))_minmax(0,var(--right-col))]"
     >
-      <div className="min-w-0">{left}</div>
-      <aside className="min-w-0">{right}</aside>
+      {/* Below lg, single column: week preview (right) stacks above goals (left). */}
+      <div className="order-2 min-w-0 lg:order-none">{left}</div>
+      <aside className="order-1 min-w-0 lg:order-none">{right}</aside>
 
       <button
         type="button"
