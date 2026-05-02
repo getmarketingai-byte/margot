@@ -3,10 +3,8 @@ import type { BusyEvent } from "@calendar-automations/planner";
 import type { SleepSettings, TimemapSettings } from "@calendar-automations/schema";
 import {
   computeSleepBlocks,
-  computeWakePrepReservedBlocks,
   isLoggedActualSleepTitle,
-  sleepIntervalsForAllocation,
-  type SystemBlock
+  sleepIntervalsForAllocation
 } from "./week-blocks";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -135,7 +133,8 @@ describe("computeSleepBlocks + timemap routines", () => {
       ...timemapMorning60,
       morningRoutine: { enabled: true, title: "[MorningRoutine]", minutes: 30 }
     };
-    // Ideal wake 07:00; leave ~07:30 → wake = 07:30 − 15m buffer − 30m routine = 06:45.
+    // Ideal wake 07:00; leave 07:30 with 30m morning: tightWake 07:00 ≤ ideal →
+    // pack flush (no buffer gap before drive) → sleep ends 07:00.
     const blocks = computeSleepBlocks(
       WEEK_START_MS,
       [drivePre],
@@ -147,7 +146,43 @@ describe("computeSleepBlocks + timemap routines", () => {
     );
     const primary = blocks.find((b) => b.override?.key === "0");
     expect(primary).toBeDefined();
-    expect(primary!.endMs).toBe(WEEK_START_MS + DAY_MS + 6 * HOUR_MS + 45 * MINUTE_MS);
+    expect(primary!.endMs).toBe(WEEK_START_MS + DAY_MS + 7 * HOUR_MS);
+  });
+
+  it("keeps bufferBeforeLeave when tight wake is after ideal (commute does not force early)", () => {
+    const tue7am = WEEK_START_MS + DAY_MS + 7 * HOUR_MS;
+    const tue735 = tue7am + 35 * MINUTE_MS;
+    const drivePre: BusyEvent = {
+      sourceId: "drive-pre",
+      title: "[Drive] → Shift",
+      startMs: tue735,
+      endMs: tue735 + 15 * MINUTE_MS,
+      busy: true,
+      source: "internal"
+    };
+    const sleep = {
+      ...baseSleep,
+      bufferBeforeLeaveMinutes: 15,
+      idealWakeHour: 7,
+      idealWakeMinute: 0
+    };
+    const timemap: TimemapSettings = {
+      ...timemapMorning60,
+      morningRoutine: { enabled: true, title: "[MorningRoutine]", minutes: 30 }
+    };
+    // tightWake = 07:35 − 30m = 07:05 > ideal 07:00 → use loose 07:35 − 15 − 30 = 06:50.
+    const blocks = computeSleepBlocks(
+      WEEK_START_MS,
+      [drivePre],
+      sleep,
+      "UTC",
+      0,
+      new Map(),
+      timemap
+    );
+    const primary = blocks.find((b) => b.override?.key === "0");
+    expect(primary).toBeDefined();
+    expect(primary!.endMs).toBe(WEEK_START_MS + DAY_MS + 6 * HOUR_MS + 50 * MINUTE_MS);
   });
 
   it("delays sleep start when shutdown must follow a late calendar event", () => {
@@ -280,57 +315,6 @@ describe("computeSleepBlocks + timemap routines", () => {
     const wedNightThuWake = blocks.find((b) => b.system === "sleep" && b.override?.key === "2");
     expect(wedNightThuWake).toBeDefined();
     expect(wedNightThuWake!.title).toBe("Sleep");
-  });
-
-  it("reserves [Prep] between morning routine end and first outbound drive-pre", () => {
-    const tue7am = WEEK_START_MS + DAY_MS + 7 * HOUR_MS;
-    const tue730 = tue7am + 30 * MINUTE_MS;
-    const tue8am = tue7am + HOUR_MS;
-    const travelBlock: SystemBlock = {
-      sourceId: "tr-pre",
-      title: "[Drive] → Shift",
-      startMs: tue8am,
-      endMs: tue8am + 15 * MINUTE_MS,
-      busy: true,
-      source: "internal",
-      system: "travel",
-      variant: "drive-pre"
-    };
-    const sleepBlock: SystemBlock = {
-      sourceId: "sleep-1-x",
-      title: "Sleep",
-      startMs: WEEK_START_MS + 22 * HOUR_MS,
-      endMs: tue7am,
-      busy: true,
-      source: "internal",
-      system: "sleep",
-      override: { kind: "sleep", key: "1", isOverridden: false }
-    };
-    const routineBlock: SystemBlock = {
-      sourceId: "sleep-1-x-morning",
-      title: "[MorningRoutine]",
-      startMs: tue7am,
-      endMs: tue730,
-      busy: true,
-      source: "internal",
-      system: "routine",
-      variant: "morning",
-      override: { kind: "routine", key: "morning-1", isOverridden: false }
-    };
-    const prep = computeWakePrepReservedBlocks(
-      [travelBlock],
-      [sleepBlock],
-      [routineBlock],
-      WEEK_START_MS,
-      WEEK_START_MS + 7 * DAY_MS,
-      "UTC",
-      "[Drive]"
-    );
-    expect(prep).toHaveLength(1);
-    expect(prep[0]!.title).toBe("[Prep]");
-    expect(prep[0]!.startMs).toBe(tue730);
-    expect(prep[0]!.endMs).toBe(tue8am);
-    expect(prep[0]!.variant).toBe("wake-prep");
   });
 
   it("includes sleep for nights whose wake is already past (full-week busy budget)", () => {

@@ -37,7 +37,6 @@ import {
   computeRoutineBlocks,
   computeSleepBlocks,
   computeTravelBlocks,
-  computeWakePrepReservedBlocks,
   type SystemBlock,
   type SystemBlocksOverrides
 } from "./week-blocks";
@@ -119,16 +118,7 @@ export async function computeSystemBlocksWithSleepRoutineCache(options: {
 
   const cached = await trySleepRoutineCacheHit(userId, weekStartIso, fp);
   if (cached) {
-    const wakePrepBlocks = computeWakePrepReservedBlocks(
-      travelBlocks,
-      cached.sleepBlocks,
-      cached.routineBlocks,
-      weekStartMs,
-      weekStartMs + WEEK_MS,
-      timezone,
-      driveTag
-    );
-    return [...travelBlocks, ...cached.sleepBlocks, ...cached.routineBlocks, ...wakePrepBlocks];
+    return [...travelBlocks, ...cached.sleepBlocks, ...cached.routineBlocks];
   }
 
   const sleepBlocks = computeSleepBlocks(
@@ -144,15 +134,6 @@ export async function computeSystemBlocksWithSleepRoutineCache(options: {
   const routineBlocks = timemap
     ? computeRoutineBlocks(sleepBlocks, timemap, weekStartMs, undefined, overrides.routine)
     : [];
-  const wakePrepBlocks = computeWakePrepReservedBlocks(
-    travelBlocks,
-    sleepBlocks,
-    routineBlocks,
-    weekStartMs,
-    weekStartMs + WEEK_MS,
-    timezone,
-    driveTag
-  );
 
   if (db) {
     await saveSleepRoutineCache({
@@ -164,7 +145,7 @@ export async function computeSystemBlocksWithSleepRoutineCache(options: {
     });
   }
 
-  return [...travelBlocks, ...sleepBlocks, ...routineBlocks, ...wakePrepBlocks];
+  return [...travelBlocks, ...sleepBlocks, ...routineBlocks];
 }
 
 export async function buildSystemBlocks(
