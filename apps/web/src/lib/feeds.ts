@@ -1,30 +1,74 @@
 /**
- * Helpers for the per-user ICS feed surface — token lookup, filter by feed kind.
+ * Helpers for the per-user ICS feed surface — token lookup, builtin `all`,
+ * custom feed rules, and ICS title normalization.
  */
 
-import { and, eq } from "drizzle-orm";
 import type { GeneratedEvent } from "@calendar-automations/schema";
+import {
+  parseIcsFeedRules,
+  type IcsFeedRules
+} from "@calendar-automations/schema";
+import { and, eq, isNull } from "drizzle-orm";
 import { db, schema } from "./db/index";
 
-export type FeedKind = "timemap" | "sleep" | "travel" | "weekly" | "all";
+export type BuiltinFeedKind = "all";
 
-export async function findFeedByToken(
-  token: string
-): Promise<{ userId: string; feed: FeedKind; revoked: boolean } | null> {
+export type ResolvedFeed =
+  | { mode: "all"; userId: string }
+  | {
+      mode: "custom";
+      userId: string;
+      customFeedId: string;
+      title: string;
+      rules: IcsFeedRules;
+    };
+
+export async function findFeedByToken(token: string): Promise<ResolvedFeed | null> {
   if (!db) return null;
   const rows = await db
-    .select()
+    .select({
+      userId: schema.feedTokens.userId,
+      revoked: schema.feedTokens.revoked,
+      feed: schema.feedTokens.feed,
+      customFeedId: schema.feedTokens.customFeedId,
+      customTitle: schema.icsCustomFeeds.title,
+      customRules: schema.icsCustomFeeds.rules
+    })
     .from(schema.feedTokens)
+    .leftJoin(
+      schema.icsCustomFeeds,
+      eq(schema.feedTokens.customFeedId, schema.icsCustomFeeds.id)
+    )
     .where(eq(schema.feedTokens.token, token))
     .limit(1);
   const row = rows[0];
-  if (!row) return null;
-  return { userId: row.userId, feed: row.feed, revoked: row.revoked };
+  if (!row || row.revoked) return null;
+
+  const { userId, feed } = row;
+
+  if (feed === "all") {
+    return { mode: "all", userId };
+  }
+
+  const customFeedId = row.customFeedId;
+  if (!customFeedId || row.customRules == null) return null;
+
+  try {
+    const rules = parseIcsFeedRules(row.customRules);
+    return {
+      mode: "custom",
+      userId,
+      customFeedId,
+      title: row.customTitle ?? "Custom feed",
+      rules
+    };
+  } catch {
+    return null;
+  }
 }
 
-export async function ensureFeedToken(
+export async function ensureAllFeedToken(
   userId: string,
-  feed: FeedKind,
   name: string,
   generator: () => string
 ): Promise<string> {
@@ -32,7 +76,9 @@ export async function ensureFeedToken(
   const existing = await db
     .select()
     .from(schema.feedTokens)
-    .where(and(eq(schema.feedTokens.userId, userId), eq(schema.feedTokens.feed, feed)))
+    .where(
+      and(eq(schema.feedTokens.userId, userId), eq(schema.feedTokens.feed, "all"), isNull(schema.feedTokens.customFeedId))
+    )
     .limit(1);
   const row = existing[0];
   if (row && !row.revoked) return row.token;
@@ -43,35 +89,55 @@ export async function ensureFeedToken(
       .set({ token, revoked: false })
       .where(eq(schema.feedTokens.id, row.id));
   } else {
-    await db.insert(schema.feedTokens).values({ userId, feed, name, token });
+    await db.insert(schema.feedTokens).values({
+      userId,
+      feed: "all",
+      customFeedId: null,
+      name,
+      token
+    });
+  }
+  return token;
+}
+
+export async function ensureCustomFeedToken(
+  userId: string,
+  customFeedId: string,
+  name: string,
+  generator: () => string
+): Promise<string> {
+  if (!db) return "dev-token";
+  const existing = await db
+    .select()
+    .from(schema.feedTokens)
+    .where(and(eq(schema.feedTokens.userId, userId), eq(schema.feedTokens.customFeedId, customFeedId)))
+    .limit(1);
+  const row = existing[0];
+  if (row && !row.revoked) return row.token;
+  const token = generator();
+  if (row) {
+    await db
+      .update(schema.feedTokens)
+      .set({ token, revoked: false, name })
+      .where(eq(schema.feedTokens.id, row.id));
+  } else {
+    await db.insert(schema.feedTokens).values({
+      userId,
+      feed: "custom",
+      customFeedId,
+      name,
+      token
+    });
   }
   return token;
 }
 
 export function filterEventsForFeed(
   events: readonly GeneratedEvent[],
-  feed: FeedKind
+  feed: BuiltinFeedKind
 ): GeneratedEvent[] {
-  if (feed === "all") return [...events];
-  return events.filter((e) => {
-    switch (feed) {
-      case "timemap":
-        return e.kind === "timemap" || e.kind === "routine";
-      case "sleep":
-        return e.kind === "sleep";
-      case "travel":
-        return e.kind === "travel";
-      case "weekly":
-        return (
-          e.kind === "weekly-goal" ||
-          e.kind === "weekly-review" ||
-          e.kind === "monthly-strategy" ||
-          e.kind === "consistency-segment"
-        );
-      default:
-        return false;
-    }
-  });
+  if (feed !== "all") return [];
+  return [...events];
 }
 
 function ensureBracketedTitle(title: string): string {

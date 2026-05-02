@@ -128,6 +128,18 @@ export const calendarSnapshots = pgTable("calendar_snapshot", {
   events: jsonb("events").notNull()
 });
 
+/** User-built ICS subsets (combined via OR rules against snapshot events). */
+export const icsCustomFeeds = pgTable("ics_custom_feed", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text("userId")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  rules: jsonb("rules").notNull(),
+  createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow().notNull()
+});
+
 /** Latest Google Calendar busy snapshot per user (server-side cache for fast reads). */
 export const googleBusyCache = pgTable("google_busy_cache", {
   userId: text("userId")
@@ -175,23 +187,19 @@ export const systemSleepRoutineCache = pgTable(
   })
 );
 
-export const feedTokens = pgTable(
-  "feed_token",
-  {
-    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
-    userId: text("userId")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    token: text("token").notNull().unique(),
-    feed: text("feed").notNull().$type<"timemap" | "sleep" | "travel" | "weekly" | "all">(),
-    name: text("name").notNull(),
-    revoked: boolean("revoked").notNull().default(false),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull()
-  },
-  (table) => ({
-    perUserFeed: uniqueIndex("feed_token_user_feed").on(table.userId, table.feed)
-  })
-);
+export const feedTokens = pgTable("feed_token", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text("userId")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  /** Builtin `all`; `custom` rows require customFeedId. Partial unique indexes in SQL migrations. */
+  feed: text("feed").notNull().$type<"all" | "custom">(),
+  customFeedId: text("customFeedId").references(() => icsCustomFeeds.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  revoked: boolean("revoked").notNull().default(false),
+  createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull()
+});
 
 export const jobLocks = pgTable("job_lock", {
   key: text("key").primaryKey(),

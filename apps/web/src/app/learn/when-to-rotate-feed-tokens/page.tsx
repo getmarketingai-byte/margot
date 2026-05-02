@@ -27,8 +27,9 @@ export default function Page() {
       <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">What a feed token is</h2>
       <p>
         Each Calendar Automations feed is published at <code>/api/feeds/&lt;token&gt;.ics</code>.
-        The token is unguessable, generated cryptographically, tied to one user and one feed kind
-        (timemap, sleep, travel, etc.), and stored in the database alongside its owner. Anyone
+        The token is unguessable, generated cryptographically, tied to one user and either your
+        Everything subscription or exactly one curated custom feed definition, and stored in the
+        database alongside its owner. Anyone
         with the URL can fetch the feed; nobody without it can. There is no separate
         authentication step at fetch time because calendar apps cannot hold credentials beyond
         the URL.

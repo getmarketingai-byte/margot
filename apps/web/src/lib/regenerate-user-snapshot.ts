@@ -63,6 +63,14 @@ function toGeneratedEvent(
   if (block.ppfPillar) tags.push(block.ppfPillar);
   if (block.wheelAreaId) tags.push(`wheel:${block.wheelAreaId}`);
   if (block.hp6Habit) tags.push(`hp6:${block.hp6Habit}`);
+  tags.push(`goal:${block.goalId}`);
+  const goal = plan.goals.find((g) => g.id === block.goalId);
+  for (const gid of goal?.groupIds ?? []) {
+    tags.push(`group:${gid}`);
+  }
+  if (goal?.specialGoalType) {
+    tags.push(`special:${goal.specialGoalType}`);
+  }
   return {
     uid: buildStableUid([userId, plan.id, block.goalId, block.startMs, block.endMs]),
     kind: block.segment ? "consistency-segment" : "weekly-goal",
@@ -93,6 +101,7 @@ function toGeneratedSystemEvent(userId: string, block: SystemBlock): GeneratedEv
   const tags = ["system", block.system];
   if (block.variant) tags.push(block.variant);
   if (block.override?.isOverridden) tags.push("overridden");
+  if (/(-gym-pre|-gym-post)$/.test(block.sourceId)) tags.push("gym-pad");
   return {
     uid: buildStableUid([userId, "system", block.system, block.sourceId, block.startMs, block.endMs]),
     kind: systemBlockKind(block),

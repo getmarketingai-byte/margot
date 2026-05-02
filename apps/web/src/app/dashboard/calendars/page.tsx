@@ -3,21 +3,32 @@ import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";
 import { generateFeedToken } from "@/lib/feed-token";
-import { ensureFeedToken, type FeedKind } from "@/lib/feeds";
+import { ensureAllFeedToken, ensureCustomFeedToken } from "@/lib/feeds";
 import { listGoogleCalendars } from "@/lib/google-calendar";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
   calendarBusyModeForSource,
   normaliseCalendarSource,
+  emptyIcsFeedRules,
+  parseIcsFeedRules,
+  type IcsFeedRules,
   weeklyIntentSchema,
   type CalendarSource,
   type WeeklyPlan
 } from "@calendar-automations/schema";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { CalendarOptionsForm } from "../calendar-options-form";
+import {
+  createCustomIcsFeed,
+  deleteCustomIcsFeed,
+  rotateCustomIcsFeed,
+  rotateEverythingIcsFeed,
+  updateCustomIcsFeed
+} from "./custom-ics-feed-actions";
 import { CalendarsPageTabs } from "./calendars-page-tabs";
+import { FeedRuleFields } from "./feed-rule-fields";
 
 export const dynamic = "force-dynamic";
 
@@ -28,13 +39,18 @@ interface GoalOption {
   title: string;
 }
 
-const FEEDS: { kind: FeedKind; name: string; description: string }[] = [
-  { kind: "all", name: "Everything", description: "All generated events in one feed." },
-  { kind: "weekly", name: "Perfect Week goals", description: "Goal blocks + non-negotiable segments." },
-  { kind: "timemap", name: "Time map", description: "Routine and time-map events." },
-  { kind: "sleep", name: "Sleep", description: "Computed sleep blocks." },
-  { kind: "travel", name: "Travel", description: "Drive blocks generated from event locations." }
-];
+interface GroupOption {
+  id: string;
+  title: string;
+}
+
+function coerceIcsFeedRules(raw: unknown): IcsFeedRules {
+  try {
+    return parseIcsFeedRules(raw);
+  } catch {
+    return emptyIcsFeedRules();
+  }
+}
 
 async function loadGoalOptions(userId: string): Promise<GoalOption[]> {
   if (!db) return [];
@@ -50,6 +66,22 @@ async function loadGoalOptions(userId: string): Promise<GoalOption[]> {
     .map((goal) => ({ id: goal.id, title: goal.title }))
     .sort((a, b) => a.title.localeCompare(b.title));
   return goals;
+}
+
+async function loadGroupOptions(userId: string): Promise<GroupOption[]> {
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(schema.weeklyPlans)
+    .where(eq(schema.weeklyPlans.userId, userId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return [];
+  const groups = ((row.data as WeeklyPlan).goalGroups ?? [])
+    .filter((g) => g.id && g.title)
+    .map((g) => ({ id: g.id, title: g.title }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+  return groups;
 }
 
 async function toggleCalendar(formData: FormData): Promise<void> {
@@ -217,24 +249,25 @@ async function ensureInvertedTimemapPlanEntry(
   return goal.id;
 }
 
-async function rotateFeed(formData: FormData): Promise<void> {
-  "use server";
-  const session = await authOrPreview();
-  if (!session?.user?.id) return;
-  const kind = String(formData.get("kind") ?? "all") as FeedKind;
-  const name = String(formData.get("name") ?? "feed");
-  await ensureFeedToken(session.user.id, kind, name, generateFeedToken);
-  revalidatePath("/dashboard/calendars");
-  revalidatePath("/dashboard/feeds");
-}
-
-async function feedUrl(userId: string, kind: FeedKind, name: string): Promise<string> {
-  const token = await ensureFeedToken(userId, kind, name, generateFeedToken);
+async function icsSubscribeUrl(token: string): Promise<string> {
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   return `${proto}://${host}/api/feeds/${token}.ics`;
 }
+
+async function everythingIcsUrl(userId: string): Promise<string> {
+  const token = await ensureAllFeedToken(userId, "Everything", generateFeedToken);
+  return icsSubscribeUrl(token);
+}
+
+async function customIcsUrl(userId: string, customFeedId: string, title: string): Promise<string> {
+  const token = await ensureCustomFeedToken(userId, customFeedId, title, generateFeedToken);
+  return icsSubscribeUrl(token);
+}
+
+const CUSTOM_FEED_LIMIT = 20;
+
 
 export default async function CalendarsPage() {
   const session = await authOrPreview();
@@ -264,8 +297,23 @@ export default async function CalendarsPage() {
     if (a.primary !== b.primary) return a.primary ? -1 : 1;
     return a.summary.localeCompare(b.summary);
   });
-  const feedRows = await Promise.all(
-    FEEDS.map(async (feed) => ({ ...feed, url: await feedUrl(userId, feed.kind, feed.name) }))
+  const groupOptions = await loadGroupOptions(userId);
+  const customFeedRows =
+    db
+      ? await db
+          .select()
+          .from(schema.icsCustomFeeds)
+          .where(eq(schema.icsCustomFeeds.userId, userId))
+          .orderBy(desc(schema.icsCustomFeeds.updatedAt))
+      : [];
+
+  const everythingUrl = await everythingIcsUrl(userId);
+  const customFeedsResolved = await Promise.all(
+    customFeedRows.map(async (row) => ({
+      row,
+      url: await customIcsUrl(userId, row.id, row.title),
+      rules: coerceIcsFeedRules(row.rules)
+    }))
   );
 
   return (
@@ -340,39 +388,115 @@ export default async function CalendarsPage() {
           </>
         }
         feedsPanel={
-          <section id="ical-feeds" className="flex flex-col gap-2">
+          <section id="ical-feeds" className="flex flex-col gap-4">
             <header>
               <h2 className="text-xl font-semibold">iCal feeds</h2>
               <p className="text-sm text-ink-600 dark:text-ink-200">
                 Subscribe to these URLs in Apple Calendar, Google Calendar (<em>From URL</em>), or
-                Outlook. Most clients refresh every 5-60 minutes.
+                Outlook. Most clients refresh every 5-60 minutes. Create custom feeds by choosing goal
+                types, routines, weather windows, inverted timemap readouts, and more.
               </p>
             </header>
+
             <ul className="flex flex-col gap-2">
-              {feedRows.map((feed) => (
-                <li key={feed.kind} className="card">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium">{feed.name}</div>
-                      <div className="text-xs text-ink-400">{feed.description}</div>
+              <li key="everything" className="card flex flex-col gap-2">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">Everything</div>
+                    <div className="text-xs text-ink-400">All generated events in one subscription.</div>
+                  </div>
+                  <form action={rotateEverythingIcsFeed}>
+                    <button type="submit" className="btn-secondary text-xs">
+                      Rotate token
+                    </button>
+                  </form>
+                </div>
+                <input
+                  readOnly
+                  className="field select-all font-mono text-xs"
+                  value={everythingUrl}
+                  aria-label="Everything ICS URL"
+                />
+              </li>
+
+              {customFeedsResolved.map(({ row, url, rules }) => (
+                <li key={row.id} className="card flex flex-col gap-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="text-sm font-medium">{row.title}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <form action={rotateCustomIcsFeed}>
+                        <input type="hidden" name="feedId" value={row.id} />
+                        <input type="hidden" name="feedTitle" value={row.title} />
+                        <button type="submit" className="btn-secondary text-xs">
+                          Rotate token
+                        </button>
+                      </form>
+                      <form action={deleteCustomIcsFeed}>
+                        <input type="hidden" name="feedId" value={row.id} />
+                        <button type="submit" className="btn-secondary text-xs">
+                          Delete
+                        </button>
+                      </form>
                     </div>
-                    <form action={rotateFeed}>
-                      <input type="hidden" name="kind" value={feed.kind} />
-                      <input type="hidden" name="name" value={feed.name} />
-                      <button type="submit" className="btn-secondary text-xs">
-                        Rotate
-                      </button>
-                    </form>
                   </div>
                   <input
                     readOnly
-                    className="field mt-2 select-all font-mono text-xs"
-                    value={feed.url}
-                    aria-label={`${feed.name} ICS URL`}
+                    className="field select-all font-mono text-xs"
+                    value={url}
+                    aria-label={`${row.title} ICS URL`}
                   />
+                  <form action={updateCustomIcsFeed} className="flex flex-col gap-3 border-t border-ink-200 pt-3 dark:border-ink-600">
+                    <input type="hidden" name="feedId" value={row.id} />
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-xs font-medium text-ink-600 dark:text-ink-300">Name</span>
+                      <input
+                        name="title"
+                        required
+                        className="field"
+                        defaultValue={row.title}
+                        maxLength={120}
+                      />
+                    </label>
+                    <FeedRuleFields
+                      defaults={rules.include}
+                      goalOptions={goalOptions}
+                      groupOptions={groupOptions}
+                    />
+                    <button type="submit" className="btn-primary w-fit text-sm">
+                      Save changes
+                    </button>
+                  </form>
                 </li>
               ))}
             </ul>
+
+            <div className="card flex flex-col gap-3 border-dashed">
+              <div className="text-sm font-medium">New custom feed</div>
+              <p className="text-xs text-ink-500">
+                Combine sleep, routines, gym, travel, goal groups, and more. Limit {CUSTOM_FEED_LIMIT}{" "}
+                custom feeds per account.
+              </p>
+              {customFeedRows.length >= CUSTOM_FEED_LIMIT ? (
+                <p className="text-sm text-ink-600">You have reached the custom feed limit.</p>
+              ) : (
+                <form action={createCustomIcsFeed} className="flex flex-col gap-3">
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-xs font-medium text-ink-600 dark:text-ink-300">Name</span>
+                    <input
+                      name="title"
+                      required
+                      className="field"
+                      placeholder="e.g. Coach view"
+                      maxLength={120}
+                    />
+                  </label>
+                  <FeedRuleFields goalOptions={goalOptions} groupOptions={groupOptions} />
+                  <button type="submit" className="btn-primary w-fit text-sm">
+                    Create feed
+                  </button>
+                </form>
+              )}
+            </div>
           </section>
         }
       />

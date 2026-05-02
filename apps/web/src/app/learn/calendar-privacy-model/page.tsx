@@ -60,10 +60,10 @@ export default function Page() {
       <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">Feed tokens</h2>
       <p>
         Each published iCal feed is served at <code>/api/feeds/&lt;token&gt;.ics</code>. The token
-        is unguessable and tied to one user and one feed kind (timemap, sleep, travel, etc.). It
-        is not a JWT, has no embedded user identifier, and can be rotated from the dashboard.
-        Knowing one feed token does not grant access to any other feed or to the user&apos;s
-        account.
+        is unguessable and tied to one user and either the full Everything calendar or exactly one of
+        your custom curated ICS feeds you define on the dashboard. It is not a JWT, has no embedded
+        user identifier, and can be rotated from the dashboard. Knowing one feed token does not grant
+        access to any other feed or to the user&apos;s account.
       </p>
 
       <h2 className="text-xl font-semibold text-ink-900 dark:text-ink-100">What lives in the database</h2>

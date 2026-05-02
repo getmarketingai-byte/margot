@@ -10,6 +10,7 @@ import { renderIcs } from "@calendar-automations/planner";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { findFeedByToken, filterEventsForFeed, normalizeEventTitlesForIcs } from "@/lib/feeds";
+import { filterEventsForCustomRules } from "@/lib/feeds-custom-filter";
 import {
   FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS,
   runRegenerateForUser
@@ -29,12 +30,12 @@ export async function GET(
 ): Promise<NextResponse> {
   const { token: rawToken } = await params;
   const token = rawToken.replace(/\.ics$/i, "");
-  const feed = await findFeedByToken(token);
-  if (!feed || feed.revoked) {
+  const resolved = await findFeedByToken(token);
+  if (!resolved) {
     return new NextResponse("Not found", { status: 404 });
   }
   const userRows = db
-    ? await db.select().from(schema.users).where(eq(schema.users.id, feed.userId)).limit(1)
+    ? await db.select().from(schema.users).where(eq(schema.users.id, resolved.userId)).limit(1)
     : [];
   const user = userRows[0];
   const billing = getBillingState({
@@ -44,22 +45,28 @@ export async function GET(
   });
   const allowed = billing.allowed;
 
-  let snapshot = await loadLatestSnapshot(feed.userId);
+  let snapshot = await loadLatestSnapshot(resolved.userId);
   if (allowed && db) {
     const stale =
       !snapshot ||
       Date.now() - snapshot.generatedAt >= FEED_TRIGGERED_REGENERATE_MIN_INTERVAL_MS;
     if (stale) {
       try {
-        await runRegenerateForUser(feed.userId);
-        snapshot = await loadLatestSnapshot(feed.userId);
+        await runRegenerateForUser(resolved.userId);
+        snapshot = await loadLatestSnapshot(resolved.userId);
       } catch (err) {
-        console.error("feed-triggered regenerate failed", { userId: feed.userId, err });
+        console.error("feed-triggered regenerate failed", { userId: resolved.userId, err });
       }
     }
   }
 
-  const events = snapshot ? filterEventsForFeed(snapshot.events, feed.feed) : [];
+  const events =
+    snapshot && resolved.mode === "all"
+      ? filterEventsForFeed(snapshot.events, "all")
+      : snapshot && resolved.mode === "custom"
+        ? filterEventsForCustomRules(snapshot.events, resolved.rules)
+        : [];
+
 
   // When access is denied, return a single 4-hour explanatory event rather than
   // 404 so users see an unmissable in-calendar message inside their existing
@@ -69,7 +76,7 @@ export async function GET(
     ? events
     : [
         {
-          uid: `subscription-required-${feed.userId}`,
+          uid: `subscription-required-${resolved.userId}`,
           kind: "weekly-review" as const,
           title: "Subscription required to refresh schedule",
           description:
@@ -81,9 +88,14 @@ export async function GET(
         }
       ];
 
+  const calendarDisplayName =
+    resolved.mode === "all"
+      ? "Everything"
+      : resolved.title.trim() || `Custom · ${resolved.customFeedId.slice(0, 8)}`;
+
   const icsEvents = normalizeEventTitlesForIcs(finalEvents);
   const ics = renderIcs(icsEvents, {
-    calendarName: `Calendar Automations · ${feed.feed}`,
+    calendarName: `Calendar Automations · ${calendarDisplayName}`,
     domain: "calendar-automations",
     refreshIntervalMinutes: 30
   });
