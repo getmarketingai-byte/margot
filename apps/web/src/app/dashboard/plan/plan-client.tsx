@@ -425,7 +425,7 @@ export function PlanClient({
 
       <dialog
         ref={trashDialogRef}
-        className="w-[min(100%,24rem)] rounded-lg border border-ink-200 bg-[var(--surface)] p-4 shadow-xl dark:border-ink-600"
+        className="w-[min(100%,24rem)] rounded-lg border border-ink-200 bg-white p-4 shadow-xl dark:border-ink-600 dark:bg-ink-900"
         onClose={() => setPendingTrash(null)}
       >
         {pendingTrash ? (
