@@ -30,6 +30,7 @@
 
 import type { SleepSettings } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
+import { displayBusyEventLabel } from "./busy-label";
 import { collectBusyIntervals, freeGaps } from "./intervals";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -37,30 +38,47 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 /** Mirrors `_sleepIsTravelConflict` in Sleep.gs — not shown as the primary conflict reason. */
 function isTravelLikeConflictTitle(title: string): boolean {
   const t = (title || "").trim();
-  return t.startsWith("[Drive]") || t.includes("->");
+  return (
+    t.startsWith("[Drive]") ||
+    t.includes("->") ||
+    t.includes("→") ||
+    t.includes("←")
+  );
 }
 
 /**
  * Busy events overlapping the ideal target window, for titling when sleep is
  * placed elsewhere (port of conflictTitles / lastMainConflict in Sleep.gs).
+ * `targetOverlapTraceTitle` includes travel legs so "moved" sleep is still
+ * attributable when the only collisions are `[Drive]` blocks.
  */
 function targetOverlapMeta(
   busy: readonly BusyEvent[],
   targetStartMs: number,
   targetEndMs: number
-): { hadOverlap: boolean; lastMainTitle: string | null } {
+): {
+  hadOverlap: boolean;
+  targetOverlapTitle: string | null;
+  targetOverlapTraceTitle: string | null;
+} {
   let hadOverlap = false;
-  let best: { endMs: number; title: string } | null = null;
+  let bestNonTravel: { endMs: number; title: string } | null = null;
+  let bestAny: { endMs: number; title: string } | null = null;
   for (const ev of busy) {
     if (!ev.busy) continue;
     if (!(ev.startMs < targetEndMs && ev.endMs > targetStartMs)) continue;
     hadOverlap = true;
     const raw = (ev.title || "").trim();
-    const t = raw.length > 0 ? raw : "(no title)";
-    if (isTravelLikeConflictTitle(t)) continue;
-    if (!best || ev.endMs > best.endMs) best = { endMs: ev.endMs, title: t };
+    const label = displayBusyEventLabel(ev);
+    if (!bestAny || ev.endMs > bestAny.endMs) bestAny = { endMs: ev.endMs, title: label };
+    if (isTravelLikeConflictTitle(raw)) continue;
+    if (!bestNonTravel || ev.endMs > bestNonTravel.endMs) bestNonTravel = { endMs: ev.endMs, title: label };
   }
-  return { hadOverlap, lastMainTitle: best?.title ?? null };
+  return {
+    hadOverlap,
+    targetOverlapTitle: bestNonTravel?.title ?? null,
+    targetOverlapTraceTitle: bestAny?.title ?? null
+  };
 }
 
 export type SleepPlacement =
@@ -80,6 +98,11 @@ export interface PlacedSleep extends Interval {
   targetHadOverlap: boolean;
   /** Last non-travel overlapping busy title by end time, if any. */
   targetOverlapTitle: string | null;
+  /**
+   * Last overlapping busy label by end time including travel/drive legs — used
+   * when `targetOverlapTitle` is null so moved sleep still names a culprit.
+   */
+  targetOverlapTraceTitle: string | null;
 }
 
 function truncateTitle(s: string, maxLen: number): string {
@@ -102,10 +125,11 @@ export function formatSleepBlockTitle(p: PlacedSleep, idealDurationHours: number
     parts.push(`less than ideal sleep ${roundedHrs}h`);
   }
   if (p.placement !== "target") {
-    if (p.targetOverlapTitle) {
-      parts.push(`conflicts: ${truncateTitle(p.targetOverlapTitle, 72)}`);
+    const conflictLabel = p.targetOverlapTitle ?? p.targetOverlapTraceTitle;
+    if (conflictLabel) {
+      parts.push(`conflicts: ${truncateTitle(conflictLabel, 72)}`);
     } else if (p.targetHadOverlap) {
-      parts.push("moved; conflict had no title");
+      parts.push("moved; overlap (unlabelled)");
     }
   }
   if (parts.length === 0) return base;
@@ -160,7 +184,8 @@ export function placeSleepBlock(
           underMinimum: endMs - startMs < desiredMs,
           placement: "override" as const,
           targetHadOverlap: false,
-          targetOverlapTitle: null
+          targetOverlapTitle: null,
+          targetOverlapTraceTitle: null
         }
       ];
     }
@@ -176,11 +201,11 @@ export function placeSleepBlock(
   const requestedEnd = options.targetEndMs ?? windowEndMs;
   const targetEnd = Math.min(Math.max(requestedEnd, windowStartMs), windowEndMs);
   const targetStart = Math.max(windowStartMs, targetEnd - desiredMs);
-  const { hadOverlap: targetHadOverlap, lastMainTitle: targetOverlapTitle } = targetOverlapMeta(
-    busy,
-    targetStart,
-    targetEnd
-  );
+  const {
+    hadOverlap: targetHadOverlap,
+    targetOverlapTitle,
+    targetOverlapTraceTitle
+  } = targetOverlapMeta(busy, targetStart, targetEnd);
 
   if (targetEnd - targetStart >= minMs && !overlapsAny(targetStart, targetEnd, merged)) {
     return [
@@ -191,7 +216,8 @@ export function placeSleepBlock(
         underMinimum: targetEnd - targetStart < desiredMs,
         placement: "target",
         targetHadOverlap,
-        targetOverlapTitle
+        targetOverlapTitle,
+        targetOverlapTraceTitle
       }
     ];
   }
@@ -213,7 +239,8 @@ export function placeSleepBlock(
           underMinimum: false,
           placement: "gap",
           targetHadOverlap,
-          targetOverlapTitle
+          targetOverlapTitle,
+          targetOverlapTraceTitle
         }
       ];
     }
@@ -232,7 +259,8 @@ export function placeSleepBlock(
       underMinimum: total < desiredMs,
       placement: "split" as const,
       targetHadOverlap,
-      targetOverlapTitle
+      targetOverlapTitle,
+      targetOverlapTraceTitle
     }));
   }
 
@@ -249,7 +277,8 @@ export function placeSleepBlock(
       underMinimum: true,
       placement: "largest-gap",
       targetHadOverlap,
-      targetOverlapTitle
+      targetOverlapTitle,
+      targetOverlapTraceTitle
     }
   ];
 }

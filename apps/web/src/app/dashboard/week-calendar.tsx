@@ -6,7 +6,11 @@
  */
 
 import { useMemo } from "react";
-import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
+import {
+  displayBusyEventLabel,
+  type AllocatedBlock,
+  type BusyEvent
+} from "@calendar-automations/planner";
 import type { WeeklyGoal, FrameworkRegistryEntry } from "@calendar-automations/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import { overlayTagsForGoal } from "@/lib/framework-calendar-overlay-tags";
@@ -469,7 +473,15 @@ export function WeekCalendar({
     const busyPositions: PositionedBlock[] = [];
     for (const b of busy) {
       busyPositions.push(
-        ...position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title)
+        ...position(
+          b.startMs,
+          b.endMs,
+          weekStartMs,
+          timezone,
+          startHour,
+          endHour,
+          displayBusyEventLabel(b)
+        )
       );
     }
 
@@ -483,7 +495,7 @@ export function WeekCalendar({
         timezone,
         startHour,
         endHour,
-        b.title
+        displayBusyEventLabel(b)
       )) {
         daySheetPositions.push({ ...slice, sourceId: b.sourceId, goalId: gid });
       }

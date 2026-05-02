@@ -5,6 +5,7 @@ import { computeSleepBlocks, isLoggedActualSleepTitle, sleepIntervalsForAllocati
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 
 /** Monday 2026-05-04 00:00 UTC (week anchor). */
 const WEEK_START_MS = Date.UTC(2026, 4, 4, 0, 0, 0, 0);
@@ -105,6 +106,42 @@ describe("computeSleepBlocks + timemap routines", () => {
     expect(primaryWith!.endMs).toBe(tuesday7am - 60 * 60 * 1000);
     expect(primaryWithout!.endMs).toBe(tuesday7am);
     expect(primaryWith!.startMs).toBeLessThan(primaryWithout!.startMs);
+  });
+
+  it("pulls wake earlier when outbound drive starts after ideal wake (commute after 07:00)", () => {
+    const tue0730 = WEEK_START_MS + DAY_MS + 7 * HOUR_MS + 30 * MINUTE_MS;
+    const tue0815 = WEEK_START_MS + DAY_MS + 8 * HOUR_MS + 15 * MINUTE_MS;
+    const drivePre: BusyEvent = {
+      sourceId: "cal-drive-late-leave",
+      title: "[Drive] → Early shift",
+      startMs: tue0730,
+      endMs: tue0815,
+      busy: true,
+      source: "internal"
+    };
+    const sleep: SleepSettings = {
+      ...baseSleep,
+      bufferBeforeLeaveMinutes: 15,
+      idealWakeHour: 7,
+      idealWakeMinute: 0
+    };
+    const timemap: TimemapSettings = {
+      ...timemapMorning60,
+      morningRoutine: { enabled: true, title: "[MorningRoutine]", minutes: 30 }
+    };
+    // Ideal wake 07:00; leave ~07:30 → wake = 07:30 − 15m buffer − 30m routine = 06:45.
+    const blocks = computeSleepBlocks(
+      WEEK_START_MS,
+      [drivePre],
+      sleep,
+      "UTC",
+      0,
+      new Map(),
+      timemap
+    );
+    const primary = blocks.find((b) => b.override?.key === "0");
+    expect(primary).toBeDefined();
+    expect(primary!.endMs).toBe(WEEK_START_MS + DAY_MS + 6 * HOUR_MS + 45 * MINUTE_MS);
   });
 
   it("delays sleep start when shutdown must follow a late calendar event", () => {

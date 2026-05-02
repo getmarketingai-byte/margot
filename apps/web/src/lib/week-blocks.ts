@@ -461,9 +461,11 @@ export interface SleepOverride {
  * calendar day, not to night d=0 which is Mon night → Tue wake).
  *
  * Rules implemented (see Sleep.gs):
- *   1. Outbound `[Drive] To:` events on the wake day pull `targetEnd`
- *      earlier — never later — to `drive.start - bufferBeforeLeave`,
- *      rounded to `travelBufferRoundMinutes`.
+ *   1. Outbound drive events on the wake day (`[Drive] To:`, `[Drive] →`, or
+ *      direct `… → …` legs) pull `targetEnd` earlier — never later — to
+ *      `drive.start - bufferBeforeLeave - (optional morning routine)`,
+ *      rounded to `travelBufferRoundMinutes`. Drives that start *after* ideal
+ *      wake still participate (each leg can only move wake earlier).
  *   2. `[Drive] Home` events have their `endMs` extended by
  *      `bufferAfterDriveHome` (rounded) so sleep cannot start until that
  *      buffer has elapsed.
@@ -552,9 +554,11 @@ export function computeSleepBlocks(
     const wakeDayEnd = wakeDayStart + DAY_MS;
     for (const drive of drivePre) {
       if (drive.startMs < wakeDayStart || drive.startMs >= wakeDayEnd) continue;
-      // Strict `>` so a drive starting exactly at ideal wake still pulls the
-      // wake target earlier (buffer / morning routine need time before `startMs`).
-      if (drive.startMs > idealWakeMs) continue;
+      // Every outbound drive on the wake day can only pull wake *earlier*
+      // (never later): `wakeFromDrive < targetEndMs` ignores drives after the
+      // current target. Skipping drives with `startMs > idealWakeMs` was wrong
+      // — e.g. ideal 07:00 and leave 07:30 would ignore the commute and stack
+      // sleep / morning routine on the drive.
       const wakeFromDrive = roundLocalMs(
         drive.startMs - wakeBufferMs - morningPadMs,
         roundMin,

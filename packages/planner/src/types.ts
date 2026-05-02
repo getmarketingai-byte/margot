@@ -11,6 +11,11 @@ export interface BusyEvent extends Interval {
   /** Stable id from the source calendar; used to suppress duplicates across feeds. */
   sourceId: string;
   title: string;
+  /**
+   * User-facing calendar name for the feed (e.g. Google `displayName`), used when
+   * `title` is empty so grids and sleep diagnostics remain traceable.
+   */
+  calendarDisplayName?: string;
   /** Free-busy availability hint from source. */
   busy: boolean;
   location?: string;

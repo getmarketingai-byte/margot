@@ -126,9 +126,11 @@ export async function fetchGoogleBusyLive(
           // user's own scheduling or appear in the "Existing" layer.
           continue;
         }
+        const summary = (ev.summary ?? "").trim();
         busyEvents.push({
           sourceId: `${normalized.externalId}:${ev.id}`,
-          title: ev.summary ?? "(no title)",
+          title: summary,
+          calendarDisplayName: normalized.displayName,
           startMs,
           endMs,
           busy: eventIsBusy,

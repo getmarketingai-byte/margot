@@ -408,7 +408,10 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
       if (_sleepOverlaps(targetStart, targetEnd, evStart, evEnd)) {
         hasOverlap = true;
         var t = (commitments[c].title || "").trim();
-        if (!t) t = "(" + (commitments[c].calendarName || "no title") + ")";
+        if (!t) {
+          var calNm = (commitments[c].calendarName || "").trim();
+          t = calNm ? "(no title · " + calNm + ")" : "(no title)";
+        }
         if (conflictTitles.indexOf(t) === -1) conflictTitles.push(t);
         if (!_sleepIsTravelConflict(t) && (lastMainConflict === null || evEnd > lastMainConflict.endMs)) {
           lastMainConflict = { title: t, endMs: evEnd };

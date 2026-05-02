@@ -36,11 +36,26 @@ describe("formatSleepBlockTitle", () => {
       underMinimum: true,
       placement: "largest-gap" as const,
       targetHadOverlap: true,
-      targetOverlapTitle: "Neutrino Growth"
+      targetOverlapTitle: "Neutrino Growth",
+      targetOverlapTraceTitle: null as string | null
     };
     expect(formatSleepBlockTitle(p, 8)).toBe(
       "Sleep (less than ideal sleep 6h, conflicts: Neutrino Growth)"
     );
+  });
+
+  it("names a travel leg when that was the only overlapping busy in the target window", () => {
+    const p = {
+      startMs: 0,
+      endMs: 8 * HOUR,
+      split: false,
+      underMinimum: false,
+      placement: "gap" as const,
+      targetHadOverlap: true,
+      targetOverlapTitle: null,
+      targetOverlapTraceTitle: "[Drive] → Work"
+    };
+    expect(formatSleepBlockTitle(p, 8)).toBe("Sleep (conflicts: [Drive] → Work)");
   });
 });
 
@@ -57,7 +72,8 @@ describe("placeSleepBlock", () => {
         underMinimum: false,
         placement: "target",
         targetHadOverlap: false,
-        targetOverlapTitle: null
+        targetOverlapTitle: null,
+        targetOverlapTraceTitle: null
       }
     ]);
   });
@@ -74,7 +90,8 @@ describe("placeSleepBlock", () => {
       underMinimum: false,
       placement: "target",
       targetHadOverlap: false,
-      targetOverlapTitle: null
+      targetOverlapTitle: null,
+      targetOverlapTraceTitle: null
     });
   });
 
@@ -164,7 +181,8 @@ describe("placeSleepBlock", () => {
         underMinimum: false,
         placement: "override",
         targetHadOverlap: false,
-        targetOverlapTitle: null
+        targetOverlapTitle: null,
+        targetOverlapTraceTitle: null
       }
     ]);
   });

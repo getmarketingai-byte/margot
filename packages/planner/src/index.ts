@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./busy-label";
 export * from "./intervals";
 export * from "./time";
 export * from "./timemap";
