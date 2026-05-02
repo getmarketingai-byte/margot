@@ -18,9 +18,10 @@
  *      remaining gap and flag it as `underMinimum` so the caller can warn.
  *
  * The legacy code also refuses to "sleep in" off a late drive home — that
- * concern is handled by the caller, which extends drive-home end times by
- * `bufferAfterDriveHomeMinutes` before passing them in here. By the time we
- * see the busy stream the drive-home buffer already shows up as occupied.
+ * concern is handled by the caller (`computeSleepBlocks`), which extends
+ * inbound drive end times by shutdown routine minutes **or** (when shutdown
+ * is off) `bufferAfterDriveHomeMinutes`, not both. By the time we see the
+ * busy stream that wind-down already shows up as occupied.
  *
  * **Product rule (see ALLOCATOR_BUSINESS_RULES.md):** among scheduler-owned
  * busy, only travel/drive intervals (`isTravelLikeConflictTitle`) may displace

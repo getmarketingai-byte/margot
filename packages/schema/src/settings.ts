@@ -137,6 +137,11 @@ export const sleepSettingsSchema = z.object({
   idealWakeHour: hour.default(7),
   idealWakeMinute: minute.default(0),
   bufferBeforeLeaveMinutes: positiveInt.default(60),
+  /**
+   * Minutes after arriving home (`[Drive] ←` / Home) before sleep may start when
+   * timemap **shutdown routine is disabled**. When shutdown is enabled, its
+   * minutes replace this for inbound drive shaping (web planner — no double stack).
+   */
   bufferAfterDriveHomeMinutes: positiveInt.default(60),
   travelBufferRoundMinutes: positiveInt.default(15),
   minBlockHours: positiveNumber.default(4),

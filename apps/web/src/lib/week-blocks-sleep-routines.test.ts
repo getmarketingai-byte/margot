@@ -254,7 +254,7 @@ describe("computeSleepBlocks + timemap routines", () => {
     expect(monNight!.title).toContain("Work calendar");
   });
 
-  it("ignores prior-evening drive-home when wind-down ends before modeled sleep starts", () => {
+  it("ignores prior-evening drive-home when wind-down (home buffer, shutdown off) ends before sleep starts", () => {
     const driveHome: BusyEvent = {
       sourceId: "int-dh",
       title: "[Drive] <- Technician",

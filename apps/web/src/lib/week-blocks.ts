@@ -509,9 +509,9 @@ export interface SleepOverride {
  *      `drive.start - bufferBeforeLeave - (optional morning routine)`,
  *      rounded to `travelBufferRoundMinutes`. Drives that start *after* ideal
  *      wake still participate (each leg can only move wake earlier).
- *   2. `[Drive] Home` events have their `endMs` extended by
- *      `bufferAfterDriveHome` (rounded) so sleep cannot start until that
- *      buffer has elapsed.
+ *   2. Inbound `[Drive] ←` / Home legs: extend `endMs` by wind-down before sleep
+ *      may start — **either** shutdown routine minutes (when enabled) **or**
+ *      `bufferAfterDriveHomeMinutes` when shutdown is off (same role, not both).
  *   3. Events whose title matches `sleep.ignoreEventTitles` (e.g. "Gym")
  *      do not block sleep.
  *   4. Sleep is still placed for every night in the week window even when that
@@ -527,9 +527,8 @@ export interface SleepOverride {
  *   7. When `timemap` is passed: enabled **morning routine** minutes are
  *      subtracted from outbound drive leave times when computing the wake
  *      target (sleep ends, then morning, then drive). Enabled **shutdown**
- *      minutes extend busy `endMs` for sleep gap search so sleep cannot start
- *      until after shutdown following calendar events (drive-home already
- *      stacks `bufferAfterDriveHome` + shutdown in one bound).
+ *      minutes extend busy `endMs` for sleep gap search after calendar events
+ *      and replace `bufferAfterDriveHome` on inbound drive legs (no double stack).
  *   8. Internal busy that is **not** a travel/drive leg (`driveEventTag`, same
  *      shapes as {@link internalTravelDriveLeg}) is omitted from sleep collision
  *      so scheduler-owned rows cannot move modelled sleep; Google/ICS/Microsoft
@@ -575,6 +574,8 @@ export function computeSleepBlocks(
     timemap?.morningRoutine.enabled === true ? timemap.morningRoutine.minutes * MINUTE_MS : 0;
   const shutdownPadMs =
     timemap?.shutdownRoutine.enabled === true ? timemap.shutdownRoutine.minutes * MINUTE_MS : 0;
+  /** After `[Drive] ←`: shutdown routine *or* legacy home buffer, never both. */
+  const driveHomeWindDownMs = shutdownPadMs > 0 ? shutdownPadMs : homeBufferMs;
 
   function appendSleepForNight(
     nightIndexLabel: string,
@@ -621,8 +622,8 @@ export function computeSleepBlocks(
       if (ev.source === "internal" && !internalTravelDriveLeg(ev, tag)) {
         continue;
       }
-      // Shutdown precedes sleep; internal travel blocks are shaped in the
-      // drive-home pass below (home buffer + optional shutdown).
+      // Shutdown precedes sleep on calendar rows; inbound drive legs use
+      // `driveHomeWindDownMs` below (shutdown replaces home buffer when on).
       const padShutdown = shutdownPadMs > 0 && ev.source !== "internal";
       sleepBusy.push(
         padShutdown ? { ...ev, endMs: ev.endMs + shutdownPadMs } : ev
@@ -635,7 +636,7 @@ export function computeSleepBlocks(
     for (const drive of driveHome) {
       if (drive.endMs <= nightStartMs || drive.startMs >= nightEndMs) continue;
       const extendedEnd = roundLocalMs(
-        drive.endMs + homeBufferMs + shutdownPadMs,
+        drive.endMs + driveHomeWindDownMs,
         roundMin,
         timezone
       );

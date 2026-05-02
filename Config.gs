@@ -89,8 +89,10 @@ const SLEEP_IDEAL_WAKE_UP_MIN = 0;
  */
 const SLEEP_BUFFER_BEFORE_LEAVE_MINUTES = 60;
 /**
- * Minutes after [Drive] Home ends before sleep may start (wind-down; not straight to bed).
- * Applied on top of the drive end time, then SLEEP_TRAVEL_BUFFER_ROUND_MINUTES (if > 0).
+ * Minutes after [Drive] Home ends before sleep may start when that wind-down is
+ * not covered by [ShutdownRoutine] (TimeMap). Web: when shutdown routine is enabled,
+ * its minutes replace this for inbound drive shaping — not added on top.
+ * Applied to drive end, then SLEEP_TRAVEL_BUFFER_ROUND_MINUTES (if > 0).
  */
 const SLEEP_BUFFER_AFTER_DRIVE_HOME_MINUTES = 60;
 /** Round travel-adjusted times (wake-from-leave, earliest sleep after home) to nearest N minutes; 0 = no rounding. */
