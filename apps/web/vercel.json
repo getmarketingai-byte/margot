@@ -5,12 +5,8 @@
   "buildCommand": "cd ../.. && pnpm -r --filter \"./packages/*\" build && pnpm --filter web build",
   "crons": [
     {
-      "path": "/api/cron/regenerate",
+      "path": "/api/cron/daily",
       "schedule": "0 6 * * *"
-    },
-    {
-      "path": "/api/cron/google-busy-sync",
-      "schedule": "*/20 * * * *"
     }
   ]
 }

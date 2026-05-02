@@ -1,6 +1,6 @@
 /**
  * Inngest worker: refresh persisted Google busy intervals for one user.
- * Triggered by Vercel cron fan-out (same auth pattern as regenerate cron).
+ * Triggered by the daily Vercel cron fan-out (same auth pattern as regenerate).
  */
 
 import { refreshGoogleBusyCacheForUser } from "@/lib/google-busy-cache";
