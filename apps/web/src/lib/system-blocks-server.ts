@@ -37,6 +37,7 @@ import {
   computeRoutineBlocks,
   computeSleepBlocks,
   computeTravelBlocks,
+  stripLegacyWakePrepSystemBlocks,
   type SystemBlock,
   type SystemBlocksOverrides
 } from "./week-blocks";
@@ -48,8 +49,6 @@ import {
   saveSleepRoutineCache,
   trySleepRoutineCacheHit
 } from "./system-sleep-routine-cache";
-
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface BuildSystemBlocksArgs {
   userId: string;
@@ -118,7 +117,11 @@ export async function computeSystemBlocksWithSleepRoutineCache(options: {
 
   const cached = await trySleepRoutineCacheHit(userId, weekStartIso, fp);
   if (cached) {
-    return [...travelBlocks, ...cached.sleepBlocks, ...cached.routineBlocks];
+    return stripLegacyWakePrepSystemBlocks([
+      ...travelBlocks,
+      ...cached.sleepBlocks,
+      ...cached.routineBlocks
+    ]);
   }
 
   const sleepBlocks = computeSleepBlocks(
@@ -145,7 +148,7 @@ export async function computeSystemBlocksWithSleepRoutineCache(options: {
     });
   }
 
-  return [...travelBlocks, ...sleepBlocks, ...routineBlocks];
+  return stripLegacyWakePrepSystemBlocks([...travelBlocks, ...sleepBlocks, ...routineBlocks]);
 }
 
 export async function buildSystemBlocks(

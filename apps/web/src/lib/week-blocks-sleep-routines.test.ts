@@ -4,7 +4,9 @@ import type { SleepSettings, TimemapSettings } from "@calendar-automations/schem
 import {
   computeSleepBlocks,
   isLoggedActualSleepTitle,
-  sleepIntervalsForAllocation
+  sleepIntervalsForAllocation,
+  stripLegacyWakePrepSystemBlocks,
+  type SystemBlock
 } from "./week-blocks";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,6 +38,41 @@ const timemapMorning60: TimemapSettings = {
   errands: { title: "[Errands]", windowMinutes: 60 },
   treatSkedpalAsBusy: true
 };
+
+describe("stripLegacyWakePrepSystemBlocks", () => {
+  it("removes synthetic [Prep] travel overlays only", () => {
+    const drive: SystemBlock = {
+      sourceId: "ev-drive-pre",
+      title: "[Drive] → Work",
+      startMs: 0,
+      endMs: 1,
+      busy: true,
+      source: "internal",
+      system: "travel",
+      variant: "drive-pre"
+    };
+    const prepByTitle: SystemBlock = {
+      sourceId: "legacy-prep-title-only",
+      title: "[Prep]",
+      startMs: 0,
+      endMs: 1,
+      busy: true,
+      source: "internal",
+      system: "travel"
+    };
+    const prepBySourceId: SystemBlock = {
+      sourceId: "wake-prep-0-1-2",
+      title: "Get ready",
+      startMs: 0,
+      endMs: 1,
+      busy: true,
+      source: "internal",
+      system: "travel"
+    };
+    const out = stripLegacyWakePrepSystemBlocks([drive, prepByTitle, prepBySourceId]);
+    expect(out).toEqual([drive]);
+  });
+});
 
 describe("computeSleepBlocks + timemap routines", () => {
   it("detects logged actual sleep titles case-insensitively", () => {

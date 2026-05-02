@@ -883,6 +883,21 @@ export function sleepIntervalsFromSystemBlocks(
  * Merges modeled sleep (`systemBlocks`) with calendar `[Sleep][Actual]` busy rows
  * so pin overlap checks and weather sleep clipping match what blocks the week.
  */
+/**
+ * Removes synthetic wake-prep travel overlays (`title: "[Prep]"`, `sourceId` prefix
+ * `wake-prep-`) left over from an older allocator or from cached server payloads.
+ */
+export function stripLegacyWakePrepSystemBlocks(blocks: readonly SystemBlock[]): SystemBlock[] {
+  return blocks.filter(
+    (b) =>
+      !(
+        b.system === "travel" &&
+        b.source === "internal" &&
+        (b.sourceId?.startsWith("wake-prep-") === true || (b.title ?? "").trim() === "[Prep]")
+      )
+  );
+}
+
 export function sleepIntervalsForAllocation(
   systemBlocks: readonly Pick<SystemBlock, "system" | "startMs" | "endMs">[],
   calendarBusy: readonly BusyEvent[]

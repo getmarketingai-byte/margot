@@ -65,7 +65,7 @@ export async function getCachedPlanWeekAllocationInputs(options: {
     // and any time-dependent system placement. Key must move forward in time or
     // the first request freezes the whole week (stale busy + inflated capacity).
     // Hour bucket limits cache churn while keeping dashboard data fresh.
-    ["plan-week-alloc-inputs-v4", userId, fp, String(hourBucket), hzSeg],
+    ["plan-week-alloc-inputs-v5", userId, fp, String(hourBucket), hzSeg],
     { tags: [userAllocationCacheTag(userId)] }
   )();
 
