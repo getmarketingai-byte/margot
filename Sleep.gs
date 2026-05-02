@@ -1,7 +1,9 @@
 /**
  * Sleep automation module.
- * Reserves 8 hours of sleep per night, ending before earliest outbound [Drive] To: (minus
- * SLEEP_BUFFER_BEFORE_LEAVE_MINUTES, optionally rounded) when present, otherwise at ideal wake.
+ * Reserves 8 hours of sleep per night, ending before earliest outbound [Drive] To: / [Drive] →
+ * (minus TIMEMAP_MORNING_ROUTINE_MINUTES + SLEEP_BUFFER_BEFORE_LEAVE_MINUTES, optionally rounded)
+ * when present, otherwise at ideal wake. Matches TimeMapBlocks: [MorningRoutine] sits immediately
+ * after sleep end, then prep time before the drive leg starts.
  * [Drive] Home blocks sleep until end + SLEEP_BUFFER_AFTER_DRIVE_HOME_MINUTES (then optional round).
  * Adapts to shift work by
  * avoiding or splitting around events during normal sleep hours (fallback: two 4-hour blocks).
@@ -21,13 +23,36 @@ function _sleepStripTravelFallbackSuffix(title) {
   return t.substring(0, idx).trim();
 }
 
+/** Unicode arrow outbound title prefix (same family as apps/web week-blocks internal drive legs). */
+function _sleepDriveOutboundArrowPrefix() {
+  return "[Drive] →";
+}
+
+/**
+ * Destination text after "[Drive] To:" or "[Drive] →" on a stripped title; null if not outbound.
+ */
+function _sleepOutboundDriveRestFromTitle(title) {
+  var t = _sleepStripTravelFallbackSuffix(title || "");
+  if (t.indexOf(SLEEP_DRIVE_OUTBOUND_PREFIX) === 0) {
+    return t.substring(SLEEP_DRIVE_OUTBOUND_PREFIX.length).trim();
+  }
+  var arrow = _sleepDriveOutboundArrowPrefix();
+  if (t.indexOf(arrow) === 0) {
+    return t.substring(arrow.length).trim();
+  }
+  var asciiArrow = "[Drive] ->";
+  if (t.indexOf(asciiArrow) === 0) {
+    return t.substring(asciiArrow.length).trim();
+  }
+  return null;
+}
+
 /**
  * True for outbound travel titles that exist only for gym (Skedpal or Snap Ashburton), so they must not pull wake time earlier.
  */
 function _sleepIsGymRelatedOutboundDriveTitle(title) {
-  var t = _sleepStripTravelFallbackSuffix(title || "");
-  if (t.indexOf(SLEEP_DRIVE_OUTBOUND_PREFIX) !== 0) return false;
-  var rest = t.substring(SLEEP_DRIVE_OUTBOUND_PREFIX.length).trim();
+  var rest = _sleepOutboundDriveRestFromTitle(title);
+  if (rest == null) return false;
   if (rest === GYM_TITLE || /^gym\b/i.test(rest)) return true;
   if (/gym/i.test(rest) && /\[run\]/i.test(rest)) return true;
   return false;
@@ -212,7 +237,7 @@ function _sleepGetCommitmentsForWindow(prefetchedCommitments, windowStartMs, win
 
 /**
  * Returns a map of calendar-day key (YYYY-M-D) to { time: Date, title: string } for the
- * earliest leave time that day. Reads Travel calendar for [Drive] events with "[Drive] To:".
+ * earliest leave time that day. Reads Travel calendar for [Drive] events with "[Drive] To:" or "[Drive] →".
  * TRAVEL_CALENDAR_ID must be in scope (Travel.gs).
  */
 function _sleepGetLeaveTimesByDay(startDate, endDate) {
@@ -223,7 +248,7 @@ function _sleepGetLeaveTimesByDay(startDate, endDate) {
   for (var i = 0; i < driveEvents.length; i++) {
     var ev = driveEvents[i];
     var title = ev.getTitle() || "";
-    if (title.indexOf(SLEEP_DRIVE_OUTBOUND_PREFIX) !== 0) continue;
+    if (_sleepOutboundDriveRestFromTitle(title) == null) continue;
     if (_sleepIsGymRelatedOutboundDriveTitle(title)) continue;
     var start = ev.getStartTime();
     var key = start.getFullYear() + "-" + start.getMonth() + "-" + start.getDate();
@@ -316,6 +341,8 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
   var ms8 = SLEEP_DURATION_HOURS * msPerHour;
   var ms4 = SLEEP_MIN_BLOCK_HOURS * msPerHour;
   var bufferMs = SLEEP_BUFFER_BEFORE_LEAVE_MINUTES * 60 * 1000;
+  var morningRoutineMs =
+    (typeof TIMEMAP_MORNING_ROUTINE_MINUTES === "number" ? TIMEMAP_MORNING_ROUTINE_MINUTES : 30) * 60 * 1000;
   var roundMin =
     typeof SLEEP_TRAVEL_BUFFER_ROUND_MINUTES === "number" ? SLEEP_TRAVEL_BUFFER_ROUND_MINUTES : 0;
   var quotaBudget = null;
@@ -343,7 +370,7 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
     idealWake.setHours(SLEEP_IDEAL_WAKE_UP_HRS, SLEEP_IDEAL_WAKE_UP_MIN, 0, 0);
     var targetWake;
     if (leaveByDay[dateKey]) {
-      var leaveWakeMs = leaveByDay[dateKey].time.getTime() - bufferMs;
+      var leaveWakeMs = leaveByDay[dateKey].time.getTime() - bufferMs - morningRoutineMs;
       leaveWakeMs = _sleepRoundLocalTimeMs(leaveWakeMs, roundMin);
       var wakeFromLeave = new Date(leaveWakeMs);
       // Use leave only to wake earlier, never later (no sleep-in from travel).
@@ -357,7 +384,7 @@ async function addEvents_Sleep(dayOffset, dayCount, runOptions) {
     var leaveInfo = leaveByDay[dateKey];
     var leaveWakeForCompare =
       leaveInfo &&
-      _sleepRoundLocalTimeMs(leaveInfo.time.getTime() - bufferMs, roundMin);
+      _sleepRoundLocalTimeMs(leaveInfo.time.getTime() - bufferMs - morningRoutineMs, roundMin);
     var usedLeaveForWake = leaveInfo && targetWake.getTime() === leaveWakeForCompare;
     var leaveTitleForDay = leaveInfo ? leaveInfo.title : null;
 

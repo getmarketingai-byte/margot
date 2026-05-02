@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema } from "@calendar-automations/schema";
+import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
 import {
   allocateWeek,
   buildStableUid,
@@ -23,6 +23,9 @@ import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-
 import { invertedCalendarTimemapEvents } from "@/lib/inverted-timemap-ics-events";
 import { loadBillingState } from "@/lib/billing-state-server";
 import { clipIntervalBlocksToHorizon } from "@/lib/effective-schedule-horizon";
+import { goalIdsReferencedInDaySheetSlotsFromReviews } from "@/lib/purge-goal-from-reviews";
+import { loadAllDailyReviewsForUser } from "@/lib/review-store";
+import { processExpiredWeeklyPlanTrash } from "@/lib/weekly-plan-trash";
 import { updateWeeklyIntent } from "./actions";
 import { PlanClient } from "./plan-client";
 import { ResizableColumns } from "./resizable-columns";
@@ -36,15 +39,16 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
   const blank = weeklyIntentSchema.parse({});
   if (!db) {
-    return {
+    return weeklyPlanSchema.parse({
       id: "dev",
       weekStart,
       timezone,
       goals: [],
+      deletedGoals: [],
       goalGroups: [],
       overrides: [],
       weeklyIntent: blank
-    };
+    });
   }
   const rows = await db
     .select()
@@ -53,27 +57,30 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return {
+    return weeklyPlanSchema.parse({
       id: crypto.randomUUID(),
       weekStart,
       timezone,
       goals: [],
+      deletedGoals: [],
       goalGroups: [],
       overrides: [],
       weeklyIntent: blank
-    };
+    });
   }
   const stored = row.data as Partial<WeeklyPlan>;
-  return {
+  const plan = weeklyPlanSchema.parse({
     ...stored,
     id: row.id,
     weekStart,
     timezone,
     goals: stored.goals ?? [],
+    deletedGoals: stored.deletedGoals ?? [],
     goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
     weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
-  };
+  });
+  return processExpiredWeeklyPlanTrash(userId, plan);
 }
 
 function dedupeIntervalLayers<T extends { startMs: number; endMs: number }>(
@@ -268,6 +275,11 @@ export default async function PlanPage() {
     };
   }
 
+  const allDaySheetReviews = await loadAllDailyReviewsForUser(userId);
+  const goalIdsWithDaySheetHistory = Array.from(
+    goalIdsReferencedInDaySheetSlotsFromReviews(allDaySheetReviews)
+  );
+
   return (
     <div className="flex flex-col gap-5">
       <header>
@@ -297,6 +309,7 @@ export default async function PlanPage() {
           <div className="flex flex-col gap-5">
             <PlanClient
               initialGoals={perfectWeekAuthoringGoals}
+              initialDeletedGoals={plan.deletedGoals}
               freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
               capacityBreakdown={{
                 grossWeekMinutes: allocation.metrics.utilisation.grossWeekMinutes,
@@ -313,6 +326,7 @@ export default async function PlanPage() {
               effectiveTargetByGoal={effectiveTargetByGoal}
               paceByGoal={paceByGoal}
               goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
+              goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
             />
 
             {allocation.metrics.notScheduled.length > 0 && (

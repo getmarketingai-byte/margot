@@ -466,12 +466,21 @@ export const weeklyIntentSchema = z.object({
 });
 export type WeeklyIntent = z.infer<typeof weeklyIntentSchema>;
 
+/** Soft-deleted goal kept for restore; auto-purged after `deletedAtMs` + retention window. */
+export const trashedGoalEntrySchema = z.object({
+  goal: weeklyGoalSchema,
+  deletedAtMs: z.number().int()
+});
+export type TrashedGoalEntry = z.infer<typeof trashedGoalEntrySchema>;
+
 export const weeklyPlanSchema = z.object({
   id: z.string().min(1),
   /** Monday 00:00 in user TZ. ISO date (YYYY-MM-DD). */
   weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   timezone: z.string(),
   goals: z.array(weeklyGoalSchema).default([]),
+  /** Goals in the trash (same ids as before delete; restores reconnect day-sheet slots). */
+  deletedGoals: z.array(trashedGoalEntrySchema).default([]),
   /**
    * Named cohorts ("Work", "Screen time") with aggregate limits; members use
    * `WeeklyGoal.groupIds`. Authoring lives on the Planner hub.
@@ -509,5 +518,17 @@ export function sanitizeWeeklyPlanGoalGroupRefs(plan: WeeklyPlan): WeeklyPlan {
             groupIds: g.groupIds.filter((id) => valid.has(id))
           }
     ) ?? [];
-  return weeklyPlanSchema.parse({ ...plan, goals });
+  const deletedGoals =
+    plan.deletedGoals?.map((entry) =>
+      !entry.goal.groupIds?.length
+        ? entry
+        : {
+            ...entry,
+            goal: {
+              ...entry.goal,
+              groupIds: entry.goal.groupIds.filter((id) => valid.has(id))
+            }
+          }
+    ) ?? [];
+  return weeklyPlanSchema.parse({ ...plan, goals, deletedGoals });
 }

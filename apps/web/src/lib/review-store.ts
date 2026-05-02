@@ -165,6 +165,13 @@ export async function loadDailyReviewsInRange(
   return rows.map((r) => hydrateDailyReviewFromRow(r.data as object, r.date, r.timezone));
 }
 
+/** All day-sheet rows for the user (full history). Used for trash purge and log detection. */
+export async function loadAllDailyReviewsForUser(userId: string): Promise<DailyReview[]> {
+  if (!db) return [];
+  const rows = await db.select().from(schema.dailyReviews).where(eq(schema.dailyReviews.userId, userId));
+  return rows.map((r) => hydrateDailyReviewFromRow(r.data as object, r.date, r.timezone));
+}
+
 export async function loadWeeklyReview(
   userId: string,
   weekStart: string,
@@ -223,6 +230,18 @@ export async function saveWeeklyReview(
       data: parsed
     });
   }
+}
+
+export async function loadAllWeeklyReviewsForUser(userId: string): Promise<WeeklyReview[]> {
+  if (!db) return [];
+  const rows = await db.select().from(schema.weeklyReviews).where(eq(schema.weeklyReviews.userId, userId));
+  return rows.map((r) =>
+    weeklyReviewSchema.parse({
+      ...(r.data as object),
+      weekStart: r.weekStart,
+      timezone: r.timezone
+    })
+  );
 }
 
 /* ─────────────────────────── Date-key helpers ────────────────────────────── */

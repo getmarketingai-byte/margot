@@ -8,6 +8,7 @@
 
 import type { AllocatedBlock } from "@calendar-automations/planner";
 import type { WeeklyPlan } from "@calendar-automations/schema";
+import { parseGoalOverrideKey } from "@/lib/goal-override-key";
 
 function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd && bStart < aEnd;
@@ -32,13 +33,6 @@ function blockAlreadyShowsOverride(
     }
   }
   return false;
-}
-
-/** `goal:<weekAnchor>:<slotIndex>:<goalId>` */
-function parseGoalOverrideKey(key: string): { goalId: string } | null {
-  const m = /^goal:[\d-]{10}:\d+:(.+)$/.exec(key);
-  if (!m?.[1]) return null;
-  return { goalId: m[1] };
 }
 
 export function mergeOrphanGoalOverrideBlocks(

@@ -25,8 +25,7 @@ export function WhyWeeklyIntentSection({
           Why &amp; weekly intent
         </h2>
         <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
-          Anchor the week in words first (intentions + long-horizon vision). Your frameworks and
-          scheduling rules below turn this into concrete calendar behavior.
+          Anchor the week in words first; frameworks and rules below shape how blocks are placed.
         </p>
       </header>
       <WeeklyIntentCard

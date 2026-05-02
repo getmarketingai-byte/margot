@@ -12,9 +12,10 @@ import {
   emptyIcsFeedRules,
   parseIcsFeedRules,
   type IcsFeedRules,
-  weeklyIntentSchema,
   type CalendarSource,
-  type WeeklyPlan
+  type WeeklyPlan,
+  weeklyIntentSchema,
+  weeklyPlanSchema
 } from "@calendar-automations/schema";
 import { desc, eq } from "drizzle-orm";
 import { headers } from "next/headers";
@@ -195,27 +196,29 @@ async function ensureInvertedTimemapPlanEntry(
   const weekStart = thisMondayIso();
   const blank = weeklyIntentSchema.parse({});
   const base: WeeklyPlan = row
-    ? ({
-        ...(row.data as WeeklyPlan),
+    ? weeklyPlanSchema.parse({
+        ...(row.data as Partial<WeeklyPlan>),
         id: row.id,
         weekStart,
         timezone: args.timezone,
-        goals: (row.data as WeeklyPlan).goals ?? [],
-        goalGroups: (row.data as WeeklyPlan).goalGroups ?? [],
-        overrides: (row.data as WeeklyPlan).overrides ?? [],
+        goals: (row.data as Partial<WeeklyPlan>).goals ?? [],
+        deletedGoals: (row.data as Partial<WeeklyPlan>).deletedGoals ?? [],
+        goalGroups: (row.data as Partial<WeeklyPlan>).goalGroups ?? [],
+        overrides: (row.data as Partial<WeeklyPlan>).overrides ?? [],
         weeklyIntent: weeklyIntentSchema.parse(
           (row.data as Partial<WeeklyPlan>).weeklyIntent ?? {}
         )
-      } as WeeklyPlan)
-    : {
+      })
+    : weeklyPlanSchema.parse({
         id: crypto.randomUUID(),
         weekStart,
         timezone: args.timezone,
         goals: [],
+        deletedGoals: [],
         goalGroups: [],
         overrides: [],
         weeklyIntent: blank
-      };
+      });
 
   const existing = base.goals.find((goal) => goal.title.trim().toLowerCase() === title.toLowerCase());
   if (existing) return existing.id;

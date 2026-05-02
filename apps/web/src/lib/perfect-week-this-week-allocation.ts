@@ -9,7 +9,8 @@ import {
   type DailyReview,
   type UserSettings,
   type WeeklyPlan,
-  weeklyIntentSchema
+  weeklyIntentSchema,
+  weeklyPlanSchema
 } from "@calendar-automations/schema";
 import { allocateWeek, goalOverrideSourcesFromPlan, type AllocateResult } from "@calendar-automations/planner";
 import { db, schema } from "@/lib/db";
@@ -17,20 +18,25 @@ import { localMondayIso } from "@/lib/week";
 import { getCachedPlanWeekAllocationInputs } from "@/lib/cached-plan-week-allocation-inputs";
 import { loadBillingState } from "@/lib/billing-state-server";
 import { sleepIntervalsForAllocation } from "@/lib/week-blocks";
+import { processExpiredWeeklyPlanTrash } from "@/lib/weekly-plan-trash";
 
 async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
   const blank = weeklyIntentSchema.parse({});
   if (!db) {
-    return {
-      id: "dev",
-      weekStart,
-      timezone,
-      goals: [],
-      goalGroups: [],
-      overrides: [],
-      weeklyIntent: blank
-    };
+    return processExpiredWeeklyPlanTrash(
+      userId,
+      weeklyPlanSchema.parse({
+        id: "dev",
+        weekStart,
+        timezone,
+        goals: [],
+        deletedGoals: [],
+        goalGroups: [],
+        overrides: [],
+        weeklyIntent: blank
+      })
+    );
   }
   const rows = await db
     .select()
@@ -39,27 +45,33 @@ async function loadDashboardWeeklyPlan(userId: string, timezone: string): Promis
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return {
-      id: crypto.randomUUID(),
-      weekStart,
-      timezone,
-      goals: [],
-      goalGroups: [],
-      overrides: [],
-      weeklyIntent: blank
-    };
+    return processExpiredWeeklyPlanTrash(
+      userId,
+      weeklyPlanSchema.parse({
+        id: crypto.randomUUID(),
+        weekStart,
+        timezone,
+        goals: [],
+        deletedGoals: [],
+        goalGroups: [],
+        overrides: [],
+        weeklyIntent: blank
+      })
+    );
   }
   const stored = row.data as Partial<WeeklyPlan>;
-  return {
+  const plan = weeklyPlanSchema.parse({
     ...stored,
     id: row.id,
     weekStart,
     timezone,
     goals: stored.goals ?? [],
+    deletedGoals: stored.deletedGoals ?? [],
     goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
     weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
-  };
+  });
+  return processExpiredWeeklyPlanTrash(userId, plan);
 }
 
 /**

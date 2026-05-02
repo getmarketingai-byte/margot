@@ -55,13 +55,15 @@ export function FrameworkRulesReview({
       <div>
         <h3 className="text-sm font-semibold">Active framework signals</h3>
         <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">
-          Read-only snapshot of allocator dimensions you enabled in Framework system and the numeric
-          rules they pair with below. Adjust inclusion on the boards above; tweak targets in the cards
-          under this heading.{" "}
-          <a className="underline" href="#scheduling-outcomes-heading">
-            Scheduling options
-          </a>{" "}
-          covers global mechanics (catch-up, routines, starvation, etc.).
+          Snapshot of enabled frameworks and their numeric pairing. Enable frameworks under{" "}
+          <a className="underline" href="#planner-tag">
+            Tag goals
+          </a>
+          ; adjust numbers in the forms below. Global mechanics:{" "}
+          <a className="underline" href="#planner-scheduling">
+            Scheduling
+          </a>
+          .
         </p>
       </div>
       {activeFrameworks.length === 0 ? (

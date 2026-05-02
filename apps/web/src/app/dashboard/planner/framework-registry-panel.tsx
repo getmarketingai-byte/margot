@@ -92,17 +92,13 @@ export function FrameworkRegistryPanel({
       <div>
         <h3 className="text-sm font-semibold">Choose frameworks</h3>
         <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">
-          Start from a blank canvas: nothing runs in the allocator until you add frameworks. This list
-          is goal-tagging dimensions only. Recurring system blocks (consistency segments and routines)
-          are configured in their own surfaces; rule floors (wheel, PPF mix, HP6, energy ordering)
-          belong in{" "}
-          <a className="underline" href="#framework-methods-heading">
-            Framework rule customiser
+          Tag dimensions only — add a framework to unlock its board. Set floors and mix under{" "}
+          <a className="underline" href="#planner-rules">
+            Rules
           </a>
-          {" "}
-          below. Global allocator mechanics stay under{" "}
-          <a className="underline" href="#scheduling-outcomes-heading">
-            Scheduling options
+          ; global options under{" "}
+          <a className="underline" href="#planner-scheduling">
+            Scheduling
           </a>
           .
         </p>

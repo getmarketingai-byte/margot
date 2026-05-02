@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import containerQueries = require("@tailwindcss/container-queries");
 
 const config: Config = {
   content: ["./src/**/*.{ts,tsx,mdx}"],
@@ -26,7 +27,7 @@ const config: Config = {
       }
     }
   },
-  plugins: []
+  plugins: [containerQueries]
 };
 
 export default config;

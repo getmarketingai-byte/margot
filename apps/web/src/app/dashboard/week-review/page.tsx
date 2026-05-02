@@ -9,7 +9,7 @@
 
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { filterSchedulingGoals, type WeeklyPlan } from "@calendar-automations/schema";
+import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
@@ -44,15 +44,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
-  const empty: WeeklyPlan = {
+  const blank = weeklyIntentSchema.parse({});
+  const empty = weeklyPlanSchema.parse({
     id: "dev",
     weekStart,
     timezone,
     goals: [],
+    deletedGoals: [],
     goalGroups: [],
     overrides: [],
-    weeklyIntent: { hp6Focus: [] }
-  };
+    weeklyIntent: blank
+  });
   if (!db) return empty;
   const rows = await db
     .select()
@@ -60,18 +62,19 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     .where(eq(schema.weeklyPlans.userId, userId))
     .limit(1);
   const row = rows[0];
-  if (!row) return { ...empty, id: crypto.randomUUID() };
-  const stored = row.data as WeeklyPlan;
-  return {
+  if (!row) return weeklyPlanSchema.parse({ ...empty, id: crypto.randomUUID() });
+  const stored = row.data as Partial<WeeklyPlan>;
+  return weeklyPlanSchema.parse({
     ...stored,
     id: row.id,
     weekStart,
     timezone,
     goals: stored.goals ?? [],
+    deletedGoals: stored.deletedGoals ?? [],
     goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
-    weeklyIntent: stored.weeklyIntent ?? { hp6Focus: [] }
-  };
+    weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
+  });
 }
 
 export default async function WeekReviewPage() {

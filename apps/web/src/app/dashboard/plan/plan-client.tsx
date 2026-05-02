@@ -9,7 +9,7 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import type { WeeklyGoal } from "@calendar-automations/schema";
+import type { TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
 import Link from "next/link";
 import {
   STARTER_GOALS,
@@ -26,7 +26,7 @@ import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRef
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
 import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
-import { addGoal, removeGoal, reorderGoals, updateGoal } from "./actions";
+import { addGoal, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } from "./actions";
 import {
   ConstraintCard,
   IdealClockTimesField,
@@ -84,6 +84,46 @@ interface PlanClientProps {
   paceByGoal?: Record<string, GoalPaceInfo>;
   /** Map goal-group id → title (from `WeeklyPlan.goalGroups`). */
   goalGroupTitles?: Record<string, string>;
+  /** Soft-deleted goals (restore within 7 days). */
+  initialDeletedGoals: TrashedGoalEntry[];
+  /**
+   * Goal ids that appear on any day-sheet slot (historical). Used to widen the trash
+   * warning beyond this week&apos;s `loggedMinutes` tally.
+   */
+  goalIdsWithDaySheetHistory?: readonly string[];
+}
+
+/** Must match {@link GOAL_TRASH_RETENTION_MS} in `@/lib/weekly-plan-trash`. */
+const GOAL_TRASH_RETENTION_MS_CLIENT = 7 * 24 * 60 * 60 * 1000;
+
+function formatTrashPurgeCountdown(deletedAtMs: number): string {
+  const end = deletedAtMs + GOAL_TRASH_RETENTION_MS_CLIENT;
+  const left = end - Date.now();
+  if (left <= 0) return "Purging soon";
+  const hours = Math.ceil(left / (60 * 60 * 1000));
+  if (hours >= 48) return `Purges in ${Math.ceil(hours / 24)} days`;
+  if (hours >= 1) return `Purges in about ${hours} hours`;
+  const mins = Math.max(1, Math.ceil(left / (60 * 1000)));
+  return `Purges in about ${mins} minutes`;
+}
+
+function TrashIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden
+    >
+      <path
+        d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m2 0v14a2 2 0 01-2 2H8a2 2 0 01-2-2V6h12zM10 11v6M14 11v6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function emptyDraft(): GoalDraft {
@@ -111,6 +151,7 @@ function ensureGoalShape(input: GoalInput): GoalInput {
 
 export function PlanClient({
   initialGoals,
+  initialDeletedGoals,
   freeMinutesThisWeek,
   capacityBreakdown,
   weekCapacityFromNowMinutes,
@@ -120,12 +161,21 @@ export function PlanClient({
   planMinutesByGoal,
   effectiveTargetByGoal,
   paceByGoal,
-  goalGroupTitles
+  goalGroupTitles,
+  goalIdsWithDaySheetHistory = []
 }: PlanClientProps) {
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(850);
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
+  const [deletedGoals, setDeletedGoals] = useState<TrashedGoalEntry[]>(initialDeletedGoals);
+  const [pendingTrash, setPendingTrash] = useState<WeeklyGoal | null>(null);
+  const trashDialogRef = useRef<HTMLDialogElement>(null);
   const [focusRequest, setFocusRequest] = useState<{ goalId: string; nonce: number } | null>(null);
   const [, startTransition] = useTransition();
+
+  const historyGoalIdSet = useMemo(
+    () => new Set(goalIdsWithDaySheetHistory),
+    [goalIdsWithDaySheetHistory]
+  );
 
   // Keep local state synced if the server re-renders with different props
   // (e.g. user navigates away and back). We compare by ids+length to avoid
@@ -138,6 +188,15 @@ export function PlanClient({
       setGoals(initialGoals);
     }
   }, [initialGoals]);
+
+  const lastDeletedSig = useRef<string>("");
+  useEffect(() => {
+    const sig = initialDeletedGoals.map((e) => `${e.goal.id}:${e.deletedAtMs}`).join("|");
+    if (sig !== lastDeletedSig.current) {
+      lastDeletedSig.current = sig;
+      setDeletedGoals(initialDeletedGoals);
+    }
+  }, [initialDeletedGoals]);
 
   useEffect(() => {
     const onFocusGoal = (event: Event) => {
@@ -206,11 +265,24 @@ export function PlanClient({
     });
   };
 
-  const handleDelete = (id: string) => {
+  useEffect(() => {
+    const d = trashDialogRef.current;
+    if (!d) return;
+    if (pendingTrash) {
+      if (!d.open) d.showModal();
+    } else if (d.open) {
+      d.close();
+    }
+  }, [pendingTrash]);
+
+  const performTrash = (goal: WeeklyGoal) => {
+    const id = goal.id;
     const actionId = `goal-delete-${id}`;
     reportPerceivedInteraction("goal_delete", actionId);
-    const snapshot = goals;
+    const snapshotGoals = goals;
+    const snapshotDeleted = deletedGoals;
     setGoals((prev) => prev.filter((g) => g.id !== id));
+    setDeletedGoals((prev) => [...prev, { goal, deletedAtMs: Date.now() }]);
     startTransition(async () => {
       const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       try {
@@ -219,7 +291,31 @@ export function PlanClient({
         scheduleStaleDataRefresh();
       } catch (err) {
         console.error("removeGoal failed", err);
-        setGoals(snapshot);
+        setGoals(snapshotGoals);
+        setDeletedGoals(snapshotDeleted);
+      }
+    });
+  };
+
+  const handleRestoreFromTrash = (id: string) => {
+    const entry = deletedGoals.find((e) => e.goal.id === id);
+    if (!entry) return;
+    const actionId = `goal-restore-${id}`;
+    reportPerceivedInteraction("goal_restore", actionId);
+    const snapshotGoals = goals;
+    const snapshotDeleted = deletedGoals;
+    setDeletedGoals((prev) => prev.filter((e) => e.goal.id !== id));
+    setGoals((prev) => [...prev, entry.goal]);
+    startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+      try {
+        await restoreGoalFromTrash(id);
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
+      } catch (err) {
+        console.error("restoreGoalFromTrash failed", err);
+        setGoals(snapshotGoals);
+        setDeletedGoals(snapshotDeleted);
       }
     });
   };
@@ -273,7 +369,7 @@ export function PlanClient({
               effectiveTarget={effectiveTargetByGoal[goal.id]}
               pace={paceByGoal?.[goal.id]}
               onUpdate={(next) => handleUpdate(goal.id, next)}
-              onDelete={() => handleDelete(goal.id)}
+              onRequestTrash={() => setPendingTrash(goal)}
               onMoveUp={() => handleReorder(idx, Math.max(0, idx - 1))}
               onMoveDown={() => handleReorder(idx, Math.min(goals.length - 1, idx + 1))}
               onDropAt={(fromIdx, toIdx) => handleReorder(fromIdx, toIdx)}
@@ -287,6 +383,89 @@ export function PlanClient({
           </li>
         </ul>
       )}
+
+      {deletedGoals.length > 0 ? (
+        <section className="card flex flex-col gap-2" aria-label="Trash">
+          <h2 className="text-sm font-semibold">Trash</h2>
+          <p className="text-xs text-ink-500 dark:text-ink-400">
+            Deleted goals stay here for 7 days. Restore to bring a goal back (day-sheet entries tied
+            to it start counting again). After 7 days they are removed permanently, including related
+            day-sheet logs.
+          </p>
+          <ul className="flex flex-col gap-2">
+            {deletedGoals.map((entry) => (
+              <li
+                key={entry.goal.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-ink-200 px-3 py-2 dark:border-ink-600"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{entry.goal.title}</div>
+                  <div className="text-[11px] text-ink-500 dark:text-ink-400">
+                    {formatTrashPurgeCountdown(entry.deletedAtMs)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0 text-xs"
+                  onClick={() => handleRestoreFromTrash(entry.goal.id)}
+                >
+                  Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <dialog
+        ref={trashDialogRef}
+        className="w-[min(100%,24rem)] rounded-lg border border-ink-200 bg-[var(--surface)] p-4 shadow-xl dark:border-ink-600"
+        onClose={() => setPendingTrash(null)}
+      >
+        {pendingTrash ? (
+          <div className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold">Move goal to trash?</h2>
+            <p className="text-xs leading-relaxed text-ink-600 dark:text-ink-300">
+              <strong>{pendingTrash.title}</strong> will be removed from your active goals. It stays
+              in Trash for 7 days so you can restore it.
+            </p>
+            <p className="text-xs leading-relaxed text-ink-600 dark:text-ink-300">
+              While it&apos;s trashed, time logged on your day sheets for this goal won&apos;t count
+              toward your plan. If you don&apos;t restore it within 7 days, those day-sheet entries
+              are deleted permanently.
+            </p>
+            {((planMinutesByGoal[pendingTrash.id]?.loggedMinutes ?? 0) > 0 ||
+              historyGoalIdSet.has(pendingTrash.id)) && (
+              <p
+                className="rounded-md border border-amber-300/50 bg-amber-500/10 px-2 py-2 text-xs text-amber-900 dark:border-amber-700/50 dark:bg-amber-500/15 dark:text-amber-100"
+                role="status"
+              >
+                This goal has logged time on your day sheets — that time will stop counting until
+                you restore the goal, and will be erased if the goal expires from Trash.
+              </p>
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-xs"
+                onClick={() => setPendingTrash(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                onClick={() => {
+                  performTrash(pendingTrash);
+                  setPendingTrash(null);
+                }}
+              >
+                Move to trash
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </dialog>
     </div>
   );
 }
@@ -484,7 +663,7 @@ function GoalRow({
   effectiveTarget,
   pace,
   onUpdate,
-  onDelete,
+  onRequestTrash,
   onMoveUp,
   onMoveDown,
   onDropAt,
@@ -502,7 +681,7 @@ function GoalRow({
   effectiveTarget?: number;
   pace?: GoalPaceInfo;
   onUpdate: (next: GoalInput) => void;
-  onDelete: () => void;
+  onRequestTrash: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDropAt: (fromIdx: number, toIdx: number) => void;
@@ -607,8 +786,8 @@ function GoalRow({
         >
           ⋮⋮
         </button>
-        <div className="flex flex-1 flex-col">
-          <div className="flex flex-1 flex-wrap items-center gap-2 text-left min-w-0">
+        <div className="@container flex min-w-0 flex-1 flex-col">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left">
             <div
               role="button"
               tabIndex={0}
@@ -670,7 +849,7 @@ function GoalRow({
             </div>
             {allocationRow ? (
               <>
-                <details className="group mt-0.5 w-full shrink-0 basis-full lg:hidden">
+                <details className="group mt-0.5 w-full shrink-0 basis-full lg:block lg:@lg:hidden">
                   <summary
                     className="cursor-pointer list-none text-right text-[10px] leading-none text-ink-400/90 outline-none marker:content-none [&::-webkit-details-marker]:hidden focus-visible:ring-2 focus-visible:ring-accent/40"
                     title={allocationRow.title}
@@ -712,23 +891,23 @@ function GoalRow({
                   </dl>
                 </details>
                 <div
-                  className="mt-0.5 hidden text-ink-400 lg:ml-auto lg:mt-0 lg:flex lg:shrink-0"
+                  className="mt-0.5 hidden text-ink-400 lg:ml-auto lg:mt-0 lg:@lg:flex lg:shrink-0"
                   title={allocationRow.title}
                 >
-                  <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[10px] leading-none text-ink-400/85 [word-spacing:-0.02em] dark:text-ink-500">
-                    <span className="whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+                  <div className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[10px] leading-none text-ink-400/85 [word-spacing:-0.02em] dark:text-ink-500">
+                    <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
                       <span className="font-normal text-ink-400/70">Logged </span>
                       {allocationRow.loggedLabel}
                     </span>
-                    <span className="whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+                    <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
                       <span className="font-normal text-ink-400/70">Proposed </span>
                       {allocationRow.proposedLabel}
                     </span>
-                    <span className="whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+                    <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
                       <span className="font-normal text-ink-400/70">Min </span>
                       {allocationRow.minTargetLabel}
                     </span>
-                    <span className="whitespace-nowrap tabular-nums">
+                    <span className="min-w-0 whitespace-nowrap tabular-nums">
                       <span className="font-normal text-ink-400/70">Max </span>
                       {allocationRow.maxTargetLabel}
                     </span>
@@ -755,8 +934,8 @@ function GoalRow({
           >
             ↓
           </IconButton>
-          <IconButton onClick={onDelete} title="Remove goal">
-            ✕
+          <IconButton onClick={onRequestTrash} title={`Move goal “${goal.title}” to trash`}>
+            <TrashIcon className="h-3.5 w-3.5" />
           </IconButton>
         </div>
       </div>

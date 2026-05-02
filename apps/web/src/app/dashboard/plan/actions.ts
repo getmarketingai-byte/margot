@@ -30,6 +30,7 @@ import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { refreshPlannedSnapshotsForCurrentWeek } from "@/lib/refresh-review-planned-snapshots";
 import { requestUserRegenerate } from "@/lib/request-user-regenerate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
+import { processExpiredWeeklyPlanTrash } from "@/lib/weekly-plan-trash";
 
 function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
   return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
@@ -75,15 +76,17 @@ function thisMondayIso(): string {
 async function loadOrCreatePlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = thisMondayIso();
   if (!db) {
-    return {
+    const shell = weeklyPlanSchema.parse({
       id: "dev",
       weekStart,
       timezone,
       goals: [],
+      deletedGoals: [],
       goalGroups: [],
       overrides: [],
       weeklyIntent: weeklyIntentSchema.parse({})
-    };
+    });
+    return processExpiredWeeklyPlanTrash(userId, shell);
   }
   const rows = await db
     .select()
@@ -94,16 +97,18 @@ async function loadOrCreatePlan(userId: string, timezone: string): Promise<Weekl
   const stored = row ? (row.data as Partial<WeeklyPlan>) : null;
   const baseGoals = stored?.goals ?? [];
   const baseOverrides = stored?.overrides ?? [];
+  const baseDeleted = stored?.deletedGoals ?? [];
   const baseIntent = weeklyIntentSchema.parse(stored?.weeklyIntent ?? {});
-  const plan: WeeklyPlan = {
+  let plan: WeeklyPlan = weeklyPlanSchema.parse({
     id: row?.id ?? crypto.randomUUID(),
     weekStart,
     timezone,
     goals: baseGoals,
+    deletedGoals: baseDeleted,
     goalGroups: stored?.goalGroups ?? [],
     overrides: baseOverrides,
     weeklyIntent: baseIntent
-  };
+  });
   if (row && (row.data as WeeklyPlan).weekStart !== weekStart) {
     await db
       .update(schema.weeklyPlans)
@@ -118,6 +123,7 @@ async function loadOrCreatePlan(userId: string, timezone: string): Promise<Weekl
       data: plan
     });
   }
+  plan = await processExpiredWeeklyPlanTrash(userId, plan);
   return plan;
 }
 
@@ -202,9 +208,31 @@ export async function removeGoal(id: string): Promise<void> {
   const plan = await loadOrCreatePlan(userId, settings.timezone);
   const victim = plan.goals.find((g) => g.id === id);
   if (victim && isInvertedTimemapGoal(victim)) return;
+  if (!victim) return;
   plan.goals = plan.goals.filter((g) => g.id !== id);
+  plan.deletedGoals = [...plan.deletedGoals, { goal: victim, deletedAtMs: Date.now() }];
+  weeklyPlanSchema.parse(plan);
   await savePlan(userId, plan);
   afterPlanMutation(userId);
+}
+
+export async function restoreGoalFromTrash(id: string): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  const entry = plan.deletedGoals.find((e) => e.goal.id === id);
+  if (!entry) return;
+  if (plan.goals.some((g) => g.id === id)) return;
+  plan.deletedGoals = plan.deletedGoals.filter((e) => e.goal.id !== id);
+  const timemapTail = plan.goals.filter((g) => isInvertedTimemapGoal(g));
+  const userGoals = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
+  plan.goals = [...userGoals, entry.goal, ...timemapTail];
+  weeklyPlanSchema.parse(plan);
+  await savePlan(userId, plan);
+  afterPlanMutation(userId);
+  await requestUserRegenerate(userId);
 }
 
 /**

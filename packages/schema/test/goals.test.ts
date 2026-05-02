@@ -211,6 +211,38 @@ describe("GoalGroup & weekly plan group refs", () => {
     const cleaned = sanitizeWeeklyPlanGoalGroupRefs(raw);
     expect(cleaned.goals[0]!.groupIds).toEqual(["keep"]);
   });
+
+  it("defaults deletedGoals to empty when omitted", () => {
+    const parsed = weeklyPlanSchema.parse({
+      id: "w1",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: []
+    });
+    expect(parsed.deletedGoals).toEqual([]);
+  });
+
+  it("sanitizeWeeklyPlanGoalGroupRefs drops unknown groupIds on trashed goals", () => {
+    const raw = weeklyPlanSchema.parse({
+      id: "w1",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [{ id: "keep", title: "K", maxMinutesPerDay: 60 }],
+      goals: [],
+      deletedGoals: [
+        {
+          goal: weeklyGoalSchema.parse({
+            id: "g-trash",
+            title: "Old",
+            groupIds: ["keep", "gone"]
+          }),
+          deletedAtMs: 1_700_000_000_000
+        }
+      ]
+    });
+    const cleaned = sanitizeWeeklyPlanGoalGroupRefs(raw);
+    expect(cleaned.deletedGoals[0]!.goal.groupIds).toEqual(["keep"]);
+  });
 });
 
 describe("blockOverrideSchema", () => {

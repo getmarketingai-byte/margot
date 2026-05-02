@@ -83,7 +83,10 @@ const SLEEP_BEGIN = 20; // hour (0-23) start of "normal sleep" window
 const SLEEP_END = 12; // hour (0-23) end of "normal sleep" window (next day)
 const SLEEP_IDEAL_WAKE_UP_HRS = 7;
 const SLEEP_IDEAL_WAKE_UP_MIN = 0;
-/** Minutes before earliest outbound [Drive] To: start to set wake (prep, breakfast). */
+/**
+ * Minutes between end of [MorningRoutine] (TIMEMAP_MORNING_ROUTINE_MINUTES) and outbound [Drive]
+ * start (prep to car). Wake-from-drive is routine + this buffer before the drive leg.
+ */
 const SLEEP_BUFFER_BEFORE_LEAVE_MINUTES = 60;
 /**
  * Minutes after [Drive] Home ends before sleep may start (wind-down; not straight to bed).

@@ -96,6 +96,37 @@ async function updateRoutines(formData: FormData): Promise<void> {
   afterConstraintsSave(userId);
 }
 
+function routineDisclosureSummary(settings: UserSettings): string {
+  const m = settings.timemap.morningRoutine;
+  const s = settings.timemap.shutdownRoutine;
+  const mPart = m.enabled ? `${m.minutes}m` : "off";
+  const sPart = s.enabled ? `${s.minutes}m` : "off";
+  const g = settings.gym;
+  let act = "";
+  if (g.plannerBlockEnabled) {
+    const minS = g.sessionsPerWeekMin ?? g.sessionsPerWeek;
+    const maxS = g.sessionsPerWeekMax ?? g.sessionsPerWeek;
+    act = minS === maxS ? ` · Activity ${minS}/wk` : ` · Activity ${minS}–${maxS}/wk`;
+  }
+  return `Morning ${mPart} · Shutdown ${sPart}${act}`;
+}
+
+function catchUpDisclosureSummary(settings: UserSettings): string {
+  return settings.allocator.catchUpMode === "manual" ? "Manual (week review only)" : "Automated (from day sheet)";
+}
+
+function allocationModeDisclosureSummary(settings: UserSettings): string {
+  return settings.allocator.allocationMode === "finish-early"
+    ? "Finish early (tail gap)"
+    : "Even gaps between blocks";
+}
+
+function starvationDisclosureSummary(settings: UserSettings): string {
+  return settings.allocator.starvationMode === "strict"
+    ? "Strict (goal order)"
+    : "Proportional (trim all)";
+}
+
 export async function ConstraintsSection() {
   const session = await authOrPreview();
   const userId = session!.user!.id!;
@@ -108,17 +139,21 @@ export async function ConstraintsSection() {
           Scheduling options
         </h2>
         <p className="text-sm text-ink-600 dark:text-ink-200">
-          Same constraint panels as Perfect Week: opt-in blocks with matching controls. Global
-          allocator mechanics live here; framework rules stay in{" "}
+          Routines and global allocator behaviour. Numeric framework rules are under{" "}
           <a className="underline" href="#framework-methods-heading">
-            Framework rule customiser
+            Rules
           </a>
           .
         </p>
       </header>
 
-      <details className="card" open>
-        <summary className="cursor-pointer text-sm font-semibold">Daily routines</summary>
+      <details className="card">
+        <summary className="flex cursor-pointer list-none flex-col gap-0.5 py-0.5 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-baseline sm:gap-2">
+          <span className="text-sm font-semibold">Daily routines</span>
+          <span className="text-xs font-normal text-ink-500 dark:text-ink-400">
+            {routineDisclosureSummary(settings)}
+          </span>
+        </summary>
         <p className="mt-1 text-xs text-ink-400">
           Morning and shutdown routines reserve windows around sleep; physical activity uses the same
           cadence / ideal-time controls as weekly goals.
@@ -179,8 +214,13 @@ export async function ConstraintsSection() {
         <PhysicalActivityRoutineForm initial={settings.gym} />
       </details>
 
-      <details className="card" open>
-        <summary className="cursor-pointer text-sm font-semibold">Catch-up from day sheet</summary>
+      <details className="card">
+        <summary className="flex cursor-pointer list-none flex-col gap-0.5 py-0.5 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-baseline sm:gap-2">
+          <span className="text-sm font-semibold">Catch-up from day sheet</span>
+          <span className="text-xs font-normal text-ink-500 dark:text-ink-400">
+            {catchUpDisclosureSummary(settings)}
+          </span>
+        </summary>
         <p className="mt-1 text-xs text-ink-400">
           Whether behind-pace floors come from your day logs automatically or only after you save
           numbers on the week review.
@@ -222,8 +262,13 @@ export async function ConstraintsSection() {
         </form>
       </details>
 
-      <details className="card" open>
-        <summary className="cursor-pointer text-sm font-semibold">Spare time distribution</summary>
+      <details className="card">
+        <summary className="flex cursor-pointer list-none flex-col gap-0.5 py-0.5 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-baseline sm:gap-2">
+          <span className="text-sm font-semibold">Spare time distribution</span>
+          <span className="text-xs font-normal text-ink-500 dark:text-ink-400">
+            {allocationModeDisclosureSummary(settings)}
+          </span>
+        </summary>
         <p className="mt-1 text-xs text-ink-400">
           How should leftover time <em>inside each free calendar window</em> be laid out after goal
           blocks are placed? This does not change how long each goal block is — only spacing vs a
@@ -267,8 +312,13 @@ export async function ConstraintsSection() {
         </form>
       </details>
 
-      <details className="card" open>
-        <summary className="cursor-pointer text-sm font-semibold">When you&apos;re overcommitted</summary>
+      <details className="card">
+        <summary className="flex cursor-pointer list-none flex-col gap-0.5 py-0.5 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-baseline sm:gap-2">
+          <span className="text-sm font-semibold">When you&apos;re overcommitted</span>
+          <span className="text-xs font-normal text-ink-500 dark:text-ink-400">
+            {starvationDisclosureSummary(settings)}
+          </span>
+        </summary>
         <p className="mt-1 text-xs text-ink-400">
           What should happen when your goal minimums add up to more time than you actually have?
         </p>

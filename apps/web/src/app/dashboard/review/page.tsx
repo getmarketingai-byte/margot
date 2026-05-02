@@ -12,7 +12,9 @@ import Link from "next/link";
 import {
   filterSchedulingGoals,
   type AllocatedBlockSnapshot,
-  type WeeklyPlan
+  type WeeklyPlan,
+  weeklyIntentSchema,
+  weeklyPlanSchema
 } from "@calendar-automations/schema";
 import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
@@ -56,15 +58,17 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
   const weekStart = localMondayIso(timezone);
-  const empty: WeeklyPlan = {
+  const blank = weeklyIntentSchema.parse({});
+  const empty = weeklyPlanSchema.parse({
     id: "dev",
     weekStart,
     timezone,
     goals: [],
+    deletedGoals: [],
     goalGroups: [],
     overrides: [],
-    weeklyIntent: { hp6Focus: [] }
-  };
+    weeklyIntent: blank
+  });
   if (!db) return empty;
   const rows = await db
     .select()
@@ -73,19 +77,20 @@ async function loadPlan(userId: string, timezone: string): Promise<WeeklyPlan> {
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return { ...empty, id: crypto.randomUUID() };
+    return weeklyPlanSchema.parse({ ...empty, id: crypto.randomUUID() });
   }
-  const stored = row.data as WeeklyPlan;
-  return {
+  const stored = row.data as Partial<WeeklyPlan>;
+  return weeklyPlanSchema.parse({
     ...stored,
     id: row.id,
     weekStart,
     timezone,
     goals: stored.goals ?? [],
+    deletedGoals: stored.deletedGoals ?? [],
     goalGroups: stored.goalGroups ?? [],
     overrides: stored.overrides ?? [],
-    weeklyIntent: stored.weeklyIntent ?? { hp6Focus: [] }
-  };
+    weeklyIntent: weeklyIntentSchema.parse(stored.weeklyIntent ?? {})
+  });
 }
 
 function shiftIsoDate(date: string, deltaDays: number, timezone: string): string {
