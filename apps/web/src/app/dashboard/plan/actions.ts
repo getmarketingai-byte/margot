@@ -403,6 +403,26 @@ export async function clearGoalDragOverrides(keys: readonly string[]): Promise<v
   await requestUserRegenerate(userId);
 }
 
+/**
+ * Removes every calendar goal override the user set by dragging (`source: "drag"`).
+ * Day-sheet pins (`source: "actual"`) are left intact.
+ */
+export async function clearAllUserDragGoalOverrides(): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  const before = plan.overrides.length;
+  plan.overrides = plan.overrides.filter(
+    (o) => !(o.kind === "goal" && (o.source ?? "drag") === "drag")
+  );
+  if (plan.overrides.length === before) return;
+  await savePlan(userId, plan);
+  afterPlanMutation(userId);
+  await requestUserRegenerate(userId);
+}
+
 function isActualGoalOverride(o: BlockOverride): boolean {
   return o.kind === "goal" && o.source === "actual";
 }

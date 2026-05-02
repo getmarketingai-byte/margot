@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
 import { clearGoalDragOverrides, setGoalBlockOverridesBatch } from "./plan/actions";
@@ -115,6 +116,8 @@ export function DraggableProposedGoalBlock({
   const [dragPx, setDragPx] = useState(0);
   const [dragPxX, setDragPxX] = useState(0);
   const [pending, setPending] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   const pxPerMin = pxPerHour / 60;
   const snapPx = SNAP_MIN * pxPerMin;
@@ -130,6 +133,13 @@ export function DraggableProposedGoalBlock({
         s.pinnedFromOverride ||
         s.overrideSource === "actual"
     );
+
+  /** Calendar drag pins only — day-sheet `actual` pins use the hover reset / day sheet. */
+  const canContextMenuReset = slices.some(
+    (s) =>
+      s.overrideSource === "drag" ||
+      (s.overrideSource !== "actual" && Boolean(s.dragOverrideSaved || s.pinnedFromOverride))
+  );
 
   function snapDeltaMs(deltaPx: number): number {
     const deltaMin = snapToGrid(deltaPx) / pxPerMin;
@@ -262,6 +272,28 @@ export function DraggableProposedGoalBlock({
     }
   }
 
+  function closeContextMenu() {
+    setContextMenu(null);
+  }
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function onPointerDown(e: PointerEvent) {
+      const menu = contextMenuRef.current;
+      if (menu?.contains(e.target as Node)) return;
+      closeContextMenu();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") closeContextMenu();
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu]);
+
   const isFromDaySheet = slices.some((s) => s.overrideSource === "actual");
 
   const bodyStyle: CSSProperties = {
@@ -308,7 +340,12 @@ export function DraggableProposedGoalBlock({
         if (dragState.current) {
           e.preventDefault();
           abortDrag();
+          return;
         }
+        if (!canContextMenuReset) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu({ x: e.clientX, y: e.clientY });
       }}
     >
       <div className="flex flex-col gap-0.5">
@@ -358,6 +395,30 @@ export function DraggableProposedGoalBlock({
           reset
         </button>
       )}
+      {contextMenu &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={contextMenuRef}
+            role="menu"
+            className="fixed z-[100] min-w-[12rem] rounded-md border border-ink-200 bg-white py-1 text-sm shadow-lg dark:border-ink-600 dark:bg-ink-900"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={pending}
+              className="block w-full px-3 py-2 text-left text-ink-800 hover:bg-ink-100 disabled:opacity-50 dark:text-ink-100 dark:hover:bg-ink-800"
+              onClick={() => {
+                closeContextMenu();
+                void reset();
+              }}
+            >
+              Reset to scheduled time
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

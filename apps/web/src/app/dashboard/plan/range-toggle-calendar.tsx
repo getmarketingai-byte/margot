@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { AllocatedBlock, BusyEvent, WeekMetrics } from "@calendar-automations/planner";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
@@ -15,6 +16,7 @@ import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRef
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { WEEK_MS } from "@/lib/effective-schedule-horizon";
 import { WeekCalendar } from "../week-calendar";
+import { clearAllUserDragGoalOverrides } from "./actions";
 import { formatMinutes, goalGroupAggregateSummaryLine } from "./goal-helpers";
 
 type CalendarRangeMode = "calendar-week" | "next-7-days";
@@ -124,7 +126,8 @@ export function RangeToggleCalendar({
   wheelAreas,
   goalGroups = [],
   goalGroupGaps = [],
-  goalGroupMinutes = {}
+  goalGroupMinutes = {},
+  hasUserDragGoalOverrides = false
 }: {
   weekStartMs: number;
   calendarWeekStartsMs?: readonly number[];
@@ -141,13 +144,17 @@ export function RangeToggleCalendar({
   goalGroups?: readonly GoalGroup[];
   goalGroupGaps?: ReadonlyArray<WeekMetrics["goalGroupGaps"][number]>;
   goalGroupMinutes?: Readonly<Record<string, number>>;
+  /** Server: plan has at least one `goal` override with `source: "drag"`. */
+  hasUserDragGoalOverrides?: boolean;
 }) {
+  const router = useRouter();
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(750);
   const [timePatch, setTimePatch] = useState<Record<string, { startMs: number; endMs: number }>>({});
   const [mode, setMode] = useState<CalendarRangeMode>("calendar-week");
   const [showWeather, setShowWeather] = useState(true);
   const [invertedVisibility, setInvertedVisibility] = useState<Record<string, boolean>>({});
   const [previewWeekIdx, setPreviewWeekIdx] = useState(0);
+  const [clearAllDragPending, setClearAllDragPending] = useState(false);
 
   const weekStarts =
     calendarWeekStartsMs && calendarWeekStartsMs.length > 0 ? calendarWeekStartsMs : [weekStartMs];
@@ -247,6 +254,21 @@ export function RangeToggleCalendar({
     });
     scheduleStaleDataRefresh();
   };
+
+  async function handleClearAllCustomMoves() {
+    if (!hasUserDragGoalOverrides) return;
+    setClearAllDragPending(true);
+    try {
+      await clearAllUserDragGoalOverrides();
+      setTimePatch({});
+      scheduleStaleDataRefresh();
+      router.refresh();
+    } catch (err) {
+      console.warn("clearAllUserDragGoalOverrides failed", err);
+    } finally {
+      setClearAllDragPending(false);
+    }
+  }
 
   useEffect(() => {
     try {
@@ -414,6 +436,23 @@ export function RangeToggleCalendar({
         }
         wheelAreaLabel={wheelAreas?.length ? wheelAreaLabel : undefined}
       />
+      <div className="px-1">
+        <button
+          type="button"
+          disabled={!hasUserDragGoalOverrides || clearAllDragPending}
+          onClick={() => void handleClearAllCustomMoves()}
+          className={`mt-1 w-full rounded border px-2 py-1.5 text-left text-xs ${
+            hasUserDragGoalOverrides && !clearAllDragPending
+              ? "border-ink-200 text-ink-700 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+              : "cursor-not-allowed border-ink-200 text-ink-400 opacity-60 dark:border-ink-600 dark:text-ink-500"
+          }`}
+        >
+          {clearAllDragPending ? "Clearing…" : "Clear all custom moves"}
+        </button>
+        <p className="mt-1 text-[10px] leading-snug text-ink-500 dark:text-ink-400">
+          Removes every goal block you repositioned by dragging. Day-sheet pins are unchanged.
+        </p>
+      </div>
       <div className="mt-1 flex flex-wrap items-center gap-1 px-1 text-xs">
         <button
           type="button"

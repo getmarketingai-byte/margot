@@ -151,6 +151,10 @@ export default async function PlanPage() {
   const allocation = allocationSlices[0]!;
   const mergedGoalBlocks = allocationSlices.flatMap((a) => a.blocks);
 
+  const hasUserDragGoalOverrides = plan.overrides.some(
+    (o) => o.kind === "goal" && (o.source ?? "drag") === "drag"
+  );
+
   const mergeWindows = weekSlices.map((s) => ({
     weekStartMs: s.weekStartMs,
     weekEndMs: s.weekEndMs
@@ -375,6 +379,7 @@ export default async function PlanPage() {
                   goalGroups={plan.goalGroups ?? []}
                   goalGroupGaps={allocation.metrics.goalGroupGaps}
                   goalGroupMinutes={allocation.metrics.goalGroupMinutes}
+                  hasUserDragGoalOverrides={hasUserDragGoalOverrides}
                 />
               </div>
               <details className="card lg:hidden" open>
@@ -395,6 +400,7 @@ export default async function PlanPage() {
                     goalGroups={plan.goalGroups ?? []}
                     goalGroupGaps={allocation.metrics.goalGroupGaps}
                     goalGroupMinutes={allocation.metrics.goalGroupMinutes}
+                    hasUserDragGoalOverrides={hasUserDragGoalOverrides}
                   />
                 </div>
               </details>
@@ -421,7 +427,8 @@ function CalendarPreview({
   wheelAreas,
   goalGroups,
   goalGroupGaps,
-  goalGroupMinutes
+  goalGroupMinutes,
+  hasUserDragGoalOverrides
 }: {
   weekStartMs: number;
   calendarWeekStartsMs?: readonly number[];
@@ -438,6 +445,7 @@ function CalendarPreview({
   goalGroups?: Parameters<typeof RangeToggleCalendar>[0]["goalGroups"];
   goalGroupGaps?: Parameters<typeof RangeToggleCalendar>[0]["goalGroupGaps"];
   goalGroupMinutes?: Parameters<typeof RangeToggleCalendar>[0]["goalGroupMinutes"];
+  hasUserDragGoalOverrides: boolean;
 }) {
   return (
     <RangeToggleCalendar
@@ -456,6 +464,7 @@ function CalendarPreview({
       goalGroups={goalGroups}
       goalGroupGaps={goalGroupGaps}
       goalGroupMinutes={goalGroupMinutes}
+      hasUserDragGoalOverrides={hasUserDragGoalOverrides}
     />
   );
 }
