@@ -45,6 +45,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 /** Logged sleep rows must overlap the night window by at least this much to suppress modeled sleep. */
 const ACTUAL_SLEEP_NIGHT_OVERLAP_MS = 30 * MINUTE_MS;
+/** Ignore sub-minute slivers when reserving wake→drive prep for goal packing. */
+const MIN_WAKE_PREP_RESERVE_MS = 60 * 1000;
 
 /** Matches `computeSleepBlocks` / fingerprinting — always trim so titles from {@link computeTravelBlocks} align. */
 function normaliseDriveEventTag(raw?: string | null): string {
@@ -117,8 +119,16 @@ function internalTravelDriveLeg(ev: BusyEvent, driveTag: string): boolean {
   const tag = normaliseDriveEventTag(driveTag);
   const title = (ev.title || "").trim();
   return (
-    isOutboundDriveLegTitle(title, tag, "includeDirect") || isInboundDriveLegTitle(title, tag)
+    isOutboundDriveLegTitle(title, tag, "includeDirect") ||
+    isInboundDriveLegTitle(title, tag)
   );
+}
+
+/** True when `aMs` and `bMs` fall on the same Y-M-D in `timezone`. */
+function sameLocalCalendarDay(aMs: number, bMs: number, timezone: string): boolean {
+  const pa = partsInTimezone(aMs, timezone);
+  const pb = partsInTimezone(bMs, timezone);
+  return pa.year === pb.year && pa.month === pb.month && pa.day === pb.day;
 }
 
 function nightCoversLoggedActualSleep(
@@ -156,6 +166,7 @@ export interface SystemBlock extends BusyEvent {
     | "drive-pre"
     | "drive-post"
     | "drive-direct"
+    | "wake-prep"
     | "morning"
     | "shutdown";
   /**
@@ -618,6 +629,9 @@ export function computeSleepBlocks(
       );
     }
 
+    const durationMs = sleep.durationHours * HOUR_MS;
+    const preliminaryTargetStart = Math.max(nightStartMs, targetEndMs - durationMs);
+
     for (const drive of driveHome) {
       if (drive.endMs <= nightStartMs || drive.startMs >= nightEndMs) continue;
       const extendedEnd = roundLocalMs(
@@ -625,6 +639,10 @@ export function computeSleepBlocks(
         roundMin,
         timezone
       );
+      // Evening `[Drive] ←` legs that finish (including wind-down) before the
+      // modeled sleep block would start cannot overlap the target window — do
+      // not let them displace sleep or appear as spurious "conflicts" Thu/Fri.
+      if (extendedEnd <= preliminaryTargetStart) continue;
       sleepBusy.push({ ...drive, endMs: extendedEnd });
     }
 
@@ -807,6 +825,81 @@ export function computeRoutineBlocks(
 }
 
 /**
+ * Reserves `[morning routine end, first outbound drive-pre start)` on each wake
+ * day so goal packing cannot insert Needle Mover (etc.) between routine and
+ * commute when sleep was only pulled earlier for that drive.
+ */
+export function computeWakePrepReservedBlocks(
+  travelBlocks: readonly SystemBlock[],
+  sleepBlocks: readonly SystemBlock[],
+  routineBlocks: readonly SystemBlock[],
+  weekStartMs: number,
+  weekEndMs: number,
+  timezone: string,
+  driveTag: string = "[Drive]"
+): SystemBlock[] {
+  const tag = normaliseDriveEventTag(driveTag);
+  const drivePre = travelBlocks.filter(
+    (b) =>
+      b.system === "travel" &&
+      b.variant === "drive-pre" &&
+      b.source === "internal" &&
+      isOutboundDriveLegTitle(b.title ?? "", tag, "includeDirect")
+  );
+  if (drivePre.length === 0) return [];
+
+  const morningByNightIdx = new Map<number, { endMs: number }>();
+  for (const r of routineBlocks) {
+    if (r.system !== "routine" || r.variant !== "morning") continue;
+    const key = r.override?.key;
+    if (!key?.startsWith("morning-")) continue;
+    const idx = Number(key.slice("morning-".length));
+    if (!Number.isFinite(idx)) continue;
+    morningByNightIdx.set(idx, { endMs: r.endMs });
+  }
+
+  const out: SystemBlock[] = [];
+  const seen = new Set<string>();
+
+  for (const s of sleepBlocks) {
+    if (s.system !== "sleep" || !s.override) continue;
+    if (s.variant === "split") continue;
+    const idx = Number(s.override.key);
+    if (!Number.isFinite(idx)) continue;
+
+    const morning = morningByNightIdx.get(idx);
+    const routineEnd = morning ? morning.endMs : s.endMs;
+
+    let earliest: SystemBlock | null = null;
+    for (const d of drivePre) {
+      if (d.startMs < routineEnd || d.startMs >= weekEndMs) continue;
+      if (!sameLocalCalendarDay(s.endMs, d.startMs, timezone)) continue;
+      if (!earliest || d.startMs < earliest.startMs) earliest = d;
+    }
+    if (!earliest) continue;
+    const gap = earliest.startMs - routineEnd;
+    if (gap < MIN_WAKE_PREP_RESERVE_MS) continue;
+
+    const dedupeKey = `${idx}-${routineEnd}-${earliest.startMs}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    out.push({
+      sourceId: `wake-prep-${dedupeKey}`,
+      title: "[Prep]",
+      startMs: routineEnd,
+      endMs: earliest.startMs,
+      busy: true,
+      source: "internal",
+      system: "travel",
+      variant: "wake-prep"
+    });
+  }
+
+  return out;
+}
+
+/**
  * Travel overlays for Perfect Week blocks whose goal is `specialGoalType:
  * "gym"`. Uses the same drive tag and quantised one-way minutes as the
  * allocator (`gymTravelPadMinutesForGoal` / `settings.gym.driveMinutes`).
@@ -898,6 +991,8 @@ export interface SystemBlocksOverrides {
  *      overrides (per-night) bypass the gap search.
  *   3. Morning / shutdown routines are anchored on the placed sleep
  *      blocks; user overrides (per routine) replace the computed time.
+ *   4. `[Prep]` travel slices reserve the gap between morning routine end and
+ *      the first outbound drive so goals cannot pack between routine and commute.
  */
 export async function computeSystemBlocks(
   weekStartMs: number,
@@ -927,5 +1022,14 @@ export async function computeSystemBlocks(
   const routineBlocks = timemap
     ? computeRoutineBlocks(sleepBlocks, timemap, weekStartMs, undefined, overrides.routine)
     : [];
-  return [...travelBlocks, ...sleepBlocks, ...routineBlocks];
+  const wakePrepBlocks = computeWakePrepReservedBlocks(
+    travelBlocks,
+    sleepBlocks,
+    routineBlocks,
+    weekStartMs,
+    weekStartMs + 7 * DAY_MS,
+    timezone,
+    driveTag
+  );
+  return [...travelBlocks, ...sleepBlocks, ...routineBlocks, ...wakePrepBlocks];
 }
