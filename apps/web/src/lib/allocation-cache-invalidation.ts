@@ -5,6 +5,7 @@
  */
 
 import { revalidateTag } from "next/cache";
+import { after } from "next/server";
 
 export function userAllocationCacheTag(userId: string): string {
   return `user-alloc-context-${userId}`;
@@ -12,4 +13,11 @@ export function userAllocationCacheTag(userId: string): string {
 
 export function invalidateUserAllocationCache(userId: string): void {
   revalidateTag(userAllocationCacheTag(userId));
+}
+
+/** Use when invalidating from inside renders or `unstable_cache` callbacks (e.g. weather / busy read paths). */
+export function scheduleInvalidateUserAllocationCache(userId: string): void {
+  after(() => {
+    revalidateTag(userAllocationCacheTag(userId));
+  });
 }

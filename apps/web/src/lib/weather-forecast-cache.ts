@@ -10,7 +10,10 @@ import { createHash } from "crypto";
 import { after } from "next/server";
 import { eq } from "drizzle-orm";
 import type { WeatherSettings } from "@calendar-automations/schema";
-import { invalidateUserAllocationCache } from "@/lib/allocation-cache-invalidation";
+import {
+  invalidateUserAllocationCache,
+  scheduleInvalidateUserAllocationCache
+} from "@/lib/allocation-cache-invalidation";
 import { db, schema } from "@/lib/db";
 
 export interface OpenMeteoHourly {
@@ -242,7 +245,7 @@ export class WeatherForecastCacheSession {
       openMeteoFetchedAtMs: String(nowMs),
       sunriseByDate: preservedSunrise
     });
-    invalidateUserAllocationCache(this.userId);
+    scheduleInvalidateUserAllocationCache(this.userId);
     return fresh;
   }
 
@@ -286,7 +289,7 @@ export class WeatherForecastCacheSession {
         [iso]: { ...fresh, fetchedAtMs: Date.now() }
       }
     });
-    invalidateUserAllocationCache(this.userId);
+    scheduleInvalidateUserAllocationCache(this.userId);
     return fresh;
   }
 }

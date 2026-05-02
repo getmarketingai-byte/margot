@@ -11,7 +11,10 @@ import { after } from "next/server";
 import { eq } from "drizzle-orm";
 import type { BusyEvent, Interval } from "@calendar-automations/planner";
 import { normaliseCalendarSource, type CalendarSource } from "@calendar-automations/schema";
-import { invalidateUserAllocationCache } from "@/lib/allocation-cache-invalidation";
+import {
+  invalidateUserAllocationCache,
+  scheduleInvalidateUserAllocationCache
+} from "@/lib/allocation-cache-invalidation";
 import { db, schema } from "@/lib/db";
 import { fetchGoogleBusyLive } from "@/lib/google-calendar";
 import { googleBusyFetchWindowForPlanner } from "@/lib/google-busy-fetch-window";
@@ -152,6 +155,6 @@ export async function fetchGoogleBusy(
     windowEndMs: fetchEndMs,
     payload: live
   });
-  invalidateUserAllocationCache(userId);
+  scheduleInvalidateUserAllocationCache(userId);
   return live;
 }
