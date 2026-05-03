@@ -53,6 +53,18 @@ import {
 type GoalDraft = Omit<WeeklyGoal, "id" | "title">;
 type GoalInput = Omit<WeeklyGoal, "id">;
 
+/** Overlay allocator Pass‑2 hints so fair-share checks match `goalsForAllocation` (wheel, floors, etc.). */
+function mergeAllocatorRemainderHints<T extends { remainderHintByGoalId: Record<string, number> }>(
+  summ: T,
+  hints: Record<string, number> | undefined
+): T {
+  if (!hints || Object.keys(hints).length === 0) return summ;
+  return {
+    ...summ,
+    remainderHintByGoalId: { ...summ.remainderHintByGoalId, ...hints }
+  };
+}
+
 interface WheelOption {
   id: string;
   label: string;
@@ -252,6 +264,12 @@ export function PlanClient({
     [goals, rollingSevenDayApprox.freeBeforeGoalsApproxMinutes]
   );
 
+  /** ISO slice 0 free minutes — same cohort as server `effectiveTargetBaselineByGoalId` (slice 0). */
+  const summaryIsoSlice0 = useMemo(
+    () => summariseAllocation(goals, slices[0]?.freeMinutesThisWeek ?? 0),
+    [goals, slices]
+  );
+
   const summarySplitLeft = useMemo(
     () => summariseAllocation(goals, splitSliceA?.freeMinutesThisWeek ?? 0),
     [goals, splitSliceA?.freeMinutesThisWeek]
@@ -261,12 +279,34 @@ export function PlanClient({
     [goals, splitSliceB?.freeMinutesThisWeek]
   );
 
-  const cohortAllocationSummary =
-    rangeMode === "calendar-week"
-      ? summaryIsoSingle
-      : rollingSplitsTwoISO
-        ? summarySplitLeft
-        : summaryRollingCombined;
+  /** Rolling view targets still come from ISO week slice 0 — share checks must use the same `T`. */
+  const cohortAllocationSummary = useMemo((): GoalAllocationRowSummary => {
+    if (rangeMode === "calendar-week") {
+      return mergeAllocatorRemainderHints(
+        summaryIsoSingle as GoalAllocationRowSummary,
+        slices[safeWeekIdx]?.allocatorRemainderHintByGoalId
+      );
+    }
+    if (rollingSplitsTwoISO) {
+      return mergeAllocatorRemainderHints(
+        summarySplitLeft as GoalAllocationRowSummary,
+        splitSliceA?.allocatorRemainderHintByGoalId
+      );
+    }
+    return mergeAllocatorRemainderHints(
+      summaryIsoSlice0 as GoalAllocationRowSummary,
+      slices[0]?.allocatorRemainderHintByGoalId
+    );
+  }, [
+    rangeMode,
+    rollingSplitsTwoISO,
+    safeWeekIdx,
+    slices,
+    splitSliceA,
+    summaryIsoSingle,
+    summaryIsoSlice0,
+    summarySplitLeft
+  ]);
 
   const mergedPlanMinuteForTrash = useCallback(
     (goalId: string) => {
@@ -310,6 +350,9 @@ export function PlanClient({
           allocationSummary: summaryIsoSingle as GoalAllocationRowSummary,
           planMinutes: sl.planMinutesByGoal[goalId],
           effectiveTarget: sl.effectiveTargetByGoal[goalId],
+          shareCheckDaySheetLoggedMinutes: sl.planMinutesByGoal[goalId]?.loggedMinutes ?? 0,
+          shareAllocatorDemandBeforePass3:
+            sl.demandBeforePass3ByGoal[goalId] ?? sl.effectiveTargetByGoal[goalId] ?? 0,
           pace: sl.paceByGoal[goalId] as GoalPaceInfo | undefined,
           dualWeek: undefined as
             | {
@@ -328,14 +371,21 @@ export function PlanClient({
           },
           planMinutes: undefined,
           effectiveTarget: undefined,
+          shareCheckDaySheetLoggedMinutes: 0,
+          shareAllocatorDemandBeforePass3: 0,
           pace: undefined
         };
       }
       const base = rollingSevenDayApprox.effectiveTargetBaselineByGoalId[goalId] ?? 0;
+      const shareCheckLogged = slices[0]?.planMinutesByGoal[goalId]?.loggedMinutes ?? 0;
+      const shareDemand =
+        rollingSevenDayApprox.weeklyDemandBeforePass3BaselineByGoalId[goalId] ?? base;
       return {
         allocationSummary: summaryRollingCombined as GoalAllocationRowSummary,
         planMinutes: combinedRollingPlanMinute(goalId),
         effectiveTarget: base,
+        shareCheckDaySheetLoggedMinutes: shareCheckLogged,
+        shareAllocatorDemandBeforePass3: shareDemand,
         pace: undefined as GoalPaceInfo | undefined,
         dualWeek: undefined
       };
@@ -344,6 +394,7 @@ export function PlanClient({
       combinedRollingPlanMinute,
       rangeMode,
       rollingSevenDayApprox.effectiveTargetBaselineByGoalId,
+      rollingSevenDayApprox.weeklyDemandBeforePass3BaselineByGoalId,
       rollingSplitsTwoISO,
       rollingSplitPairIdx,
       safeWeekIdx,
@@ -551,6 +602,8 @@ export function PlanClient({
               dualWeek={gpr.dualWeek}
               planMinutes={gpr.planMinutes}
               effectiveTarget={gpr.effectiveTarget}
+              shareCheckDaySheetLoggedMinutes={gpr.shareCheckDaySheetLoggedMinutes ?? 0}
+              shareAllocatorDemandBeforePass3={gpr.shareAllocatorDemandBeforePass3}
               pace={gpr.pace}
               onUpdate={(next) => handleUpdate(goal.id, next)}
               onRequestTrash={() => setPendingTrash(goal)}
@@ -944,6 +997,8 @@ function GoalRow({
   dualWeek,
   planMinutes,
   effectiveTarget,
+  shareCheckDaySheetLoggedMinutes = 0,
+  shareAllocatorDemandBeforePass3,
   pace,
   onUpdate,
   onRequestTrash,
@@ -968,6 +1023,10 @@ function GoalRow({
   };
   planMinutes?: GoalPlanMinutes;
   effectiveTarget?: number;
+  /** Logged minutes on the same ISO slice as `shareCheckSummary` (cohort fair-share). */
+  shareCheckDaySheetLoggedMinutes?: number;
+  /** When set, fair-share compare uses this (post–log / from-now) instead of display target. */
+  shareAllocatorDemandBeforePass3?: number;
   pace?: GoalPaceInfo;
   onUpdate: (next: GoalInput) => void;
   onRequestTrash: () => void;
@@ -1037,7 +1096,13 @@ function GoalRow({
     ? false
     : effectiveTarget !== undefined &&
         effectiveTarget > 0 &&
-        goalExceedsDeclaredWeekShare(goal, shareCheckSummary, effectiveTarget);
+        goalExceedsDeclaredWeekShare(
+          goal,
+          shareCheckSummary,
+          effectiveTarget,
+          shareCheckDaySheetLoggedMinutes,
+          shareAllocatorDemandBeforePass3
+        );
 
   const defaultAllocationSharePercent =
     allocationSummary.equalShareGoals > 0

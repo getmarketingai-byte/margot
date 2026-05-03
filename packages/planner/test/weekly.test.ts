@@ -458,6 +458,107 @@ describe("allocateWeek", () => {
     expect(b!.endMs).toBeLessThanOrEqual(winEnd);
   });
 
+  it("hard ideal after+before caps weekly Pass 1–2 target to placeable window minutes", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    /** Full ISO week schedulable, but goal is Monday-only with a 4h hard clock band. */
+    const busy: BusyEvent[] = [];
+
+    const result = allocateWeek({
+      plan: {
+        id: "ideal-window-weekly-cap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "window-capped",
+            title: "Window capped",
+            targetMinutes: 9999,
+            dayOfWeek: "monday",
+            placementIdealClockAfter: { hour: 10, minute: 0 },
+            placementIdealClockBefore: { hour: 14, minute: 0 },
+            priority: 5
+          })
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["window-capped"]?.targetMinutes).toBe(240);
+    const blk = result.blocks.find((x) => x.goalId === "window-capped");
+    expect(blk).toBeDefined();
+    expect(Math.floor((blk!.endMs - blk!.startMs) / (60 * 1000))).toBeLessThanOrEqual(240);
+  });
+
+  it("inherits goal-group placement after+before for hard window weekly cap", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const grpId = "grp-screens";
+    const result = allocateWeek({
+      plan: {
+        id: "group-hard-window-cap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goalGroups: [
+          {
+            id: grpId,
+            title: "Screens",
+            placementIdealClockAfter: { hour: 10, minute: 0 },
+            placementIdealClockBefore: { hour: 14, minute: 0 }
+          }
+        ],
+        goals: [
+          goal({
+            id: "member-cap",
+            title: "Member",
+            targetMinutes: 9999,
+            dayOfWeek: "monday",
+            groupIds: [grpId]
+          })
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["member-cap"]?.targetMinutes).toBe(240);
+  });
+
+  it("inherits goal-group daysOfWeek so hard-window cap is not 7× the band", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const grpId = "grp-band-dow";
+    const result = allocateWeek({
+      plan: {
+        id: "group-window-dow-cap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goalGroups: [
+          {
+            id: grpId,
+            title: "Band",
+            daysOfWeek: ["tuesday", "wednesday"],
+            placementIdealClockAfter: { hour: 10, minute: 0 },
+            placementIdealClockBefore: { hour: 14, minute: 0 }
+          }
+        ],
+        goals: [
+          goal({
+            id: "member-dow",
+            title: "Member",
+            targetMinutes: 9999,
+            groupIds: [grpId]
+          })
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["member-dow"]?.targetMinutes).toBe(480);
+  });
+
   it("avoids duplicate same-goal auto blocks on the same day", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const mondayStart = weekStartMs;
@@ -1870,6 +1971,7 @@ describe("allocateWeek", () => {
       nowMs
     });
     expect(result.metrics.perGoal["solo"]!.targetMinutes).toBe(4000);
+    expect(result.metrics.perGoal["solo"]!.demandMinutesBeforePass3).toBe(3600);
     const auto = result.blocks.filter((b) => b.goalId === "solo" && !b.segment && !b.pinnedFromOverride);
     for (const b of auto) {
       expect(b.endMs).toBeGreaterThan(nowMs);

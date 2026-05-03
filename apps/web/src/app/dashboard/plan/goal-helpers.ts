@@ -570,30 +570,129 @@ const PASS2_WARN_SLACK_MIN = 15;
 
 /**
  * True when the planner weekly target (minus floor) exceeds what this row’s
- * constraints imply: an even slice of full-week time for unconstrained goals,
- * or `(pct/100)*freeMinutes` when an explicit sub-100 `% of week` is set.
+ * constraints imply: Pass‑2 remainder share from {@link summariseAllocation}
+ * (`remainderHintByGoalId` / `perEqualShareMinutes`). For sub-100 `% of week`,
+ * prefer that goal’s remainder hint (same Pass‑2 split as the planner); only if
+ * no hint exists, fall back to `(pct/100)*freeMinutes`.
  * Skips explicit 100% (allowed to consume the whole post-floor pool).
+ *
+ * **Do not** compare to `equalSliceOfWeekMinutes` (`freeMinutes / N`); that ignores
+ * floors reserved by other goals and inflates the baseline, so most rows spuriously
+ * look “above fair share”.
+ *
+ * **`daySheetLoggedMinutesForShare`:** same ISO slice as `summary.freeMinutes` (the
+ * cohort row’s `loggedMinutes`). When **`allocatorDemandMinutesBeforePass3`** is omitted,
+ * subtracting this credit approximates allocator post–log demand while `targetMinutes`
+ * can stay the full Pass 1+2 display figure.
+ *
+ * **`allocatorDemandMinutesBeforePass3`:** from `WeekMetrics.perGoal.demandMinutesBeforePass3`
+ * (post–log and optional `allocationNowMs` scaling, before Pass 3). When provided, it
+ * defines the Pass‑2‑comparable total for this row and overrides the display target /
+ * day-sheet heuristic (covers from-now scaling where `targetMinutes` stays full-week).
  */
 export function goalExceedsDeclaredWeekShare(
   goal: WeeklyGoal,
   summary: Pick<
     ReturnType<typeof summariseAllocation>,
-    "equalSliceOfWeekMinutes" | "freeMinutes" | "hasWeightedShare"
+    | "equalSliceOfWeekMinutes"
+    | "freeMinutes"
+    | "hasWeightedShare"
+    | "remainderHintByGoalId"
+    | "perEqualShareMinutes"
   >,
-  effectiveTargetMinutes: number | undefined
+  effectiveTargetMinutes: number | undefined,
+  daySheetLoggedMinutesForShare = 0,
+  allocatorDemandMinutesBeforePass3?: number
 ): boolean {
   if (effectiveTargetMinutes === undefined) return false;
   if (goal.allocationSharePercent === 100) return false;
   const floor = normaliseGoalTime(goal).minMinutesPerWeek ?? 0;
-  const pass2 = effectiveTargetMinutes - floor;
+  const rawPass2 = Math.max(0, effectiveTargetMinutes - floor);
+  const logCred = Math.max(0, daySheetLoggedMinutesForShare);
+  const pass2FromDisplay = Math.max(0, rawPass2 - Math.min(logCred, rawPass2));
+  const pass2 =
+    allocatorDemandMinutesBeforePass3 !== undefined
+      ? Math.max(0, allocatorDemandMinutesBeforePass3 - floor)
+      : pass2FromDisplay;
   const pct = goal.allocationSharePercent;
   if (pct !== undefined && pct < 100) {
-    const cap = (pct / 100) * summary.freeMinutes;
-    return pass2 > cap + PASS2_WARN_SLACK_MIN;
+    const pctHint = summary.remainderHintByGoalId[goal.id];
+    const baseline =
+      pctHint !== undefined ? pctHint : (pct / 100) * summary.freeMinutes;
+    if (pass2 <= baseline) return false;
+    const exceeds = pass2 > baseline + PASS2_WARN_SLACK_MIN;
+    // #region agent log
+    if (exceeds) {
+      fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a035b6" },
+        body: JSON.stringify({
+          sessionId: "a035b6",
+          location: "goal-helpers.ts:goalExceedsDeclaredWeekShare",
+          message: "pct row exceeds share baseline",
+          data: {
+            goalId: goal.id,
+            pct,
+            usedHint: pctHint !== undefined,
+            baseline,
+            capPctT: (pct / 100) * summary.freeMinutes,
+            pass2,
+            rawPass2,
+            logCred,
+            demandM: allocatorDemandMinutesBeforePass3,
+            floor,
+            effectiveTargetMinutes,
+            freeMinutes: summary.freeMinutes
+          },
+          timestamp: Date.now(),
+          hypothesisId: "pct-hint"
+        })
+      }).catch(() => {});
+    }
+    // #endregion
+    return exceeds;
   }
   if (summary.hasWeightedShare && pct === undefined) return false;
-  if (pass2 <= summary.equalSliceOfWeekMinutes) return false;
-  return pass2 > summary.equalSliceOfWeekMinutes + PASS2_WARN_SLACK_MIN;
+
+  const hint = summary.remainderHintByGoalId[goal.id];
+  const baseline =
+    hint !== undefined
+      ? hint
+      : summary.perEqualShareMinutes > 0
+        ? summary.perEqualShareMinutes
+        : summary.equalSliceOfWeekMinutes;
+  if (pass2 <= baseline) return false;
+  const exceedsEq = pass2 > baseline + PASS2_WARN_SLACK_MIN;
+  // #region agent log
+  if (exceedsEq) {
+    fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a035b6" },
+      body: JSON.stringify({
+        sessionId: "a035b6",
+        location: "goal-helpers.ts:goalExceedsDeclaredWeekShare",
+        message: "equal-share row exceeds baseline",
+        data: {
+          goalId: goal.id,
+          baseline,
+          hintDefined: hint !== undefined,
+          pass2,
+          rawPass2: Math.max(0, effectiveTargetMinutes - floor),
+          logCred: Math.max(0, daySheetLoggedMinutesForShare),
+          pass2FromDisplay,
+          demandM: allocatorDemandMinutesBeforePass3,
+          floor,
+          effectiveTargetMinutes,
+          hasWeightedShare: summary.hasWeightedShare,
+          freeMinutes: summary.freeMinutes
+        },
+        timestamp: Date.now(),
+        hypothesisId: "eq-baseline"
+      })
+    }).catch(() => {});
+  }
+  // #endregion
+  return exceedsEq;
 }
 
 /**

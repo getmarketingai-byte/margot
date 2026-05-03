@@ -4,6 +4,7 @@ import {
   aggregateGroupConstraintSummariesForGoal,
   formatMinutes,
   goalAllocationRowDisplay,
+  goalExceedsDeclaredWeekShare,
   goalGroupAggregateSummaryLine,
   summariseAllocation
 } from "./goal-helpers";
@@ -45,6 +46,69 @@ describe("summariseAllocation", () => {
     const g = baseGoal({ groupIds: ["grp-a"] });
     const summary = summariseAllocation([g], 100);
     expect(summary.hasAnyGoalGroupMembership).toBe(true);
+  });
+});
+
+describe("goalExceedsDeclaredWeekShare", () => {
+  it("uses remainder hint vs inflated equalSlice when % rows share the cohort", () => {
+    const floor = baseGoal({ id: "floor", title: "Floored", minMinutesPerWeek: 120 });
+    const eq = baseGoal({ id: "eq", title: "Equal share" });
+    const wt = baseGoal({
+      id: "wt",
+      title: "40% row",
+      allocationSharePercent: 40
+    });
+    const summary = summariseAllocation([floor, eq, wt], 614);
+    const hintEq = summary.remainderHintByGoalId["eq"]!;
+    const hintWt = summary.remainderHintByGoalId["wt"]!;
+    expect(hintEq).toBe(248);
+    expect(hintWt).toBe(246);
+    expect(summary.equalSliceOfWeekMinutes).toBe(307);
+    expect(goalExceedsDeclaredWeekShare(eq, summary, hintEq)).toBe(false);
+    expect(goalExceedsDeclaredWeekShare(wt, summary, hintWt)).toBe(false);
+    expect(goalExceedsDeclaredWeekShare(wt, summary, hintWt + 20)).toBe(true);
+    expect(summary.hasWeightedShare).toBe(true);
+  });
+
+  it("flags when target exceeds remainder hint (all equal-share cohort)", () => {
+    const a = baseGoal({ id: "a", title: "A" });
+    const b = baseGoal({ id: "b", title: "B" });
+    const c = baseGoal({ id: "c", title: "C" });
+    const summary = summariseAllocation([a, b, c], 600);
+    const hintA = summary.remainderHintByGoalId["a"]!;
+    expect(hintA).toBe(200);
+    expect(goalExceedsDeclaredWeekShare(a, summary, hintA)).toBe(false);
+    expect(goalExceedsDeclaredWeekShare(a, summary, hintA + 20)).toBe(true);
+  });
+
+  it("falls back to perEqualShareMinutes when no per-goal hint", () => {
+    const a = baseGoal({ id: "a", title: "A" });
+    const b = baseGoal({ id: "b", title: "B" });
+    const summary = summariseAllocation([a, b], 600);
+    expect(summary.perEqualShareMinutes).toBe(300);
+    expect(goalExceedsDeclaredWeekShare(a, summary, 300)).toBe(false);
+    expect(goalExceedsDeclaredWeekShare(a, summary, 316)).toBe(true);
+  });
+
+  it("does not warn when displayed target is high only because of day-sheet logs (allocator credit)", () => {
+    const a = baseGoal({ id: "a", title: "A" });
+    const b = baseGoal({ id: "b", title: "B" });
+    const c = baseGoal({ id: "c", title: "C" });
+    const summary = summariseAllocation([a, b, c], 600);
+    const hintA = summary.remainderHintByGoalId["a"]!;
+    expect(hintA).toBe(200);
+    // Full Pass 1+2 style display can stay at 200+64 while comparable demand is 200.
+    expect(goalExceedsDeclaredWeekShare(a, summary, hintA + 64, 64)).toBe(false);
+    expect(goalExceedsDeclaredWeekShare(a, summary, hintA + 80, 64)).toBe(true);
+  });
+
+  it("uses allocator pre–Pass 3 demand when provided (display target can stay full-week)", () => {
+    const a = baseGoal({ id: "a", title: "A" });
+    const summary = summariseAllocation([a], 600);
+    expect(summary.remainderHintByGoalId["a"]).toBe(600);
+    // Display can stay 700 while demand (aligned to hints) is 600.
+    expect(goalExceedsDeclaredWeekShare(a, summary, 700, 0, 600)).toBe(false);
+    expect(goalExceedsDeclaredWeekShare(a, summary, 700, 0, 620)).toBe(true);
   });
 });
 

@@ -242,6 +242,10 @@ export default async function PlanPage() {
     const sliceMeta = weekSlices[idx]!;
     const scheduledByGoal: Record<string, number> = {};
     const effectiveTargetByGoal: Record<string, number> = {};
+    const demandBeforePass3ByGoal: Record<string, number> = {};
+    const allocatorRemainderHintByGoalId: Record<string, number> = {
+      ...alloc.metrics.allocatorRemainderHintByGoalId
+    };
     const planMinutesByGoal: Record<
       string,
       { loggedMinutes: number; proposedFutureMinutes: number }
@@ -249,6 +253,7 @@ export default async function PlanPage() {
     for (const [id, m] of Object.entries(alloc.metrics.perGoal)) {
       scheduledByGoal[id] = m.scheduledMinutes;
       effectiveTargetByGoal[id] = m.targetMinutes;
+      demandBeforePass3ByGoal[id] = m.demandMinutesBeforePass3;
       planMinutesByGoal[id] = {
         loggedMinutes: m.loggedMinutes,
         proposedFutureMinutes: m.proposedFutureMinutes
@@ -289,6 +294,8 @@ export default async function PlanPage() {
       remainingFromNowMinutes: alloc.metrics.utilisation.availableFromNowMinutes,
       planMinutesByGoal,
       effectiveTargetByGoal,
+      demandBeforePass3ByGoal,
+      allocatorRemainderHintByGoalId,
       paceByGoal: paceByGoalSlice,
       goalGroupGaps: [...alloc.metrics.goalGroupGaps],
       goalGroupMinutes: alloc.metrics.goalGroupMinutes,
@@ -341,7 +348,9 @@ export default async function PlanPage() {
     ),
     proposedMinutesByGoalId: occupiedRollWithGoals.proposedMinutesByGoalId,
     loggedMinutesByGoalIdInWindow,
-    effectiveTargetBaselineByGoalId: perfectWeekStatsBySlice[0]?.effectiveTargetByGoal ?? {}
+    effectiveTargetBaselineByGoalId: perfectWeekStatsBySlice[0]?.effectiveTargetByGoal ?? {},
+    weeklyDemandBeforePass3BaselineByGoalId:
+      perfectWeekStatsBySlice[0]?.demandBeforePass3ByGoal ?? {}
   };
 
   const allDaySheetReviews = await loadAllDailyReviewsForUser(userId);

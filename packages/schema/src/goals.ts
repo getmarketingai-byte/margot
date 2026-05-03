@@ -205,7 +205,8 @@ export const weeklyGoalSchema = z.object({
   placementIdealClockAfter: placementIdealClockBoundarySchema.optional(),
   /**
    * Upper bound (exclusive) for which listed `placementIdealClockTimes` participate in soft nudges.
-   * When paired with `placementIdealClockAfter` as above, placement is hard-clipped to that window.
+   * When paired with `placementIdealClockAfter` as above, placement is hard-clipped to that window
+   * and the weekly allocator tightens `maxMinutesPerWeek` to the total placeable minutes in that band.
    */
   placementIdealClockBefore: placementIdealClockBoundarySchema.optional(),
   /**

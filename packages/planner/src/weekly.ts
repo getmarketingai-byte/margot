@@ -32,7 +32,9 @@
  *      **before** other goals at the same commitment/floor tier so earlier list
  *      order cannot occupy those drive windows first. Optional
  *      `placementIdealClockTimes` (optionally narrowed by after/before boundaries
- *      or legacy `placementIdealClockFilter`) bias gap choice and in-gap start alignment.
+ *      or legacy `placementIdealClockFilter`) bias gap choice and in-gap start alignment;
+ *      when after+before form a hard band, Pass 1–2 weekly targets are capped to
+ *      placeable time in that band (merged with explicit `maxMinutesPerWeek`).
  *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
@@ -168,6 +170,9 @@ export interface WeekMetrics {
   /**
    * goalId -> progress vs weekly plan.
    * - `targetMinutes`: Pass 1+2 planned weekly minutes (full-week free budget), before day-sheet credit.
+   * - `demandMinutesBeforePass3`: weekly minutes the allocator still wants placed after day-sheet log
+   *   credit and optional `allocationNowMs` from-now scaling — same basis as `unplacedMinutes +` blocks
+   *   placed in Pass 3, but captured before Pass 3. Use for cohort fair-share UI vs `targetMinutes`.
    * - `scheduledMinutes`: achieved = merged union of day-sheet (`daysheet-goal:`) and goal block intervals (see ALLOCATOR_BUSINESS_RULES.md).
    * - `loggedMinutes` / `proposedFutureMinutes`: day-sheet-only and future-block-only (for UI); can overlap the same wall time, so they need not sum to `scheduledMinutes`.
    * - `unplacedMinutes`: placement demand after log credit still unmet by calendar blocks (>= 0).
@@ -177,6 +182,8 @@ export interface WeekMetrics {
     {
       scheduledMinutes: number;
       targetMinutes: number;
+      /** Demand after log / from-now adjustments, before Pass 3 (see interface doc). */
+      demandMinutesBeforePass3: number;
       unplacedMinutes: number;
       /** Day-sheet (`daysheet-goal:`) minutes merged in the week window. */
       loggedMinutes: number;
@@ -246,6 +253,12 @@ export interface WeekMetrics {
   };
   /** Goals that received zero minutes (only populated under "strict" mode). */
   notScheduled: Array<{ goalId: string; title: string; reason: "starved" }>;
+  /**
+   * Pass‑2 minutes per goal after group weekly caps: `plannedWeeklyMinutes −` minutes
+   * reserved at the start of Pass 2 (Pass‑1 floors). Same cohort as the allocator;
+   * used to align Perfect Week fair-share hints with `goalsForAllocation` (wheel, etc.).
+   */
+  allocatorRemainderHintByGoalId: Record<string, number>;
   /**
    * Present when `UserSettings.personalSystem.energyBatterySchedulingEnabled` is true:
    * coarse calendar load per day + iterative tuning hints for the planning UI.
@@ -334,6 +347,11 @@ export interface PreparedGoal {
    * Alias: placement demand.
    */
   effectiveMinutes: number;
+  /**
+   * `effectiveMinutes` after Pass 1 (and starvation shrink if any), before Pass 2 rounds.
+   * Used with post–cap `plannedWeeklyMinutes` for Pass‑2 fair-share hints.
+   */
+  pass1EndEffectiveMinutes: number;
   /** Order in the user's list, used as the priority tie-breaker. */
   index: number;
 }
@@ -400,7 +418,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     }
   }
 
-  const schedulingGoalsBase = plan.goals.filter((g) => !isInvertedTimemapGoal(g));
+  const schedulingGoalsBase = plan.goals
+    .filter((g) => !isInvertedTimemapGoal(g))
+    .map((g) => mergeGoalGroupPlacementSchedulingOntoGoal(plan, g));
   const withoutRoutineInjected = schedulingGoalsBase.filter((g) => g.specialGoalType !== "gym");
   const physicalRoutine = physicalActivityWeeklyGoalFromGymSettings(settings.gym);
   const schedulingGoals = withoutRoutineInjected;
@@ -444,11 +464,23 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFromNow(g, allocationNowMs), 0),
     0
   );
+  const hardWindowWeeklyCaps = new Map<string, number>();
+  for (const g of goalsForAllocation) {
+    const cap = weeklyHardIdealWindowMaxPlaceableMinutes(
+      g,
+      days,
+      tz,
+      input.goalAvailabilityWindows?.[g.id],
+      input.niceWeatherWindows
+    );
+    if (cap !== undefined) hardWindowWeeklyCaps.set(g.id, cap);
+  }
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
     goalsForAllocation,
     weekCapacityMinutes,
     settings.allocator,
-    input.catchUpFloors
+    input.catchUpFloors,
+    hardWindowWeeklyCaps
   );
 
   const goalGroupWeeklyGapsPre: Array<{
@@ -833,7 +865,8 @@ function distributeMinutes(
   goals: readonly WeeklyGoal[],
   totalFreeMin: number,
   allocator: AllocatorSettings,
-  catchUpFloors?: Record<string, number>
+  catchUpFloors?: Record<string, number>,
+  hardIdealWindowWeeklyCaps?: ReadonlyMap<string, number>
 ): {
   prepared: PreparedGoal[];
   overcommitted: WeekMetrics["overcommitted"];
@@ -848,12 +881,22 @@ function distributeMinutes(
       // stated `maxMinutesPerWeek` (catch-up looked like "ignore my cap").
       norm.minMinutesPerWeek = Math.max(0, weeklyFloorBeforeCatchUpBump + bump);
     }
+    const winCap = hardIdealWindowWeeklyCaps?.get(goal.id);
+    if (winCap !== undefined) {
+      const qc = Math.max(0, Math.floor(winCap / QUANTUM) * QUANTUM);
+      norm.maxMinutesPerWeek =
+        norm.maxMinutesPerWeek === undefined ? qc : Math.min(norm.maxMinutesPerWeek, qc);
+      if (norm.minMinutesPerWeek !== undefined && norm.maxMinutesPerWeek !== undefined) {
+        norm.minMinutesPerWeek = Math.min(norm.minMinutesPerWeek, norm.maxMinutesPerWeek);
+      }
+    }
     return {
       goal,
       norm,
       weeklyFloorBeforeCatchUpBump,
       plannedWeeklyMinutes: 0,
       effectiveMinutes: 0,
+      pass1EndEffectiveMinutes: 0,
       index
     };
   });
@@ -901,6 +944,7 @@ function distributeMinutes(
       }
     }
     for (const p of prepared) {
+      p.pass1EndEffectiveMinutes = p.effectiveMinutes;
       p.plannedWeeklyMinutes = p.effectiveMinutes;
     }
     return { prepared, overcommitted, notScheduled };
@@ -975,6 +1019,7 @@ function distributeMinutes(
   }
 
   for (const p of prepared) {
+    p.pass1EndEffectiveMinutes = baseEffectiveByIndex.get(p.index) ?? 0;
     p.plannedWeeklyMinutes = p.effectiveMinutes;
   }
 
@@ -1274,6 +1319,46 @@ function consumeFromGaps(gaps: Interval[], startMs: number, endMs: number): void
   }
 }
 
+/**
+ * Scheduling fields that can be defined on a {@link GoalGroup} and apply to
+ * each member goal when omitted on the member (Planning Hub pattern).
+ * `daysOfWeek` / `dayOfWeek` are included so hard-window weekly caps count only
+ * group-pinned weekdays (otherwise members float all seven days and the cap is
+ * inflated up to 7× the band).
+ */
+const GOAL_GROUP_PLACEMENT_MERGE_KEYS = [
+  "placementIdealClockAfter",
+  "placementIdealClockBefore",
+  "placementIdealClockTimes",
+  "placementIdealClockFilter",
+  "scheduleInNiceWeather",
+  "earliestHour",
+  "latestHour",
+  "daysOfWeek",
+  "dayOfWeek"
+] as const satisfies readonly (keyof GoalGroup)[];
+
+/** Inherit placement windows (and related knobs) from linked goal groups so Pass 2 caps and Pass 3 gaps match the UI. */
+function mergeGoalGroupPlacementSchedulingOntoGoal(plan: WeeklyPlan, goal: WeeklyGoal): WeeklyGoal {
+  const ids = goal.groupIds;
+  if (!ids?.length) return goal;
+  const byId = new Map((plan.goalGroups ?? []).map((g) => [g.id, g] as const));
+  const patch: Partial<WeeklyGoal> = {};
+  for (const key of GOAL_GROUP_PLACEMENT_MERGE_KEYS) {
+    if ((goal as Record<string, unknown>)[key] !== undefined) continue;
+    for (const gid of ids) {
+      const grp = byId.get(gid);
+      if (!grp) continue;
+      const gv = (grp as Record<string, unknown>)[key];
+      if (gv !== undefined) {
+        (patch as Record<string, unknown>)[key] = gv;
+        break;
+      }
+    }
+  }
+  return Object.keys(patch).length > 0 ? ({ ...goal, ...patch } as WeeklyGoal) : goal;
+}
+
 function wheelTopUpGoals(
   realGoals: readonly WeeklyGoal[],
   wheel: WheelSettings,
@@ -1377,6 +1462,48 @@ function placementWindowsForDay(
     gaps = intersectWithAvailability(gaps, [idealWin], dayStartMs, dayEndMs);
   }
   return gaps;
+}
+
+/**
+ * Upper bound on weekly minutes this goal can ever receive when both
+ * `placementIdealClockAfter` and `placementIdealClockBefore` form a valid hard
+ * window: sum of `placementWindowsForDay` gap lengths on allowed weekdays (same
+ * pipeline as Pass 3, including invert-calendar and nice-weather filters).
+ * Returns `undefined` when there is no hard clock window.
+ */
+export function weeklyHardIdealWindowMaxPlaceableMinutes(
+  goal: WeeklyGoal,
+  days: readonly { startMs: number; endMs: number; gaps: Interval[] }[],
+  tz: string,
+  availabilityWindows: readonly Interval[] | undefined,
+  niceWeatherWindows: readonly Interval[] | undefined
+): number | undefined {
+  if (days.length === 0) return undefined;
+  if (!dayHardPlacementIdealWindow(goal, days[0]!.startMs, tz)) return undefined;
+  const allowedDays =
+    goal.daysOfWeek && goal.daysOfWeek.length > 0
+      ? goal.daysOfWeek.map((d) => DAY_INDEX[d])
+      : goal.dayOfWeek
+        ? [DAY_INDEX[goal.dayOfWeek]]
+        : [0, 1, 2, 3, 4, 5, 6];
+  let sumMin = 0;
+  for (const dayIdx of allowedDays) {
+    const day = days[dayIdx];
+    if (!day) continue;
+    const windows = placementWindowsForDay(
+      day.gaps,
+      day.startMs,
+      day.endMs,
+      availabilityWindows,
+      niceWeatherWindows,
+      goal,
+      tz
+    );
+    for (const iv of windows) {
+      sumMin += intervalMinutesFull(iv);
+    }
+  }
+  return Math.max(0, Math.floor(sumMin / QUANTUM) * QUANTUM);
 }
 
 function intervalFullyInsideGaps(gaps: readonly Interval[], innerStart: number, innerEnd: number): boolean {
@@ -2816,6 +2943,13 @@ function computeMetrics(
   const fw = settings.schedulerFrameworkInclusion;
   const perGoal: WeekMetrics["perGoal"] = {};
   const preparedById = new Map(prepared.map((p) => [p.goal.id, p] as const));
+  const allocatorRemainderHintByGoalId: Record<string, number> = {};
+  for (const p of prepared) {
+    allocatorRemainderHintByGoalId[p.goal.id] = Math.max(
+      0,
+      p.plannedWeeklyMinutes - p.pass1EndEffectiveMinutes
+    );
+  }
   for (const g of plan.goals) {
     const p = preparedById.get(g.id);
     const target = p?.plannedWeeklyMinutes ?? g.targetMinutes ?? 0;
@@ -2833,6 +2967,7 @@ function computeMetrics(
     );
     perGoal[g.id] = {
       targetMinutes: target,
+      demandMinutesBeforePass3: placementDemand,
       scheduledMinutes: achieved,
       unplacedMinutes: Math.max(0, placementDemand - placedBlocks),
       loggedMinutes,
@@ -2950,6 +3085,7 @@ function computeMetrics(
 
   return {
     perGoal,
+    allocatorRemainderHintByGoalId,
     wheelAreaMinutes: wheelMinutes,
     wheelGaps,
     ppfMinutes,

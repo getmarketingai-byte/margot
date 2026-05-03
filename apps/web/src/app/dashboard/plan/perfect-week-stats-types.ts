@@ -22,6 +22,10 @@ export interface PerfectWeekSliceStats {
     { loggedMinutes: number; proposedFutureMinutes: number }
   >;
   effectiveTargetByGoal: Record<string, number>;
+  /** Post–log / from-now demand before Pass 3 (see `WeekMetrics.perGoal.demandMinutesBeforePass3`). */
+  demandBeforePass3ByGoal: Record<string, number>;
+  /** Allocator Pass‑2 minutes per goal (see `WeekMetrics.allocatorRemainderHintByGoalId`). */
+  allocatorRemainderHintByGoalId: Record<string, number>;
   paceByGoal: Record<string, GoalPaceInfoSlice>;
   goalGroupGaps: ReadonlyArray<WeekMetrics["goalGroupGaps"][number]>;
   goalGroupMinutes: Record<string, number>;
@@ -62,4 +66,6 @@ export interface RollingSevenDayApprox {
   loggedMinutesByGoalIdInWindow: Record<string, number>;
   /** Allocator weekly targets from current ISO slice */
   effectiveTargetBaselineByGoalId: Record<string, number>;
+  /** Same slice as `effectiveTargetBaselineByGoalId` — demand after log / from-now scaling, pre–Pass 3. */
+  weeklyDemandBeforePass3BaselineByGoalId: Record<string, number>;
 }
