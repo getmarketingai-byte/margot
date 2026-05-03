@@ -447,9 +447,9 @@ export interface NormalisedGoalTime {
  *      `min/wk = min/day × scheduledDays`. When cadence is not explicit
  *      (`frequencyPerWeek`, `dayOfWeek`, `daysOfWeek`), assume **7 days** so the
  *      stated daily floor participates in weekly Pass 1 + proportional starvation
- *      like other commitments. Weekly **max** from `maxMinutesPerDay` still
- *      requires explicit cadence (avoid turning a vague daily cap into a huge
- *      weekly ceiling).
+ *      like other commitments. Likewise, when `maxMinutesPerDay` is set without
+ *      `maxMinutesPerWeek`, derive `max/wk = max/day × scheduledDays` using the
+ *      same inferred day count (**7** when cadence is unconstrained).
  *   3. A goal with no explicit weekly/day bounds (`minMinutesPerWeek`, etc.) is
  *      "equal share", **including** when only legacy `targetMinutes` is set.
  */
@@ -478,12 +478,9 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
     const daysForWeeklyMin = inferredScheduledDays ?? 7;
     minMinutesPerWeek = goal.minMinutesPerDay * daysForWeeklyMin;
   }
-  if (
-    maxMinutesPerWeek === undefined &&
-    goal.maxMinutesPerDay !== undefined &&
-    inferredScheduledDays !== undefined
-  ) {
-    maxMinutesPerWeek = goal.maxMinutesPerDay * inferredScheduledDays;
+  if (maxMinutesPerWeek === undefined && goal.maxMinutesPerDay !== undefined) {
+    const daysForWeeklyMax = inferredScheduledDays ?? 7;
+    maxMinutesPerWeek = goal.maxMinutesPerDay * daysForWeeklyMax;
   }
 
   const isEqualShare =

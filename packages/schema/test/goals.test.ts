@@ -119,15 +119,52 @@ describe("WeeklyGoal energy classification fields", () => {
     expect(normaliseGoalTime(goal).isEqualShare).toBe(false);
   });
 
-  it("does not derive maxMinutesPerWeek from maxMinutesPerDay alone", () => {
+  it("derives max/week from max/day × 7 when cadence is unconstrained", () => {
     const goal = weeklyGoalSchema.parse({
       id: "g1",
       title: "Capped per day only",
-      maxMinutesPerDay: 480
+      maxMinutesPerDay: 60
     });
     const norm = normaliseGoalTime(goal);
-    expect(norm.maxMinutesPerWeek).toBeUndefined();
-    expect(norm.maxMinutesPerDay).toBe(480);
+    expect(norm.maxMinutesPerWeek).toBe(420);
+    expect(norm.maxMinutesPerDay).toBe(60);
+  });
+
+  it("derives max/week from max/day when frequency is explicit", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Three short blocks",
+        maxMinutesPerDay: 30,
+        frequencyPerWeek: 3
+      })
+    );
+    expect(norm.maxMinutesPerWeek).toBe(90);
+    expect(norm.maxMinutesPerDay).toBe(30);
+  });
+
+  it("derives max/week from max/day × pinned weekdays when frequency is absent", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "MW only",
+        maxMinutesPerDay: 45,
+        daysOfWeek: ["monday", "wednesday"]
+      })
+    );
+    expect(norm.maxMinutesPerWeek).toBe(90);
+  });
+
+  it("explicit maxMinutesPerWeek wins over derivation", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Weekly cap overrides implied",
+        maxMinutesPerDay: 60,
+        maxMinutesPerWeek: 200
+      })
+    );
+    expect(norm.maxMinutesPerWeek).toBe(200);
   });
 
   it("accepts placementIdealClockFilter with ideal clock times", () => {

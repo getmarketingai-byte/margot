@@ -17,6 +17,7 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 - **Catch-up overlay (`catchUpFloors`):** Applied **after** Pass 2 and **weekly group caps**, **per listed goal only** — adjusts that goal’s `plannedWeeklyMinutes` and `effectiveMinutes` together on the quantum grid (`QUANTUM` from [`weekly-grid.ts`](src/weekly-grid.ts)), bounded by weekly min/max. Other goals retain their Pass‑2 remainder split (no historical Pass‑1 floor inflation side effects).
 - **Output per goal:** `plannedWeeklyMinutes` — the **weekly plan target** shown in the UI as “X / week”. Catch-up overlays can raise or lower targets for affected goals mid-week (positive = catch‑up chip + demand). `nowMs` still does **not** rescale Pass 1+2 themselves.
 - **Schema `WeeklyGoal.targetMinutes`:** when it is the **only** time hint (no explicit weekly or per-day min/max), it does **not** set a floor or ceiling — the goal **equal-shares** Pass 2 like an unconstrained row. For a fixed weekly slice, set **`minMinutesPerWeek` / `maxMinutesPerWeek`** (optionally equal) explicitly.
+- **`maxMinutesPerDay` without `maxMinutesPerWeek`:** [`normaliseGoalTime`](../schema/src/goals.ts) sets an implied **`maxMinutesPerWeek = maxMinutesPerDay × scheduledDays`**, mirroring **`minMinutesPerDay` → weekly min** — **`scheduledDays`** is inferred from cadence (**`frequencyPerWeek`** / weekday pins); when unset, **`7`** (full ISO week). Explicit **`maxMinutesPerWeek`** overrides that derivation when both are stored.
 
 ## Day-sheet credit (before Pass 3)
 
