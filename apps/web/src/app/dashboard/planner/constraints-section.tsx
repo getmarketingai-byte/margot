@@ -95,12 +95,27 @@ async function updateRoutines(formData: FormData): Promise<void> {
   afterConstraintsSave(userId);
 }
 
+async function updateGymPlannerBlockFallback(formData: FormData): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plannerBlockEnabled = formData.get("planner_block_enabled") === "on";
+  await saveSettings(userId, {
+    ...settings,
+    gym: { ...settings.gym, plannerBlockEnabled }
+  });
+  afterConstraintsSave(userId);
+}
+
 function routineDisclosureSummary(settings: UserSettings): string {
   const m = settings.timemap.morningRoutine;
   const s = settings.timemap.shutdownRoutine;
   const mPart = m.enabled ? `${m.minutes}m` : "off";
   const sPart = s.enabled ? `${s.minutes}m` : "off";
-  return `Morning ${mPart} · Shutdown ${sPart}`;
+  const gymFb = settings.gym.plannerBlockEnabled ? " · Gym fallback on" : "";
+  return `Morning ${mPart} · Shutdown ${sPart}${gymFb}`;
 }
 
 function catchUpDisclosureSummary(settings: UserSettings): string {
@@ -202,15 +217,36 @@ export async function ConstraintsSection() {
             </div>
           </div>
         </form>
-        <p className="mt-3 border-t border-ink-200 pt-3 text-xs text-ink-400 dark:border-ink-600">
-          Weekly physical activity is a{" "}
-          <a className="underline" href="/dashboard/plan">
-            Perfect Week
-          </a>{" "}
-          goal row (gym preset: drive padding, same constraint UI and list order as other goals). If
-          gym settings still have &quot;Plan weekly physical activity block&quot; on and you have no
-          gym row there, the planner injects a legacy synthetic block from those settings.
-        </p>
+        <form action={updateGymPlannerBlockFallback} className="mt-3 border-t border-ink-200 pt-3 dark:border-ink-600">
+          <ConstraintCard label="Physical activity (Perfect Week vs legacy fallback)">
+            <p className="text-xs text-ink-400">
+              Weekly physical activity is a{" "}
+              <a className="underline" href="/dashboard/plan">
+                Perfect Week
+              </a>{" "}
+              goal row (gym preset: drive padding, same constraint UI and list order as other goals).
+              The toggle below is the old &quot;Plan weekly physical activity block&quot; switch: when
+              it is on and you have no gym row on Perfect Week, the planner injects a legacy synthetic
+              block from these gym settings.
+            </p>
+            <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                name="planner_block_enabled"
+                value="on"
+                defaultChecked={settings.gym.plannerBlockEnabled}
+                className="mt-0.5"
+              />
+              <span>
+                Enable legacy synthetic block when there is no gym row on Perfect Week (uses gym
+                cadence / windows from settings).
+              </span>
+            </label>
+            <button type="submit" className="btn-primary mt-3 text-xs">
+              Save physical activity fallback
+            </button>
+          </ConstraintCard>
+        </form>
       </details>
 
       <details className="card">
