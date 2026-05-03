@@ -1,7 +1,15 @@
 /**
  * Perfect-week allocator.
  *
- * Product/business rules: see [ALLOCATOR_BUSINESS_RULES.md](../ALLOCATOR_BUSINESS_RULES.md) in this package.
+ * Product/business rules: see [ALLOCATOR_BUSINESS_RULES.md](../ALLOCATOR_BUSINESS_RULES.md).
+ *
+ * Module layout:
+ * - [`weekly-grid.ts`](weekly-grid.ts) — quantum grid (`QUANTUM`).
+ * - Pass 12 prep `buildAllocateWeekPass12Prep` / `baselineWeeklyMinuteTargets`,
+ *   distribution (`distributeMinutes`, catch‑up overlays), geometry, Pass 3 greedy
+ *   placement, and `computeMetrics` are implemented in this file; further splitting
+ *   can peel metrics or placement without API changes (`@calendar-automations/planner`
+ *   re-exports stay on `weekly.ts`).
  *
  * Inputs: a WeeklyPlan (goals + targets), busy events for the week, plus
  * UserSettings (energy ordering, Wheel of Life floors, PPF mix targets,
@@ -82,13 +90,12 @@ import type { BusyEvent, Interval } from "./types";
 import { collectBusyIntervals, freeGaps, mergeIntervals } from "./intervals";
 import { physicalActivityWeeklyGoalFromGymSettings } from "./weekly-routines";
 import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
+import { QUANTUM } from "./weekly-grid";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Reference waking-day busy proxy (14h) for normalising calendar load to 0–1. */
 const DRAIN_REF_MS = 14 * 60 * MS_PER_MIN;
-/** Round all minute decisions to a 15-minute grid. */
-const QUANTUM = 15;
 
 /** Next slot index for auto goal blocks so repeated Pass 3 invocations stay unique. */
 function nextAutoGoalSlotIndex(
@@ -288,16 +295,12 @@ export interface AllocateInput {
    */
   niceWeatherWindows?: readonly Interval[];
   /**
-   * Optional per-goal catch-up adjustments in minutes.
-   *
-   * When the user is behind on a goal mid-week, the weekly review surface
-   * computes a deficit and stores it here as `goalId -> additionalMinutes`.
-   * The allocator adds these minutes to the goal's effective weekly floor so
-   * the remaining days prioritise extra time — the user's `maxMinutesPerWeek`
-   * (if any) stays a hard ceiling and is not raised by catch-up.
-   *
-   * Negative values are honoured (you can shrink a goal that ran ahead).
-   * Missing or zero entries are no-ops, preserving baseline behaviour.
+   * Optional mid-week overlay from review rollups or manual weekly review.
+   * Applied **after** Pass 1+2 and weekly group caps: adds or subtracts
+   * `plannedWeeklyMinutes` and `effectiveMinutes` together **per goal**, without
+   * reshuffling other goals' Pass‑2 remainder split (unlike historical Pass‑1
+   * floor inflation). Positive = catch‑up demand; negative = trim (still
+   * respects weekly min / max). `maxMinutesPerWeek` remains a ceiling.
    */
   catchUpFloors?: Record<string, number>;
   /**
@@ -335,9 +338,8 @@ export interface PreparedGoal {
   goal: WeeklyGoal;
   norm: NormalisedGoalTime;
   /**
-   * Weekly floor from `normaliseGoalTime` **before** `catchUpFloors` bump.
-   * Pass 2 excludes goals with a positive **user** weekly floor and no `%`;
-   * catch-up-only floors must still join equal-share remainder splitting.
+   * Explicit weekly minimum from schema (`normaliseGoalTime`).
+   * Pass 2 excludes goals with a positive weekly floor and no `%`.
    */
   weeklyFloorBeforeCatchUpBump: number;
   /** Pass 1+2 planned weekly minutes (full-week budget). */
@@ -376,22 +378,53 @@ function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTim
   );
 }
 
-export function allocateWeek(input: AllocateInput): AllocateResult {
-  const { plan, busy, settings: incomingSettings, sleepIntervals } = input;
+type WeekDayBuckets = {
+  startMs: number;
+  endMs: number;
+  gaps: Interval[];
+};
+
+/** Busy grid + goal list shared by allocateWeek Pass 1–2 baseline and rollup targets. */
+function buildAllocateWeekPass12Prep(
+  input: AllocateInput,
+  segmentBlocksScratch: AllocatedBlock[],
+  segmentBlocksByDay?: AllocatedBlock[][]
+): {
+  plan: WeeklyPlan;
+  busy: readonly BusyEvent[];
+  settings: UserSettings;
+  tz: string;
+  weekStartMs: number;
+  weekEndMs: number;
+  grossWeekMinutes: number;
+  minutesOpenBeforeConsistency: number;
+  busyWeekMinutes: number;
+  busyTrueEventCount: number;
+  consistencyReservedWeekMinutes: number;
+  days: WeekDayBuckets[];
+  weekCapacityMinutes: number;
+  weekCapacityFromNowMinutes: number;
+  allocationNowMs: number | undefined;
+  goalsForAllocation: WeeklyGoal[];
+  hardWindowWeeklyCaps: Map<string, number>;
+  dayDrainScores: number[] | undefined;
+  batteryContext:
+    | {
+        goalsById: ReadonlyMap<string, WeeklyGoal>;
+        dayDrainScores: readonly number[];
+        personalSystem: PersonalSystem;
+      }
+    | undefined;
+  fw: SchedulerFrameworkInclusion;
+} {
+  const { plan, busy, settings: incomingSettings } = input;
   const settings = hydrateFrameworkSystemMirrors(incomingSettings);
   const tz = plan.timezone || settings.timezone;
   const weekStartMs = input.weekStartMs ?? parseLocalDateMs(plan.weekStart, tz);
   const weekEndMs = input.weekEndMs ?? weekStartMs + 7 * DAY_MS;
-  const weekAnchorDate = input.weekAnchorDate ?? plan.weekStart;
-  const goalOverrideSources =
-    input.goalOverrideSources ?? goalOverrideSourcesFromPlan(plan);
   const allocationNowMs = input.nowMs;
-  const goalOverrides = new Map<string, { startMs: number; endMs: number }>();
-  for (const o of plan.overrides ?? []) {
-    if (o.kind === "goal") goalOverrides.set(o.key, { startMs: o.startMs, endMs: o.endMs });
-  }
 
-  const days: { startMs: number; endMs: number; gaps: Interval[] }[] = [];
+  const days: WeekDayBuckets[] = [];
   for (let d = 0; d < 7; d++) {
     const dayStart = weekStartMs + d * DAY_MS;
     const dayEnd = dayStart + DAY_MS;
@@ -408,13 +441,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const busyWeekMinutes = Math.max(0, grossWeekMinutes - minutesOpenBeforeConsistency);
   const busyTrueEventCount = busy.filter((e) => e.busy).length;
 
-  const blocks: AllocatedBlock[] = [];
-
-  // Reserve non-negotiable segments first — they cannot be displaced by goals.
   if (settings.consistency.enabled) {
     for (const seg of settings.consistency.segments) {
       if (!seg.nonNegotiable) continue;
-      reserveSegment(seg, days, weekStartMs, tz, blocks);
+      reserveSegment(seg, days, weekStartMs, tz, segmentBlocksScratch, segmentBlocksByDay);
     }
   }
 
@@ -427,8 +457,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   const routineInject: WeeklyGoal[] = [];
   if (physicalRoutine) routineInject.push(physicalRoutine);
   const fw = settings.schedulerFrameworkInclusion;
-
-  // Wheel-of-Life floors enter the pipeline as synthetic goals with min/wk set.
   const wheelTopUps = wheelTopUpGoals(
     [...schedulingGoals, ...routineInject],
     settings.wheel,
@@ -447,11 +475,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
         }
       : undefined;
 
-  // Pass 1+2: full ISO-week free gap total after segments (Mon–Sun window).
-  // Pass 3 clips gaps to `allocationNowMs` when set, so placement demand for a
-  // *mixed* goal cohort must not exceed `weekCapacityFromNowMinutes` or many
-  // goals stall with unmeetable targets. (Unconstrained equal-share goals use
-  // the specialised cap block below.)
   const weekCapacityMinutes = days.reduce(
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFull(g), 0),
     0
@@ -464,6 +487,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     (acc, d) => acc + d.gaps.reduce((a, g) => a + intervalMinutesFromNow(g, allocationNowMs), 0),
     0
   );
+
   const hardWindowWeeklyCaps = new Map<string, number>();
   for (const g of goalsForAllocation) {
     const cap = weeklyHardIdealWindowMaxPlaceableMinutes(
@@ -475,11 +499,91 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     );
     if (cap !== undefined) hardWindowWeeklyCaps.set(g.id, cap);
   }
+
+  return {
+    plan,
+    busy,
+    settings,
+    tz,
+    weekStartMs,
+    weekEndMs,
+    grossWeekMinutes,
+    minutesOpenBeforeConsistency,
+    busyWeekMinutes,
+    busyTrueEventCount,
+    consistencyReservedWeekMinutes,
+    days,
+    weekCapacityMinutes,
+    weekCapacityFromNowMinutes,
+    allocationNowMs,
+    goalsForAllocation,
+    hardWindowWeeklyCaps,
+    dayDrainScores,
+    batteryContext,
+    fw
+  };
+}
+
+/** Weekly Pass‑1/2 targets (`plannedWeeklyMinutes`) before catch‑up, logs, and Pass 3 — for pace rollups without nesting a full `allocateWeek`. */
+export function baselineWeeklyMinuteTargets(input: AllocateInput): Record<string, number> {
+  const segmentScratch: AllocatedBlock[] = [];
+  const prep = buildAllocateWeekPass12Prep(input, segmentScratch);
+  const { prepared } = distributeMinutes(
+    prep.goalsForAllocation,
+    prep.weekCapacityMinutes,
+    prep.settings.allocator,
+    prep.hardWindowWeeklyCaps
+  );
+  const scratchGaps: Array<{ groupId: string; reason: "weeklyCap" | "weeklyFloor"; shortMinutes: number }> = [];
+  applyGoalGroupWeeklyCaps(prepared, prep.plan, prep.weekCapacityMinutes, scratchGaps);
+  const out: Record<string, number> = {};
+  for (const p of prepared) out[p.goal.id] = p.plannedWeeklyMinutes;
+  return out;
+}
+
+export function allocateWeek(input: AllocateInput): AllocateResult {
+  const sleepIntervals = input.sleepIntervals;
+  const goalOverrideSources =
+    input.goalOverrideSources ?? goalOverrideSourcesFromPlan(input.plan);
+  const goalOverrides = new Map<string, { startMs: number; endMs: number }>();
+  for (const o of input.plan.overrides ?? []) {
+    if (o.kind === "goal") goalOverrides.set(o.key, { startMs: o.startMs, endMs: o.endMs });
+  }
+
+  const weekAnchorDate = input.weekAnchorDate ?? input.plan.weekStart;
+  const allocationNowMs = input.nowMs;
+
+  const blocksByDay: AllocatedBlock[][] = Array.from({ length: 7 }, () => []);
+  const blocks: AllocatedBlock[] = [];
+
+  const prep = buildAllocateWeekPass12Prep(input, blocks, blocksByDay);
+  const {
+    plan,
+    busy,
+    settings,
+    tz,
+    weekStartMs,
+    weekEndMs,
+    grossWeekMinutes,
+    busyWeekMinutes,
+    consistencyReservedWeekMinutes,
+    busyTrueEventCount,
+    days,
+    weekCapacityMinutes,
+    weekCapacityFromNowMinutes,
+    goalsForAllocation,
+    hardWindowWeeklyCaps,
+    fw,
+    batteryContext,
+    dayDrainScores
+  } = prep;
+
+  const batteryOn = batteryContext !== undefined;
+
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
     goalsForAllocation,
     weekCapacityMinutes,
     settings.allocator,
-    input.catchUpFloors,
     hardWindowWeeklyCaps
   );
 
@@ -489,6 +593,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     shortMinutes: number;
   }> = [];
   applyGoalGroupWeeklyCaps(prepared, plan, weekCapacityMinutes, goalGroupWeeklyGapsPre);
+
+  applyCatchUpDemandAdjustments(prepared, input.catchUpFloors);
 
   const groupPlacement = initGoalGroupPlacementContext(plan, busy, goalOverrides, days);
 
@@ -610,6 +716,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       p,
       days,
       blocks,
+      blocksByDay,
       busy,
       settings.energyOrdering,
       settings.placementPriority,
@@ -660,7 +767,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
         if (nw !== 0) return nw;
         const cap = ascendingDailyCapTie(a, b);
         if (cap !== 0) return cap;
-        return r % 2 === 0 ? a.index - b.index : b.index - a.index;
+        return a.goal.id.localeCompare(b.goal.id);
       }
       const nw = compareGoalsWithNiceWeatherFirst(a.goal, b.goal);
       if (nw !== 0) return nw;
@@ -674,7 +781,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
         if (nw !== 0) return nw;
         const cap = ascendingDailyCapTie(a, b);
         if (cap !== 0) return cap;
-        return r % 2 === 0 ? a.index - b.index : b.index - a.index;
+        return a.goal.id.localeCompare(b.goal.id);
       }
       const nw = compareGoalsWithNiceWeatherFirst(a.goal, b.goal);
       if (nw !== 0) return nw;
@@ -865,7 +972,6 @@ function distributeMinutes(
   goals: readonly WeeklyGoal[],
   totalFreeMin: number,
   allocator: AllocatorSettings,
-  catchUpFloors?: Record<string, number>,
   hardIdealWindowWeeklyCaps?: ReadonlyMap<string, number>
 ): {
   prepared: PreparedGoal[];
@@ -875,12 +981,6 @@ function distributeMinutes(
   const prepared: PreparedGoal[] = goals.map((goal, index) => {
     const norm = normaliseGoalTime(goal);
     const weeklyFloorBeforeCatchUpBump = norm.minMinutesPerWeek ?? 0;
-    const bump = catchUpFloors?.[goal.id] ?? 0;
-    if (bump !== 0) {
-      // Floor only. Raising the weekly ceiling here made allocations exceed a
-      // stated `maxMinutesPerWeek` (catch-up looked like "ignore my cap").
-      norm.minMinutesPerWeek = Math.max(0, weeklyFloorBeforeCatchUpBump + bump);
-    }
     const winCap = hardIdealWindowWeeklyCaps?.get(goal.id);
     if (winCap !== undefined) {
       const qc = Math.max(0, Math.floor(winCap / QUANTUM) * QUANTUM);
@@ -1028,6 +1128,65 @@ function distributeMinutes(
 
 function quantise(min: number): number {
   return Math.max(0, Math.round(min / QUANTUM) * QUANTUM);
+}
+
+/** Largest multiple of QUANTUM not exceeding `min` — avoids exceeding caps when shrinking. */
+function floorToQuantum(min: number): number {
+  return Math.max(0, Math.floor(Math.max(0, min) / QUANTUM) * QUANTUM);
+}
+
+/** Converts day-sheet rollup / manual review adjustments onto the allocation grid with sign preserved. */
+function quantiseCatchUpAdjustment(delta: number): number {
+  if (!Number.isFinite(delta) || delta === 0) return 0;
+  const sign = delta > 0 ? 1 : -1;
+  return sign * quantise(Math.abs(delta));
+}
+
+/**
+ * Goal-local catch-up after Pass 1+2 and weekly group caps — does **not** pass through `distributeMinutes`,
+ * so other goals keep their Pass‑2 splits. Applies only to goals listed with non-zero deltas.
+ */
+function applyCatchUpDemandAdjustments(
+  prepared: PreparedGoal[],
+  catchUpFloors?: Readonly<Record<string, number>>
+): void {
+  if (!catchUpFloors) return;
+  for (const p of prepared) {
+    const raw = catchUpFloors[p.goal.id];
+    if (raw === undefined || raw === 0) continue;
+    const delta = quantiseCatchUpAdjustment(raw);
+    if (delta === 0) continue;
+
+    const minPlanned = p.weeklyFloorBeforeCatchUpBump;
+    const maxPlanned = p.norm.maxMinutesPerWeek;
+
+    if (delta > 0) {
+      let room =
+        maxPlanned === undefined
+          ? delta
+          : Math.max(0, maxPlanned - p.plannedWeeklyMinutes);
+      const add = floorToQuantum(Math.min(delta, room));
+      if (add <= 0) continue;
+      p.plannedWeeklyMinutes += add;
+      p.effectiveMinutes += add;
+      if (maxPlanned !== undefined) {
+        p.plannedWeeklyMinutes = Math.min(p.plannedWeeklyMinutes, maxPlanned);
+        p.effectiveMinutes = Math.min(p.effectiveMinutes, maxPlanned);
+      }
+    } else {
+      const loss = -delta;
+      const canTrimFromPlanned = Math.max(0, p.plannedWeeklyMinutes - minPlanned);
+      const sub = floorToQuantum(Math.min(loss, canTrimFromPlanned));
+      if (sub <= 0) continue;
+      p.plannedWeeklyMinutes -= sub;
+      p.effectiveMinutes = Math.max(0, p.effectiveMinutes - sub);
+      p.plannedWeeklyMinutes = Math.max(minPlanned, p.plannedWeeklyMinutes);
+      if (maxPlanned !== undefined) {
+        p.plannedWeeklyMinutes = Math.min(p.plannedWeeklyMinutes, maxPlanned);
+      }
+      p.effectiveMinutes = Math.min(p.effectiveMinutes, p.plannedWeeklyMinutes);
+    }
+  }
 }
 
 /**
@@ -1278,7 +1437,8 @@ function reserveSegment(
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   weekStartMs: number,
   tz: string,
-  blocks: AllocatedBlock[]
+  blocks: AllocatedBlock[],
+  blocksByDay?: AllocatedBlock[][]
 ): void {
   for (let d = 0; d < 7; d++) {
     // Map iso-week day index (0=Mon) to weekday number (0=Sun) used by the UI.
@@ -1289,14 +1449,16 @@ function reserveSegment(
     const endMs = startMs + seg.durationMinutes * MS_PER_MIN;
     if (endMs > day.endMs) continue;
     consumeFromGaps(day.gaps, startMs, endMs);
-    blocks.push({
+    const blk: AllocatedBlock = {
       goalId: `segment:${seg.id}`,
       title: seg.title,
       startMs,
       endMs,
       energyMode: seg.energyMode,
       segment: true
-    });
+    };
+    blocks.push(blk);
+    blocksByDay?.[d]?.push(blk);
   }
   void weekStartMs;
   void tz;
@@ -1550,7 +1712,9 @@ function tryPinGoalBlock(
   dayHeadroom: number,
   remainingMinutes: number,
   relaxGapConstraints: boolean,
-  sleepIntervals: readonly Interval[] | undefined
+  sleepIntervals: readonly Interval[] | undefined,
+  blocksByDay: AllocatedBlock[][] | undefined,
+  dayIdx: number
 ): number | null {
   let startMs = Math.max(pinned.startMs, weekStartMs);
   let endMs = Math.min(pinned.endMs, weekEndMs);
@@ -1599,7 +1763,7 @@ function tryPinGoalBlock(
     }
   }
   consumeFromGaps(day.gaps, consumeStart, consumeEnd);
-  blocks.push({
+  const blk: AllocatedBlock = {
     goalId: goal.id,
     title: goal.title,
     startMs,
@@ -1610,7 +1774,9 @@ function tryPinGoalBlock(
     ...(goal.hp6Habit !== undefined ? { hp6Habit: goal.hp6Habit } : {}),
     dragKey,
     pinnedFromOverride: true
-  });
+  };
+  blocks.push(blk);
+  if (blocksByDay && dayIdx >= 0 && dayIdx < 7) blocksByDay[dayIdx]!.push(blk);
   return durMin;
 }
 
@@ -1618,6 +1784,7 @@ function allocateGoal(
   prepared: PreparedGoal,
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
   blocks: AllocatedBlock[],
+  blocksByDay: AllocatedBlock[][],
   busy: readonly BusyEvent[],
   energy: EnergyOrderingSettings,
   placement: PlacementPrioritySettings,
@@ -1635,7 +1802,7 @@ function allocateGoal(
   sleepIntervals: readonly Interval[] | undefined,
   battery?: {
     goalsById: ReadonlyMap<string, WeeklyGoal>;
-    dayDrainScores: number[];
+    dayDrainScores: readonly number[];
     personalSystem: PersonalSystem;
   },
   groupPlacement?: GoalGroupPlacementContext
@@ -1710,40 +1877,6 @@ function allocateGoal(
     }
   }
 
-  // How many days do we want this goal to occupy? frequencyPerWeek wins,
-  // else a day-pinned goal stays on its single day, else spread across all 7.
-  const maxDaysForQuantum = Math.max(1, Math.floor(remainingMinutes / QUANTUM));
-  const targetDays = Math.min(
-    allowedDays.length,
-    norm.frequencyPerWeek ?? allowedDays.length,
-    maxDaysForQuantum
-  );
-
-  // Per-day budget = total / targetDays, clamped by maxMinutesPerDay.
-  let perDay = Math.ceil(remainingMinutes / targetDays);
-  if (norm.maxMinutesPerDay !== undefined) {
-    perDay = Math.min(perDay, norm.maxMinutesPerDay);
-  }
-  if (perDay <= 0) return;
-
-  // If the user set a daily floor, ensure each scheduled day lands at least that.
-  const minPerDay = norm.minMinutesPerDay ?? 0;
-  let perDayBudget = Math.max(perDay, minPerDay);
-
-  const dayHeadroomFor = (dayIdx: number): number => {
-    const day = days[dayIdx]!;
-    const dayMinutesAlready = blocks
-      .filter((b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs)
-      .reduce((acc, b) => acc + Math.floor((b.endMs - b.startMs) / MS_PER_MIN), 0);
-    const dayLoggedMinutes = loggedGoalBusyMinutesForDay(busy, goal.id, day.startMs, day.endMs);
-    return norm.maxMinutesPerDay !== undefined
-      ? Math.max(0, norm.maxMinutesPerDay - (dayMinutesAlready + dayLoggedMinutes))
-      : Number.POSITIVE_INFINITY;
-  };
-
-  const effectiveDayHeadroomFor = (dayIdx: number): number =>
-    Math.min(dayHeadroomFor(dayIdx), aggregateGroupDailyHeadroomMinutes(groupPlacement, goal.id, dayIdx));
-
   const hasFuturePlacementWindow = (dayIdx: number): boolean => {
     const day = days[dayIdx]!;
     const candidateGaps = placementWindowsForDay(
@@ -1763,6 +1896,50 @@ function allocateGoal(
             .filter((g) => g.endMs > g.startMs);
     return futureCandidateGaps.length > 0;
   };
+
+  let placementDaysRemain = 0;
+  for (const dayIdx of allowedDays) {
+    if (hasFuturePlacementWindow(dayIdx)) placementDaysRemain++;
+  }
+
+  // How many days do we want this goal to occupy? frequencyPerWeek wins,
+  // else a day-pinned goal stays on its single day, else spread across all 7.
+  // When frequency is set, cap by remaining calendar days that still have a
+  // placement window (at most one auto block per day).
+  const freqSlice =
+    norm.frequencyPerWeek === undefined
+      ? allowedDays.length
+      : Math.min(norm.frequencyPerWeek, placementDaysRemain);
+
+  const maxDaysForQuantum = Math.max(1, Math.floor(remainingMinutes / QUANTUM));
+  const targetDays = Math.min(allowedDays.length, freqSlice, maxDaysForQuantum);
+  if (targetDays <= 0) return;
+
+  // Per-day budget = total / targetDays, clamped by maxMinutesPerDay.
+  let perDay = Math.ceil(remainingMinutes / targetDays);
+  if (norm.maxMinutesPerDay !== undefined) {
+    perDay = Math.min(perDay, norm.maxMinutesPerDay);
+  }
+  if (perDay <= 0) return;
+
+  // If the user set a daily floor, ensure each scheduled day lands at least that.
+  const minPerDay = norm.minMinutesPerDay ?? 0;
+  let perDayBudget = Math.max(perDay, minPerDay);
+
+  const dayHeadroomFor = (dayIdx: number): number => {
+    const day = days[dayIdx]!;
+    const inDay = blocksByDay[dayIdx] ?? [];
+    const dayMinutesAlready = inDay
+      .filter((b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs)
+      .reduce((acc, b) => acc + Math.floor((b.endMs - b.startMs) / MS_PER_MIN), 0);
+    const dayLoggedMinutes = loggedGoalBusyMinutesForDay(busy, goal.id, day.startMs, day.endMs);
+    return norm.maxMinutesPerDay !== undefined
+      ? Math.max(0, norm.maxMinutesPerDay - (dayMinutesAlready + dayLoggedMinutes))
+      : Number.POSITIVE_INFINITY;
+  };
+
+  const effectiveDayHeadroomFor = (dayIdx: number): number =>
+    Math.min(dayHeadroomFor(dayIdx), aggregateGroupDailyHeadroomMinutes(groupPlacement, goal.id, dayIdx));
 
   const occupiedGoalDayIndexes = (): Set<number> => {
     const out = new Set<number>();
@@ -1843,7 +2020,7 @@ function allocateGoal(
       if (norm.frequencyPerWeek !== undefined && pass === 0 && daysScheduledThisPass >= targetDays)
         break;
       const day = days[dayIdx]!;
-      const dayGoalBlocks = blocks.filter(
+      const dayGoalBlocks = blocksByDay[dayIdx]!.filter(
         (b) => b.goalId === goal.id && b.startMs >= day.startMs && b.endMs <= day.endMs
       );
       const dayMinutesAlready = dayGoalBlocks.reduce(
@@ -1882,7 +2059,9 @@ function allocateGoal(
             dayHeadroom,
             remainingMinutes,
             relaxGaps,
-            sleepIntervals
+            sleepIntervals,
+            blocksByDay,
+            dayIdx
           );
           if (pinMinutes !== null && pinMinutes >= QUANTUM) {
             remainingMinutes -= pinMinutes;
@@ -1900,7 +2079,15 @@ function allocateGoal(
       // Pass 0 establishes an even per-day budget; pass 1+ spill `remainingMinutes`
       // into any day that still has gap + headroom. Skipping days that already have a block prevented spill entirely (large hatched “available” bands
       // stayed empty while weekly targets stayed unfilled).
-      if (dayGoalBlocks.length > 0 && remainingMinutes < QUANTUM) continue;
+      if (
+        norm.frequencyPerWeek === undefined &&
+        dayGoalBlocks.length > 0 &&
+        remainingMinutes < QUANTUM
+      )
+        continue;
+      // When `frequencyPerWeek` is set, treat it as distinct session days — at most
+      // one auto block per day (pins already consumed placement above via `continue`).
+      if (norm.frequencyPerWeek !== undefined && dayGoalBlocks.length > 0) continue;
 
       // Secondary guardrail (even-split pass only): avoid placing this goal on
       // consecutive days when a non-adjacent day is still available. Skip this when
@@ -1934,9 +2121,7 @@ function allocateGoal(
       if (futureCandidateGaps.length === 0) continue;
       // Energy-suggestion pass needs to see only blocks already placed on the
       // current day so adjacency scoring doesn't reach across day boundaries.
-      const placedToday = blocks.filter(
-        (b) => b.startMs >= day.startMs && b.endMs <= day.endMs
-      );
+      const placedToday = blocksByDay[dayIdx] ?? [];
       const slot = pickGapForGoal(
         futureCandidateGaps,
         goal,
@@ -1985,7 +2170,7 @@ function allocateGoal(
       const consumeStart = startMs - gymTravelPadMs;
       const consumeEnd = endMs + gymTravelPadMs;
       consumeFromGaps(day.gaps, consumeStart, consumeEnd);
-      blocks.push({
+      const autoBlk: AllocatedBlock = {
         goalId: goal.id,
         title: goal.title,
         startMs,
@@ -1996,7 +2181,9 @@ function allocateGoal(
         ...(goal.hp6Habit !== undefined ? { hp6Habit: goal.hp6Habit } : {}),
         dragKey,
         pinnedFromOverride: false
-      });
+      };
+      blocks.push(autoBlk);
+      blocksByDay[dayIdx]!.push(autoBlk);
       remainingMinutes -= placedMinutes;
       recordGoalGroupPlacementMinutes(groupPlacement, goal.id, dayIdx, placedMinutes);
       slotIndex++;
@@ -2430,7 +2617,11 @@ function pickGapForGoal(
     });
   }
   if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.score - a.score);
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.gap.startMs !== b.gap.startMs) return a.gap.startMs - b.gap.startMs;
+    return a.gap.endMs - b.gap.endMs;
+  });
   return candidates[0]!;
 }
 
@@ -2766,14 +2957,17 @@ function placeBlockInGap(
     const dayMidnight = localMidnightMs(ys, mo, da, tz);
     let bestStart = inner.startMs;
     let bestDist = Infinity;
-    for (const ideal of ideals) {
+    let bestIdealIdx = ideals.length;
+    for (let ii = 0; ii < ideals.length; ii++) {
+      const ideal = ideals[ii]!;
       const idealMs = dayMidnight + (ideal.hour * 3600 + ideal.minute * 60) * 1000;
       /** Align block start to ideal local clock (user-facing "ideal time"), not block midpoint. */
       const wantStart = idealMs;
       const clamped = Math.max(inner.startMs, Math.min(wantStart, inner.endMs - fitMs));
       const dist = Math.abs(clamped - idealMs);
-      if (dist < bestDist) {
+      if (dist < bestDist || (dist === bestDist && ii < bestIdealIdx)) {
         bestDist = dist;
+        bestIdealIdx = ii;
         bestStart = clamped;
       }
     }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   achievedMinutesForGoal,
   allocateWeek,
+  baselineWeeklyMinuteTargets,
   buildGoalDragKey,
   comparePreparedGoalsForPass3Placement,
   computeAllocationRemainderFractions,
@@ -2732,5 +2733,79 @@ describe("computePass2AllocMinutesFromShareOfWeek", () => {
     const f = computeAllocationRemainderFractions(goals, T, R);
     expect(f[0]).toBeCloseTo(0.5, 5);
     expect(f[1]).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe("allocator stability helpers", () => {
+  const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+
+  it("baselineWeeklyMinuteTargets agrees with allocateWeek targets when catch-up is empty", () => {
+    const plan: WeeklyPlan = {
+      id: "p-bl",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [
+        goal({
+          id: "g-deep",
+          title: "Deep work",
+          minMinutesPerWeek: 180,
+          energyMode: "hyperfocus",
+          ppfHorizon: "unspecified"
+        }),
+        goal({ id: "g-email", title: "Email", minMinutesPerWeek: 60, energyMode: "hyperaware" })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const input = {
+      plan,
+      busy: [] as BusyEvent[],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + DAY_MS * 7
+    };
+    const full = allocateWeek(input);
+    const base = baselineWeeklyMinuteTargets(input);
+    for (const g of plan.goals) {
+      expect(base[g.id]).toBe(full.metrics.perGoal[g.id]!.targetMinutes);
+    }
+  });
+
+  it("caps frequencyPerWeek by remaining placement days after nowMs (Fri cutoff)", () => {
+    /** Midday Friday UTC — Mon–Thu no longer schedulable; Fri–Sun = 3 days. */
+    const nowMs = Date.UTC(2026, 4, 1, 12, 0, 0);
+    const freqPlan: WeeklyPlan = {
+      id: "p-freq",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [
+        goal({
+          id: "gym",
+          title: "Gym",
+          minMinutesPerWeek: 480,
+          maxMinutesPerWeek: 480,
+          frequencyPerWeek: 4,
+          maxMinutesPerDay: 240,
+          energyMode: "neutral",
+          energyPolarity: "neutral",
+          attentionMode: "unspecified",
+          workLayer: "unspecified",
+          ppfHorizon: "unspecified"
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const res = allocateWeek({
+      plan: freqPlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      nowMs
+    });
+    const gymBlocks = res.blocks.filter((b) => b.goalId === "gym" && !b.segment);
+    expect(gymBlocks.length).toBeLessThanOrEqual(3);
+    expect(res.metrics.perGoal["gym"]!.targetMinutes).toBeLessThanOrEqual(480);
   });
 });

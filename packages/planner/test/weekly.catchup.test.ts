@@ -169,12 +169,14 @@ describe("allocateWeek catchUpFloors", () => {
       weekEndMs: weekStartMs + 7 * DAY_MS,
       catchUpFloors: { goalA: 60 }
     });
-    // goalA should grow at goalB's expense under proportional mode.
-    expect(boosted.metrics.perGoal.goalA!.scheduledMinutes).toBeGreaterThan(
-      baseline.metrics.perGoal.goalA!.scheduledMinutes
+    expect(boosted.metrics.perGoal.goalB!.targetMinutes).toBe(
+      baseline.metrics.perGoal.goalB!.targetMinutes
     );
-    expect(boosted.metrics.perGoal.goalB!.scheduledMinutes).toBeLessThanOrEqual(
-      baseline.metrics.perGoal.goalB!.scheduledMinutes
+    expect(boosted.metrics.perGoal.goalA!.targetMinutes).toBeGreaterThan(
+      baseline.metrics.perGoal.goalA!.targetMinutes
+    );
+    expect(boosted.metrics.perGoal.goalA!.scheduledMinutes).toBeGreaterThanOrEqual(
+      baseline.metrics.perGoal.goalA!.scheduledMinutes
     );
   });
 
@@ -236,7 +238,7 @@ describe("allocateWeek catchUpFloors", () => {
     );
   });
 
-  it("catch-up-only weekly floor still joins Pass 2; explicit min+w/o pct still opts out", () => {
+  it("goal-local catch-up boosts one equal-share row without shrinking peer Pass‑2 targets", () => {
     const unconstrainedPair: WeeklyPlan = {
       id: "plan-eq-pair",
       weekStart: "2026-04-27",
@@ -263,10 +265,13 @@ describe("allocateWeek catchUpFloors", () => {
       ],
       overrides: []
     };
-    const explicitMinPlan: WeeklyPlan = {
-      ...unconstrainedPair,
-      goals: [{ ...unconstrainedPair.goals[0]!, minMinutesPerWeek: 120 }, unconstrainedPair.goals[1]!]
-    };
+    const baseline = allocateWeek({
+      plan: unconstrainedPair,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
     const withCatchUp = allocateWeek({
       plan: unconstrainedPair,
       busy: [],
@@ -275,18 +280,11 @@ describe("allocateWeek catchUpFloors", () => {
       weekEndMs: weekStartMs + 7 * DAY_MS,
       catchUpFloors: { eqA: 120 }
     });
-    const withExplicitMin = allocateWeek({
-      plan: explicitMinPlan,
-      busy: [],
-      settings: buildSettings(),
-      weekStartMs,
-      weekEndMs: weekStartMs + 7 * DAY_MS
-    });
-    expect(withCatchUp.metrics.perGoal.eqB!.targetMinutes).toBeLessThan(
-      withExplicitMin.metrics.perGoal.eqB!.targetMinutes
+    expect(withCatchUp.metrics.perGoal.eqB!.targetMinutes).toBe(
+      baseline.metrics.perGoal.eqB!.targetMinutes
     );
     expect(withCatchUp.metrics.perGoal.eqA!.targetMinutes).toBeGreaterThan(
-      withExplicitMin.metrics.perGoal.eqA!.targetMinutes
+      baseline.metrics.perGoal.eqA!.targetMinutes
     );
   });
 });

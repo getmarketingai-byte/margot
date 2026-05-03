@@ -11,6 +11,7 @@ import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/
 import type { BusyEvent } from "@calendar-automations/planner";
 import {
   allocateWeek,
+  baselineWeeklyMinuteTargets,
   buildStableUid,
   computeDayCalendarDrainScores,
   goalOverrideSourcesFromPlan,
@@ -291,7 +292,7 @@ export async function loadPlanWeekAllocationInputs(options: {
   if (catchUpMode === "manual") {
     catchUpFloors = weeklyReview.catchUpAdjustments ?? {};
   } else {
-    const baselineAllocation = allocateWeek({
+    const effectiveTargetBaseline = baselineWeeklyMinuteTargets({
       plan,
       busy: [...busy, ...systemBlocks],
       goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
@@ -299,15 +300,10 @@ export async function loadPlanWeekAllocationInputs(options: {
       settings,
       weekStartMs,
       weekEndMs,
-      catchUpFloors: {},
       weekAnchorDate: plan.weekStart,
       goalOverrideSources: goalOverrideSourcesFromPlan(plan),
       sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
     });
-    const effectiveTargetBaseline: Record<string, number> = {};
-    for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
-      effectiveTargetBaseline[id] = m.targetMinutes;
-    }
     const baselineRollups = computeGoalRollups({
       goals: schedulingGoals,
       reviewsByDate,

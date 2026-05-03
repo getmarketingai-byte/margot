@@ -1,6 +1,8 @@
 /**
  * Maps goal rollups (or equivalent recommendation rows) to `catchUpFloors`
- * for `allocateWeek`. Only positive recommendations become floors.
+ * consumed by `allocateWeek`. Only positive suggestions are included — the allocator
+ * applies them **after** Pass‑1/2 (+ group caps) as **goal-local** target+demand deltas,
+ * not as Pass‑1 floor inflation (see ALLOCATOR_BUSINESS_RULES.md).
  */
 
 export function catchUpFloorsFromRecommendations(

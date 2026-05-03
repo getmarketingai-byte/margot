@@ -10,7 +10,7 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
-import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+import { allocateWeek, baselineWeeklyMinuteTargets, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
@@ -155,7 +155,7 @@ export default async function WeekReviewPage() {
       sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
     });
   } else {
-    const baselineAllocation = allocateWeek({
+    const effectiveTargetBaseline = baselineWeeklyMinuteTargets({
       plan,
       busy: [...busy, ...systemBlocks],
       goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
@@ -163,15 +163,10 @@ export default async function WeekReviewPage() {
       settings,
       weekStartMs,
       weekEndMs,
-      catchUpFloors: {},
       weekAnchorDate: weekStart,
       goalOverrideSources: goalOverrideSourcesFromPlan(plan),
       sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
     });
-    const effectiveTargetBaseline: Record<string, number> = {};
-    for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
-      effectiveTargetBaseline[id] = m.targetMinutes;
-    }
     const baselineRollups = computeGoalRollups({
       goals: schedulingGoals,
       reviewsByDate,

@@ -14,7 +14,8 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 - **Input budget:** `weekCapacityMinutes` — sum of **all** free-gap minutes in the week **after** non-negotiable consistency segments (and any segment reservation that consumed gaps), **without** clipping to `nowMs`.
 - **Pass 1:** Reserves each goal’s weekly floor (`minMinutesPerWeek`, subject to weekly cap).
 - **Pass 2:** Splits the **remainder** of `weekCapacityMinutes` across eligible goals (`allocationSharePercent` weighting + equal share for others). Packing mode (`even` vs `finish-early`) affects **calendar layout only**, not these minute totals.
-- **Output per goal:** `plannedWeeklyMinutes` — the **weekly plan target** shown in the UI as “X / week”. It does **not** shrink mid-week just because `nowMs` has moved.
+- **Catch-up overlay (`catchUpFloors`):** Applied **after** Pass 2 and **weekly group caps**, **per listed goal only** — adjusts that goal’s `plannedWeeklyMinutes` and `effectiveMinutes` together on the quantum grid (`QUANTUM` from [`weekly-grid.ts`](src/weekly-grid.ts)), bounded by weekly min/max. Other goals retain their Pass‑2 remainder split (no historical Pass‑1 floor inflation side effects).
+- **Output per goal:** `plannedWeeklyMinutes` — the **weekly plan target** shown in the UI as “X / week”. Catch-up overlays can raise or lower targets for affected goals mid-week (positive = catch‑up chip + demand). `nowMs` still does **not** rescale Pass 1+2 themselves.
 - **Schema `WeeklyGoal.targetMinutes`:** when it is the **only** time hint (no explicit weekly or per-day min/max), it does **not** set a floor or ceiling — the goal **equal-shares** Pass 2 like an unconstrained row. For a fixed weekly slice, set **`minMinutesPerWeek` / `maxMinutesPerWeek`** (optionally equal) explicitly.
 
 ## Day-sheet credit (before Pass 3)
@@ -27,7 +28,8 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 
 - Consumes `effectiveMinutes` (placement demand) into calendar blocks inside remaining gaps.
 - When `nowMs` is set, **auto** placement uses only the **future** portion of gaps; past intervals are not used for new auto blocks.
-- **One auto block per goal per day** (by design): reduces context switching. Additional demand spills in **extra passes** when availability allows. Each pass walks the goal's allowed weekdays (see below) at most once and can place at most **one** new block for that goal on each allowed day—so a **fragmented** day (many small pockets) or tight invert / nice-weather windows may require **many** passes. The spill loop uses a **scaled `maxPasses`** (derived from quantised remaining demand × `allowedDays.length`, with floor and absolute cap) so we do not stop early while gaps and headroom still exist; passes that schedule nothing still exit immediately.
+- **One auto block per goal per day** (by design): reduces context switching. **`frequencyPerWeek`** is capped by how many **allowed** weekdays still have a **future** placement window (`nowMs`-aware): effective touch ceiling is `min(frequencyPerWeek, daysRemainingWithWindow)` — e.g. 4× across the week becomes at most **3** if only Fri–Sun remain schedulable. Additional demand spills in **extra passes** when availability allows. Each pass walks the goal's allowed weekdays (see below) at most once and can place at most **one** new block for that goal on each allowed day—so a **fragmented** day (many small pockets) or tight invert / nice-weather windows may require **many** passes. The spill loop uses a **scaled `maxPasses`** (derived from quantised remaining demand × `allowedDays.length`, with floor and absolute cap) so we do not stop early while gaps and headroom still exist; passes that schedule nothing still exit immediately.
+- **Stable greedy ties:** %-share vs equal-share interleaving resolves equal-quantum demand ties with **fixed** order (`nice-weather constraint`, then tighter `maxMinutesPerDay`, then **`goal.id` lexical**). Gap choice breaks equal scores by **earliest `gap.startMs`**, then **`gap.endMs`**. Ideal-clock alignment breaks ties with the **lower ideal-time index**.
 - **Nice-weather bias (`niceWeatherWindows` non-empty):** goals with **`scheduleInNiceWeather`** iterate days **descending** by future minutes in `niceWeather ∩ free gaps`, so placements anchor on forecast-nice days. **Unconstrained** goals iterate **ascending** by the same overlap, filling days with little or no nice slack before occupying shared sunny pockets—so constrained goals stay inside their outdoor windows whenever another day can take the spill. At the **same commitment / floor / gym tier**, `scheduleInNiceWeather` rows are ordered **ahead of** unconstrained peers (including demand-based round‑robin sort so they do not lose the week to generic greedy passes).
 - Drag overrides and `source: "actual"` pins are honoured per existing pin rules (including relaxed overlap for actuals vs calendar busy, but not vs sleep).
 
@@ -51,7 +53,7 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 
 | Field | Meaning |
 |--------|---------|
-| `targetMinutes` | `plannedWeeklyMinutes` (Pass 1+2 result; full-week budget). |
+| `targetMinutes` | `plannedWeeklyMinutes` after Pass 1+2, group caps, and any **catch-up overlay** (`catchUpFloors`), before logs / `nowMs` trimming of placement demand only. |
 | `scheduledMinutes` | **Achieved:** merged **union** of wall-time intervals from `daysheet-goal:` busy events and **all** allocator blocks for that goal (including actual pins). Overlaps count once so the same slot is not credited as both logged and proposed. |
 | `unplacedMinutes` | `max(0, placementDemandAfterLogs − sum(all goal block minutes for that id))`. |
 
@@ -75,9 +77,9 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
   - **Advanced rules:** optional weighted rule cards (`personalSystem.advancedRules`) further nudge placement when their conditions match.
 - **`WeekMetrics.personalEnergyPlan`:** populated only when battery mode is on — returns the seven day drain estimates used for the run and UI **tuning hints** (non-binding suggestions).
 
-## Catch-up (web layer)
+## Catch-up / pace baseline (web layer)
 
-Baseline allocation used to compute automated catch-up floors typically runs **without** `nowMs`, so floors stay comparable to a full-week plan; the main interactive run may pass `nowMs` for placement.
+Automated rollup catch-up derives positive minute recommendations from [`computeGoalRollups`](../../apps/web/src/lib/review-rollup.ts) vs **Pass‑1/2-only** weekly targets (`baselineWeeklyMinuteTargets` in [`weekly.ts`](src/weekly.ts)) — **no nested full `allocateWeek`** — so pace denominators stay stable. The interactive run passes those values as `catchUpFloors` (plus manual weekly-review adjustments when `catchUpMode` is `"manual"`). Positive entries raise that goal’s **chip + placement demand**; negative entries trim (weekly min/max still apply).
 
 ## Related UI
 

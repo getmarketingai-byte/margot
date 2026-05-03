@@ -16,7 +16,7 @@ import {
   weeklyIntentSchema,
   weeklyPlanSchema
 } from "@calendar-automations/schema";
-import { allocateWeek, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+import { allocateWeek, baselineWeeklyMinuteTargets, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
@@ -202,19 +202,6 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
             sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
           });
         } else {
-          const baselineAllocation = allocateWeek({
-            plan,
-            busy: [...busy, ...systemBlocks],
-            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
-            niceWeatherWindows,
-            settings,
-            weekStartMs,
-            weekEndMs,
-            catchUpFloors: {},
-            weekAnchorDate: localMondayIso(tz),
-            goalOverrideSources: goalOverrideSourcesFromPlan(plan),
-            sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
-          });
           const weekDates = isoDatesForWeek(weekStartMs, tz);
           const dailyReviewsRange = await loadDailyReviewsInRange(
             userId,
@@ -224,10 +211,18 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           const reviewsByDate = new Map(
             dailyReviewsRange.map((r) => [r.date, r] as const)
           );
-          const effectiveTargetBaseline: Record<string, number> = {};
-          for (const [id, m] of Object.entries(baselineAllocation.metrics.perGoal)) {
-            effectiveTargetBaseline[id] = m.targetMinutes;
-          }
+          const effectiveTargetBaseline = baselineWeeklyMinuteTargets({
+            plan,
+            busy: [...busy, ...systemBlocks],
+            goalAvailabilityWindows: busyFetch.goalAvailabilityWindows,
+            niceWeatherWindows,
+            settings,
+            weekStartMs,
+            weekEndMs,
+            weekAnchorDate: localMondayIso(tz),
+            goalOverrideSources: goalOverrideSourcesFromPlan(plan),
+            sleepIntervals: sleepIntervalsForAllocation(systemBlocks, busy)
+          });
           const schedulingGoals = filterSchedulingGoals(plan.goals);
           const todayIsoSnap = todayIsoInTz(tz);
           const todayIdxSnap = weekDates.indexOf(todayIsoSnap);
