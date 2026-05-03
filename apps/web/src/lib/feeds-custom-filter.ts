@@ -25,7 +25,8 @@ export function eventIsWeatherTimemap(e: GeneratedEvent): boolean {
 }
 
 export function eventIsGenericTravel(e: GeneratedEvent): boolean {
-  return e.kind === "travel" && !tagSet(e).has("gym-pad");
+  const tags = tagSet(e);
+  return e.kind === "travel" && !tags.has("gym-pad") && !tags.has("drive-arrival-buffer");
 }
 
 export function eventIsGymPad(e: GeneratedEvent): boolean {
@@ -65,7 +66,9 @@ export function filterEventsForCustomRules(
   rules: IcsFeedRules
 ): GeneratedEvent[] {
   const inc = rules.include;
-  return events.filter((e) => matchesCustomInclude(e, inc));
+  return events.filter(
+    (e) => !tagSet(e).has("drive-arrival-buffer") && matchesCustomInclude(e, inc)
+  );
 }
 
 function matchesCustomInclude(e: GeneratedEvent, inc: IcsFeedRules["include"]): boolean {

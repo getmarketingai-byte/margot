@@ -180,6 +180,17 @@ export interface SystemBlock extends BusyEvent {
   };
 }
 
+/**
+ * Travel `drive-arrival-buffer` intervals stay in `computeTravelBlocks` output for
+ * allocation and sleep collision, but are omitted from the week grid and ICS
+ * snapshot rows — see `regenerate-user-snapshot.ts` and the dashboard calendar.
+ */
+export function systemBlockShownOnCalendarAndIcs(
+  block: Pick<SystemBlock, "system" | "variant">
+): boolean {
+  return !(block.system === "travel" && block.variant === "drive-arrival-buffer");
+}
+
 /* ─────────────────────────────── Travel ──────────────────────────────────── */
 
 /**
@@ -189,8 +200,7 @@ export interface SystemBlock extends BusyEvent {
  *   • Each physical event gets a `drive-pre` (wheel time only) ending at
  *     `eventStart − arriveMinutesBefore`, then a `drive-arrival-buffer` busy
  *     slice up to the event start (parking / on-site prep). Gym legs omit both.
- *   • `drive-post` starts at event end.
- *     each lasting either the resolver-supplied duration or
+ *   • `drive-post` starts at event end; wheel time uses the resolver or
  *     `fallbackDurationMinutes`.
  *   • Gym / planner block-label events at the configured venue skip the
  *     arrive-before buffer and use a flat `gym.driveMinutes` (no provider call).

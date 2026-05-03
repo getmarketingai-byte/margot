@@ -25,6 +25,7 @@ import { dedupeGeneratedEventsByUid } from "./dedupe-generated-events-by-uid";
 import {
   gymGoalTravelBlocksFromProposed,
   sleepIntervalsForAllocation,
+  systemBlockShownOnCalendarAndIcs,
   type SystemBlock
 } from "./week-blocks";
 
@@ -204,7 +205,11 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     settings.gym
   );
   const systemEvents = [
-    ...ctx.weekSlices.flatMap((s) => s.systemBlocks.map((b) => toGeneratedSystemEvent(userId, b))),
+    ...ctx.weekSlices.flatMap((s) =>
+      s.systemBlocks
+        .filter(systemBlockShownOnCalendarAndIcs)
+        .map((b) => toGeneratedSystemEvent(userId, b))
+    ),
     ...gymTravelBlocks.map((b) => toGeneratedSystemEvent(userId, b))
   ];
 

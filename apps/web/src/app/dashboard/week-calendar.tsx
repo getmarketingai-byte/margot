@@ -14,7 +14,7 @@ import {
 import type { WeeklyGoal, FrameworkRegistryEntry } from "@calendar-automations/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import { overlayTagsForGoal } from "@/lib/framework-calendar-overlay-tags";
-import type { SystemBlock } from "@/lib/week-blocks";
+import { systemBlockShownOnCalendarAndIcs, type SystemBlock } from "@/lib/week-blocks";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
 import { DraggableProposedGoalBlock } from "./draggable-proposed-goal-block";
@@ -555,6 +555,7 @@ export function WeekCalendar({
       }
     > = [];
     for (const b of system) {
+      if (!systemBlockShownOnCalendarAndIcs(b)) continue;
       const slices = position(
         b.startMs,
         b.endMs,

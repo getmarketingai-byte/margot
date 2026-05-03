@@ -137,7 +137,12 @@ export function filterEventsForFeed(
   feed: BuiltinFeedKind
 ): GeneratedEvent[] {
   if (feed !== "all") return [];
-  return [...events];
+  return events.filter((e) => !snapshotEventIsHiddenTravelArrivalBuffer(e));
+}
+
+/** Stale snapshots may still list these; they are never published to ICS. */
+function snapshotEventIsHiddenTravelArrivalBuffer(e: GeneratedEvent): boolean {
+  return e.tags?.includes("drive-arrival-buffer") === true;
 }
 
 function ensureBracketedTitle(title: string): string {

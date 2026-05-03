@@ -143,4 +143,19 @@ describe("eventIsGenericTravel", () => {
       )
     ).toBe(true);
   });
+
+  it("excludes drive-arrival-buffer travel", () => {
+    expect(
+      eventIsGenericTravel(
+        ev({
+          uid: "t",
+          kind: "travel",
+          title: "[Drive] (arrive by) Meeting",
+          startMs: 0,
+          endMs: 1,
+          tags: ["system", "travel", "drive-arrival-buffer"]
+        })
+      )
+    ).toBe(false);
+  });
 });
