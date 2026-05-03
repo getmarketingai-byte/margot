@@ -9,6 +9,7 @@ interface TravelSettingsFormProps {
   defaultHomeAddress: string;
   defaultRoutingProvider: RoutingProvider;
   defaultRoutingMaxCalls: number;
+  defaultRoutingAvoidTolls: boolean;
   weatherEnabled: boolean;
 }
 
@@ -17,6 +18,7 @@ export function TravelSettingsForm({
   defaultHomeAddress,
   defaultRoutingProvider,
   defaultRoutingMaxCalls,
+  defaultRoutingAvoidTolls,
   weatherEnabled
 }: TravelSettingsFormProps) {
   const [routingProvider, setRoutingProvider] =
@@ -61,6 +63,15 @@ export function TravelSettingsForm({
           Server needs <code>OPENROUTESERVICE_API_KEY</code> for live lookups; otherwise drives
           quietly stay at the fallback duration.
         </span>
+      </label>
+      <label className="flex items-center gap-2 text-xs sm:col-span-2">
+        <input
+          type="checkbox"
+          name="routingAvoidTolls"
+          defaultChecked={defaultRoutingAvoidTolls}
+          disabled={routingProvider === "disabled"}
+        />
+        <span>Avoid toll roads (OpenRouteService)</span>
       </label>
       <label className="flex flex-col gap-1 text-xs">
         Max provider calls per render

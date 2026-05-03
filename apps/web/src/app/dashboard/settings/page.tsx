@@ -90,12 +90,18 @@ async function updateTravel(formData: FormData): Promise<void> {
     redirect("/dashboard/settings?e=home_required");
   }
 
+  const routingAvoidTolls =
+    provider !== "disabled"
+      ? formData.get("routingAvoidTolls") === "on"
+      : settings.travel.routingAvoidTolls;
+
   const next = {
     ...settings,
     travel: {
       ...settings.travel,
       homeAddress: homeAddressRaw === "" ? undefined : homeAddressRaw,
       routingProvider: provider,
+      routingAvoidTolls,
       routingMaxCallsPerRender: Math.max(
         0,
         Math.min(
@@ -109,7 +115,11 @@ async function updateTravel(formData: FormData): Promise<void> {
   // When the user clears their home address or disables the provider we wipe
   // the per-leg cache so stale durations against the old origin can't sneak
   // back in. Geocodes are kept (they're keyed by address, not provider).
-  const wipeLegs = !next.travel.homeAddress || next.travel.routingProvider === "disabled";
+  // Also wipe when toll preference changes so we don't mix profiles in one cache file.
+  const wipeLegs =
+    !next.travel.homeAddress ||
+    next.travel.routingProvider === "disabled" ||
+    routingAvoidTolls !== settings.travel.routingAvoidTolls;
   if (wipeLegs) {
     next.travelCache = { ...settings.travelCache, legs: {} };
   }
@@ -317,12 +327,14 @@ export default async function SettingsPage({
             settings.travel.routingProvider,
             settings.travel.homeAddress ?? "",
             settings.weather.enabled,
-            settings.travel.routingMaxCallsPerRender
+            settings.travel.routingMaxCallsPerRender,
+            settings.travel.routingAvoidTolls ? "1" : "0"
           ].join("|")}
           updateTravel={updateTravel}
           defaultHomeAddress={settings.travel.homeAddress ?? ""}
           defaultRoutingProvider={settings.travel.routingProvider}
           defaultRoutingMaxCalls={settings.travel.routingMaxCallsPerRender}
+          defaultRoutingAvoidTolls={settings.travel.routingAvoidTolls}
           weatherEnabled={settings.weather.enabled}
         />
       </section>

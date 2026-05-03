@@ -177,6 +177,12 @@ export const travelSettingsSchema = z.object({
    */
   routingProvider: routingProviderSchema.default("disabled"),
   /**
+   * When true and routing uses OpenRouteService, directions request
+   * `options.avoid_features: ["tollways"]`. Cached legs are keyed separately
+   * from toll-allowing routes.
+   */
+  routingAvoidTolls: z.boolean().default(false),
+  /**
    * Maximum number of provider calls allowed per page render. Caps cost on
    * the free tier and matches the legacy quota-budget loop in Travel.gs.
    */

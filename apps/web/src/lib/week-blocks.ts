@@ -278,7 +278,7 @@ export async function computeTravelBlocks(
 
   function lookup(origin: string, dest: string): number | null {
     if (!origin || !dest) return null;
-    const v = durations.get(legKey(origin, dest));
+    const v = durations.get(legKey(origin, dest, travel));
     return v == null ? null : v;
   }
   function legMin(origin: string, dest: string, fixed?: number): number {

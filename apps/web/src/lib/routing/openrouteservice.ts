@@ -34,17 +34,19 @@ function normalizeOrsApiKey(raw: string | undefined): string | null {
   return t === "" ? null : t;
 }
 
+export interface RoutingProviderContext {
+  geocodes: Map<string, GeocodeCacheEntry>;
+  /** When true, OpenRouteService omits toll roads (`avoid_features: ["tollways"]`). */
+  avoidTolls?: boolean;
+}
+
 export interface RoutingProviderClient {
   /**
    * Returns drive duration from origin to dest in minutes, or null when the
    * leg can't be resolved. Implementations may mutate the provided
    * `geocodes` map to cache resolved coordinates.
    */
-  duration(
-    origin: string,
-    dest: string,
-    ctx: { geocodes: Map<string, GeocodeCacheEntry> }
-  ): Promise<number | null>;
+  duration(origin: string, dest: string, ctx: RoutingProviderContext): Promise<number | null>;
 }
 
 interface Coords {
@@ -52,9 +54,26 @@ interface Coords {
   lng: number;
 }
 
-async function driveSeconds(origin: Coords, dest: Coords, apiKey: string): Promise<number | null> {
+async function driveSeconds(
+  origin: Coords,
+  dest: Coords,
+  apiKey: string,
+  avoidTolls: boolean
+): Promise<number | null> {
   let res: Response;
   try {
+    const body: Record<string, unknown> = {
+      // ORS expects [lng, lat] pairs.
+      coordinates: [
+        [origin.lng, origin.lat],
+        [dest.lng, dest.lat]
+      ],
+      units: "m",
+      instructions: false
+    };
+    if (avoidTolls) {
+      body.options = { avoid_features: ["tollways"] };
+    }
     res = await fetch(ORS_DIRECTIONS_URL, {
       method: "POST",
       headers: {
@@ -62,15 +81,7 @@ async function driveSeconds(origin: Coords, dest: Coords, apiKey: string): Promi
         "Content-Type": "application/json",
         Accept: "application/json"
       },
-      body: JSON.stringify({
-        // ORS expects [lng, lat] pairs.
-        coordinates: [
-          [origin.lng, origin.lat],
-          [dest.lng, dest.lat]
-        ],
-        units: "m",
-        instructions: false
-      })
+      body: JSON.stringify(body)
     });
   } catch {
     return null;
@@ -102,7 +113,7 @@ export function createOpenRouteServiceProvider(): RoutingProviderClient | null {
       ]);
       if (!originCoords || !destCoords) return null;
 
-      const seconds = await driveSeconds(originCoords, destCoords, apiKey);
+      const seconds = await driveSeconds(originCoords, destCoords, apiKey, ctx.avoidTolls === true);
       if (seconds == null) return null;
       return Math.ceil(seconds / 60);
     }

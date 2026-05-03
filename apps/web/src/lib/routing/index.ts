@@ -61,8 +61,18 @@ export interface LegResolver {
   takeCacheUpdates(): TravelCache | null;
 }
 
-export function legKey(origin: string, dest: string): string {
-  return `${normalise(origin)}\n${normalise(dest)}`;
+/**
+ * Cache / duration map key for a leg. When `travel.routingAvoidTolls` is true, a
+ * `\\nnotolls` suffix keeps avoid-toll durations separate from default routing.
+ */
+export function legKey(
+  origin: string,
+  dest: string,
+  travel?: Pick<TravelSettings, "routingAvoidTolls">
+): string {
+  const base = `${normalise(origin)}\n${normalise(dest)}`;
+  if (travel?.routingAvoidTolls) return `${base}\nnotolls`;
+  return base;
 }
 
 function normalise(s: string): string {
@@ -117,7 +127,7 @@ export function createLegResolver(options: ResolverOptions): LegResolver {
       //    touching cache or provider.
       const unique = new Map<string, ResolveRequest>();
       for (const req of requests) {
-        const key = legKey(req.origin, req.dest);
+        const key = legKey(req.origin, req.dest, travel);
         if (req.fixedMinutes != null) {
           result.set(key, req.fixedMinutes);
           continue;
@@ -136,7 +146,7 @@ export function createLegResolver(options: ResolverOptions): LegResolver {
       //    within the next 7 days; later legs intentionally remain fallback.
       const staleQueue: ResolveRequest[] = [];
       for (const req of unique.values()) {
-        const key = legKey(req.origin, req.dest);
+        const key = legKey(req.origin, req.dest, travel);
         const state = legs.get(key);
         if (state) result.set(key, state.durationMin);
         const withinProviderLookahead =
@@ -150,14 +160,13 @@ export function createLegResolver(options: ResolverOptions): LegResolver {
         let spent = 0;
         for (const req of staleQueue) {
           if (spent >= callBudget) break;
-          const key = legKey(req.origin, req.dest);
+          const key = legKey(req.origin, req.dest, travel);
           spent += 1;
           try {
-            const duration = await provider.duration(
-              req.origin,
-              req.dest,
-              { geocodes }
-            );
+            const duration = await provider.duration(req.origin, req.dest, {
+              geocodes,
+              avoidTolls: travel.routingAvoidTolls
+            });
             if (duration != null && duration > 0) {
               const state: TravelLegState = {
                 durationMin: duration,
@@ -195,7 +204,7 @@ export function createLegResolver(options: ResolverOptions): LegResolver {
 
       // 4. Anything still missing falls back to "use config fallback".
       for (const req of unique.values()) {
-        const key = legKey(req.origin, req.dest);
+        const key = legKey(req.origin, req.dest, travel);
         if (!result.has(key)) result.set(key, null);
       }
       return result;
@@ -216,9 +225,10 @@ export function durationOrFallback(
   durations: Map<string, number | null>,
   origin: string,
   dest: string,
-  fallbackMin: number
+  fallbackMin: number,
+  travel?: Pick<TravelSettings, "routingAvoidTolls">
 ): number {
-  const v = durations.get(legKey(origin, dest));
+  const v = durations.get(legKey(origin, dest, travel));
   return v == null ? fallbackMin : v;
 }
 

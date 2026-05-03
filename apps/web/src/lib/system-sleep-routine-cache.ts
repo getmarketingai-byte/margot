@@ -68,6 +68,7 @@ export function fingerprintSleepRoutineInputs(params: {
     arriveMinutesBefore: params.travel.arriveMinutesBefore,
     minHomeMinutes: params.travel.minHomeMinutes,
     fallbackDurationMinutes: params.travel.fallbackDurationMinutes,
+    routingAvoidTolls: params.travel.routingAvoidTolls,
     virtualLocationSubstrings: params.travel.virtualLocationSubstrings,
     homeAddress: params.travel.homeAddress ?? "",
     gymEnabled: params.gym.enabled,
