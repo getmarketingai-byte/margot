@@ -20,6 +20,7 @@ import {
   summaryChipsForGoal,
   formatMinutes,
   summariseAllocation,
+  type GoalAllocationRowDisplay,
   type GoalAllocationRowSummary,
   type GoalPlanMinutes
 } from "./goal-helpers";
@@ -37,6 +38,13 @@ import {
   SessionsPerWeekField,
   WeekdayToggleGrid
 } from "@/components/scheduling-constraints";
+import { usePlanCalendarView } from "./plan-calendar-view-context";
+import type { PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";
+import {
+  rollingSevenDayWindowBounds,
+  rollingSpansTwoIsoWeeks,
+  touchedSliceIndexesForRollingWindow
+} from "@/lib/rolling-seven-day-plan-stats";
 
 type GoalDraft = Omit<WeeklyGoal, "id" | "title">;
 type GoalInput = Omit<WeeklyGoal, "id">;
@@ -58,39 +66,26 @@ interface GoalPaceInfo {
 
 interface PlanClientProps {
   initialGoals: WeeklyGoal[];
-  /**
-   * Full-week schedulable gap total (168h − busy & system blocks in each day, after
-   * consistency segments). Same as `WeekMetrics.utilisation.weekCapacityMinutes`.
-   */
-  freeMinutesThisWeek: number;
-  /** Optional: free capacity from `now` before placement (planning horizon). */
-  weekCapacityFromNowMinutes?: number;
-  /** Optional: remaining free minutes in full week after placement. */
-  remainingWeekMinutes?: number;
-  /** Optional: remaining free minutes from now after placement. */
-  remainingFromNowMinutes?: number;
-  /** Server-derived: how the week window splits into busy vs open vs consistency. */
-  capacityBreakdown?: {
-    grossWeekMinutes: number;
-    busyWeekMinutes: number;
-    consistencyReservedWeekMinutes: number;
-    busyTrueEventCount: number;
-  };
+  /** Per ISO week allocator metrics (Perfect Week horizon) */
+  perfectWeekStatsBySlice: PerfectWeekSliceStats[];
+  /** Rolling-window approximation for “next 7 days · combined” */
+  rollingSevenDayApprox: RollingSevenDayApprox;
+  /** Week Monday ms values used for touched-slice rolling math (typically `weekSlices.map`) */
+  isoWeekStartsMsForRolling: readonly number[];
+  calendarWeekStartsMs: readonly number[];
+  timezone: string;
   wheelAreas: WheelOption[];
-  /** Logged (day-sheet) vs proposed (future blocks) from `WeekMetrics.perGoal`. */
-  planMinutesByGoal: Record<string, { loggedMinutes: number; proposedFutureMinutes: number }>;
-  effectiveTargetByGoal: Record<string, number>;
-  /**
-   * Per-goal pace info derived from this week's daily reviews. When omitted
-   * (or a goal isn't present), no pace pill is shown next to the goal.
-   */
-  paceByGoal?: Record<string, GoalPaceInfo>;
   /** Map goal-group id → title (from `WeeklyPlan.goalGroups`). */
   goalGroupTitles?: Record<string, string>;
   /** Cohort definitions; used to show ∑ aggregate rules on each goal row. */
   goalGroups?: readonly GoalGroup[];
   /** Soft-deleted goals (restore within 7 days). */
   initialDeletedGoals: TrashedGoalEntry[];
+  /**
+   * Server wall time used when deriving {@link rollingSevenDayApprox}; keeps slice/window picks
+   * aligned with serialized stats until the next navigation/refresh.
+   */
+  rollingAsOfMs: number;
   /**
    * Goal ids that appear on any day-sheet slot (historical). Used to widen the trash
    * warning beyond this week&apos;s `loggedMinutes` tally.
@@ -157,19 +152,18 @@ function ensureGoalShape(input: GoalInput): GoalInput {
 export function PlanClient({
   initialGoals,
   initialDeletedGoals,
-  freeMinutesThisWeek,
-  capacityBreakdown,
-  weekCapacityFromNowMinutes,
-  remainingWeekMinutes,
-  remainingFromNowMinutes,
+  perfectWeekStatsBySlice,
+  rollingSevenDayApprox,
+  isoWeekStartsMsForRolling,
+  calendarWeekStartsMs,
+  timezone,
   wheelAreas,
-  planMinutesByGoal,
-  effectiveTargetByGoal,
-  paceByGoal,
   goalGroupTitles,
   goalGroups = [],
-  goalIdsWithDaySheetHistory = []
+  goalIdsWithDaySheetHistory = [],
+  rollingAsOfMs
 }: PlanClientProps) {
+  const { rangeMode, previewWeekIdx, rollingStatsMode } = usePlanCalendarView();
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(850);
   const [goals, setGoals] = useState<WeeklyGoal[]>(initialGoals);
   const [deletedGoals, setDeletedGoals] = useState<TrashedGoalEntry[]>(initialDeletedGoals);
@@ -214,9 +208,149 @@ export function PlanClient({
     return () => window.removeEventListener(GOAL_FOCUS_EVENT, onFocusGoal);
   }, []);
 
-  const summary = useMemo(
-    () => summariseAllocation(goals, freeMinutesThisWeek),
-    [goals, freeMinutesThisWeek]
+  const isoWeekStarts =
+    isoWeekStartsMsForRolling.length > 0 ? isoWeekStartsMsForRolling : calendarWeekStartsMs;
+  const sliceCount = Math.max(1, perfectWeekStatsBySlice.length);
+  const safeWeekIdx = Math.min(previewWeekIdx, sliceCount - 1);
+  const slices = perfectWeekStatsBySlice;
+  const ws0 = isoWeekStarts[0];
+  const touchedRollingSliceIdx = useMemo(() => {
+    if (isoWeekStarts.length === 0) return [];
+    const w = isoWeekStarts[0]!;
+    const { windowStartMs, windowEndMs } = rollingSevenDayWindowBounds(w, timezone, rollingAsOfMs);
+    return [...new Set(touchedSliceIndexesForRollingWindow(isoWeekStarts, windowStartMs, windowEndMs))]
+      .filter((i) => i >= 0 && i < slices.length)
+      .sort((a, b) => a - b);
+  }, [isoWeekStarts, rollingAsOfMs, slices.length, timezone]);
+
+  const rollingSplitPairIdx =
+    rangeMode === "next-7-days" &&
+    rollingStatsMode === "split" &&
+    ws0 !== undefined &&
+    rollingSpansTwoIsoWeeks(ws0, timezone, rollingAsOfMs) &&
+    touchedRollingSliceIdx.length >= 2
+      ? ([touchedRollingSliceIdx[0]!, touchedRollingSliceIdx[1]!] as const)
+      : null;
+
+  const splitSliceA =
+    rollingSplitPairIdx !== null ? slices[rollingSplitPairIdx[0]!] : undefined;
+  const splitSliceB =
+    rollingSplitPairIdx !== null ? slices[rollingSplitPairIdx[1]!] : undefined;
+  const rollingSplitsTwoISO = Boolean(splitSliceA && splitSliceB);
+
+  const summaryIsoSingle = useMemo(
+    () => summariseAllocation(goals, slices[safeWeekIdx]?.freeMinutesThisWeek ?? 0),
+    [goals, slices, safeWeekIdx]
+  );
+
+  const summaryRollingCombined = useMemo(
+    () => summariseAllocation(goals, rollingSevenDayApprox.freeBeforeGoalsApproxMinutes),
+    [goals, rollingSevenDayApprox.freeBeforeGoalsApproxMinutes]
+  );
+
+  const summarySplitLeft = useMemo(
+    () => summariseAllocation(goals, splitSliceA?.freeMinutesThisWeek ?? 0),
+    [goals, splitSliceA?.freeMinutesThisWeek]
+  );
+  const summarySplitRight = useMemo(
+    () => summariseAllocation(goals, splitSliceB?.freeMinutesThisWeek ?? 0),
+    [goals, splitSliceB?.freeMinutesThisWeek]
+  );
+
+  const cohortAllocationSummary =
+    rangeMode === "calendar-week"
+      ? summaryIsoSingle
+      : rollingSplitsTwoISO
+        ? summarySplitLeft
+        : summaryRollingCombined;
+
+  const mergedPlanMinuteForTrash = useCallback(
+    (goalId: string) => {
+      if (rangeMode === "calendar-week") {
+        return slices[safeWeekIdx]?.planMinutesByGoal[goalId]?.loggedMinutes ?? 0;
+      }
+      if (rollingSplitsTwoISO && splitSliceA && splitSliceB && rollingSplitPairIdx) {
+        const [ia, ib] = rollingSplitPairIdx;
+        const a = slices[ia]?.planMinutesByGoal[goalId]?.loggedMinutes ?? 0;
+        const b = slices[ib]?.planMinutesByGoal[goalId]?.loggedMinutes ?? 0;
+        return a + b;
+      }
+      return rollingSevenDayApprox.loggedMinutesByGoalIdInWindow[goalId] ?? 0;
+    },
+    [
+      rangeMode,
+      rollingSplitsTwoISO,
+      rollingSplitPairIdx,
+      safeWeekIdx,
+      splitSliceA,
+      splitSliceB,
+      slices,
+      rollingSevenDayApprox.loggedMinutesByGoalIdInWindow
+    ]
+  );
+
+  const combinedRollingPlanMinute = useCallback(
+    (goalId: string) => {
+      const proposedWin = rollingSevenDayApprox.proposedMinutesByGoalId[goalId] ?? 0;
+      const loggedWin = rollingSevenDayApprox.loggedMinutesByGoalIdInWindow[goalId] ?? 0;
+      return { loggedMinutes: loggedWin, proposedFutureMinutes: proposedWin };
+    },
+    [rollingSevenDayApprox.loggedMinutesByGoalIdInWindow, rollingSevenDayApprox.proposedMinutesByGoalId]
+  );
+
+  const goalRowPropsFor = useCallback(
+    (goalId: string) => {
+      if (rangeMode === "calendar-week") {
+        const sl = slices[safeWeekIdx]!;
+        return {
+          allocationSummary: summaryIsoSingle as GoalAllocationRowSummary,
+          planMinutes: sl.planMinutesByGoal[goalId],
+          effectiveTarget: sl.effectiveTargetByGoal[goalId],
+          pace: sl.paceByGoal[goalId] as GoalPaceInfo | undefined,
+          dualWeek: undefined as
+            | {
+                summaries: readonly [GoalAllocationRowSummary, GoalAllocationRowSummary];
+                slices: readonly [PerfectWeekSliceStats, PerfectWeekSliceStats];
+              }
+            | undefined
+        };
+      }
+      if (rollingSplitsTwoISO && splitSliceA && splitSliceB && rollingSplitPairIdx) {
+        return {
+          allocationSummary: summarySplitLeft,
+          dualWeek: {
+            summaries: [summarySplitLeft, summarySplitRight] as const,
+            slices: [splitSliceA, splitSliceB] as const
+          },
+          planMinutes: undefined,
+          effectiveTarget: undefined,
+          pace: undefined
+        };
+      }
+      const base = rollingSevenDayApprox.effectiveTargetBaselineByGoalId[goalId] ?? 0;
+      return {
+        allocationSummary: summaryRollingCombined as GoalAllocationRowSummary,
+        planMinutes: combinedRollingPlanMinute(goalId),
+        effectiveTarget: base,
+        pace: undefined as GoalPaceInfo | undefined,
+        dualWeek: undefined
+      };
+    },
+    [
+      combinedRollingPlanMinute,
+      rangeMode,
+      rollingSevenDayApprox.effectiveTargetBaselineByGoalId,
+      rollingSplitsTwoISO,
+      rollingSplitPairIdx,
+      safeWeekIdx,
+      splitSliceA,
+      splitSliceB,
+      slices,
+      summaryIsoSingle,
+      summaryRollingCombined,
+      summarySplitLeft,
+      summarySplitRight
+    ]
   );
 
   const wheelLabel = useCallback(
@@ -348,22 +482,59 @@ export function PlanClient({
     });
   };
 
+  const isoSliceActive = slices[safeWeekIdx];
+
   return (
     <div className="flex flex-col gap-5">
-      <BudgetChip
-        summary={summary}
-        capacityBreakdown={capacityBreakdown}
-        weekCapacityFromNowMinutes={weekCapacityFromNowMinutes}
-        remainingWeekMinutes={remainingWeekMinutes}
-        remainingFromNowMinutes={remainingFromNowMinutes}
-        hasAnyGoalGroupMembership={summary.hasAnyGoalGroupMembership}
-      />
+      {rangeMode === "calendar-week" ? (
+        <BudgetChip
+          summary={summaryIsoSingle}
+          capacityBreakdown={isoSliceActive?.capacityBreakdown}
+          weekCapacityFromNowMinutes={isoSliceActive?.weekCapacityFromNowMinutes}
+          remainingWeekMinutes={isoSliceActive?.remainingWeekMinutes}
+          remainingFromNowMinutes={isoSliceActive?.remainingFromNowMinutes}
+          hasAnyGoalGroupMembership={summaryIsoSingle.hasAnyGoalGroupMembership}
+          sectionSubtitle={isoSliceActive ? `Planning window · ${isoSliceActive.weekLabel}` : undefined}
+        />
+      ) : rollingSplitsTwoISO && splitSliceA && splitSliceB ? (
+        <div className="flex flex-col gap-4">
+          <BudgetChip
+            summary={summarySplitLeft}
+            capacityBreakdown={splitSliceA.capacityBreakdown}
+            weekCapacityFromNowMinutes={splitSliceA.weekCapacityFromNowMinutes}
+            remainingWeekMinutes={splitSliceA.remainingWeekMinutes}
+            remainingFromNowMinutes={splitSliceA.remainingFromNowMinutes}
+            hasAnyGoalGroupMembership={summarySplitLeft.hasAnyGoalGroupMembership}
+            sectionSubtitle={`${splitSliceA.weekLabel} — ISO week (rolling split)`}
+          />
+          <BudgetChip
+            summary={summarySplitRight}
+            capacityBreakdown={splitSliceB.capacityBreakdown}
+            weekCapacityFromNowMinutes={splitSliceB.weekCapacityFromNowMinutes}
+            remainingWeekMinutes={splitSliceB.remainingWeekMinutes}
+            remainingFromNowMinutes={splitSliceB.remainingFromNowMinutes}
+            hasAnyGoalGroupMembership={summarySplitRight.hasAnyGoalGroupMembership}
+            sectionSubtitle={`${splitSliceB.weekLabel} — ISO week (rolling split)`}
+          />
+        </div>
+      ) : (
+        <BudgetChip
+          summary={summaryRollingCombined}
+          weekCapacityFromNowMinutes={rollingSevenDayApprox.freeBeforeGoalsApproxMinutes}
+          remainingWeekMinutes={rollingSevenDayApprox.freeAfterGoalsApproxMinutes}
+          remainingFromNowMinutes={rollingSevenDayApprox.freeAfterGoalsApproxMinutes}
+          hasAnyGoalGroupMembership={summaryRollingCombined.hasAnyGoalGroupMembership}
+          approxRollingNote="Approx. for the calendar’s seven-day strip: free time merges busy/system/day-sheet layers. Logged time and proposed blocks are counted only inside this window; weekly `/wk` target is from your current ISO week."
+        />
+      )}
 
       {goals.length === 0 ? (
         <EmptyState onAdd={handleAdd} />
       ) : (
         <ul className="flex flex-col gap-2" aria-label="Goals">
-          {goals.map((goal, idx) => (
+          {goals.map((goal, idx) => {
+            const gpr = goalRowPropsFor(goal.id);
+            return (
             <GoalRow
               key={goal.id}
               goal={goal}
@@ -371,10 +542,12 @@ export function PlanClient({
               total={goals.length}
               wheelAreas={wheelAreas}
               wheelLabel={wheelLabel}
-              allocationSummary={summary}
-              planMinutes={planMinutesByGoal[goal.id]}
-              effectiveTarget={effectiveTargetByGoal[goal.id]}
-              pace={paceByGoal?.[goal.id]}
+              allocationSummary={gpr.allocationSummary}
+              shareCheckSummary={cohortAllocationSummary}
+              dualWeek={gpr.dualWeek}
+              planMinutes={gpr.planMinutes}
+              effectiveTarget={gpr.effectiveTarget}
+              pace={gpr.pace}
               onUpdate={(next) => handleUpdate(goal.id, next)}
               onRequestTrash={() => setPendingTrash(goal)}
               onMoveUp={() => handleReorder(idx, Math.max(0, idx - 1))}
@@ -385,7 +558,8 @@ export function PlanClient({
               goalGroupTitles={goalGroupTitles}
               goalGroups={goalGroups}
             />
-          ))}
+          );
+          })}
           <li className="list-none">
             <AddGoalTitle onAdd={handleAdd} />
           </li>
@@ -442,7 +616,7 @@ export function PlanClient({
               toward your plan. If you don&apos;t restore it within 7 days, those day-sheet entries
               are deleted permanently.
             </p>
-            {((planMinutesByGoal[pendingTrash.id]?.loggedMinutes ?? 0) > 0 ||
+            {((mergedPlanMinuteForTrash(pendingTrash.id) ?? 0) > 0 ||
               historyGoalIdSet.has(pendingTrash.id)) && (
               <p
                 className="rounded-md border border-amber-300/50 bg-amber-500/10 px-2 py-2 text-xs text-amber-900 dark:border-amber-700/50 dark:bg-amber-500/15 dark:text-amber-100"
@@ -486,14 +660,18 @@ function BudgetChip({
   weekCapacityFromNowMinutes,
   remainingWeekMinutes,
   remainingFromNowMinutes,
-  hasAnyGoalGroupMembership
+  hasAnyGoalGroupMembership,
+  sectionSubtitle,
+  approxRollingNote
 }: {
   summary: ReturnType<typeof summariseAllocation>;
-  capacityBreakdown?: PlanClientProps["capacityBreakdown"];
+  capacityBreakdown?: PerfectWeekSliceStats["capacityBreakdown"];
   weekCapacityFromNowMinutes?: number;
   remainingWeekMinutes?: number;
   remainingFromNowMinutes?: number;
   hasAnyGoalGroupMembership?: boolean;
+  sectionSubtitle?: string;
+  approxRollingNote?: string;
 }) {
   if (summary.goalCount === 0) {
     return (
@@ -509,6 +687,9 @@ function BudgetChip({
 
   return (
     <div className="card flex flex-col gap-3">
+      {sectionSubtitle ? (
+        <p className="text-[11px] font-medium text-ink-600 dark:text-ink-300">{sectionSubtitle}</p>
+      ) : null}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Stat label="Available time (week)" value={formatMinutes(summary.freeMinutes)} />
       <Stat
@@ -577,6 +758,9 @@ function BudgetChip({
           <span className="tabular-nums">{capacityBreakdown.busyTrueEventCount}</span> busy-tagged
           intervals in the feed
         </p>
+      ) : null}
+      {approxRollingNote ? (
+        <p className="text-xs text-ink-500 dark:text-ink-300">{approxRollingNote}</p>
       ) : null}
     </div>
   );
@@ -667,6 +851,77 @@ function PacePill({ pace }: { pace: GoalPaceInfo }) {
   );
 }
 
+function AllocationRowPanels({ row }: { row: GoalAllocationRowDisplay }) {
+  return (
+    <>
+      <details className="group mt-0.5 w-full shrink-0 basis-full lg:block lg:@lg:hidden">
+        <summary
+          className="cursor-pointer list-none text-right text-[10px] leading-none text-ink-400/90 outline-none marker:content-none [&::-webkit-details-marker]:hidden focus-visible:ring-2 focus-visible:ring-accent/40"
+          title={row.title}
+          aria-label={`Schedule: logged ${row.loggedLabel}, proposed ${row.proposedLabel}, min ${row.minTargetLabel}, max ${row.maxTargetLabel}. Open for labels.`}
+        >
+          <span className="tabular-nums">
+            {row.loggedLabel}
+            <span className="px-1 text-ink-300/50" aria-hidden>
+              ·
+            </span>
+            {row.proposedLabel}
+            <span className="px-1 text-ink-300/50" aria-hidden>
+              ·
+            </span>
+            {row.minTargetLabel}
+            <span className="px-1 text-ink-300/50" aria-hidden>
+              ·
+            </span>
+            {row.maxTargetLabel}
+          </span>
+        </summary>
+        <dl className="mt-1 space-y-0.5 text-right text-[10px] leading-snug text-ink-500 dark:text-ink-400">
+          <div className="flex justify-end gap-2">
+            <dt className="font-normal text-ink-400/75">Logged</dt>
+            <dd className="tabular-nums text-ink-600 dark:text-ink-300">{row.loggedLabel}</dd>
+          </div>
+          <div className="flex justify-end gap-2">
+            <dt className="font-normal text-ink-400/75">Proposed</dt>
+            <dd className="tabular-nums text-ink-600 dark:text-ink-300">{row.proposedLabel}</dd>
+          </div>
+          <div className="flex justify-end gap-2">
+            <dt className="font-normal text-ink-400/75">Min</dt>
+            <dd className="tabular-nums text-ink-600 dark:text-ink-300">{row.minTargetLabel}</dd>
+          </div>
+          <div className="flex justify-end gap-2">
+            <dt className="font-normal text-ink-400/75">Max</dt>
+            <dd className="tabular-nums text-ink-600 dark:text-ink-300">{row.maxTargetLabel}</dd>
+          </div>
+        </dl>
+      </details>
+      <div
+        className="mt-0.5 hidden text-ink-400 lg:ml-auto lg:mt-0 lg:@lg:flex lg:shrink-0"
+        title={row.title}
+      >
+        <div className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[10px] leading-none text-ink-400/85 [word-spacing:-0.02em] dark:text-ink-500">
+          <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+            <span className="font-normal text-ink-400/70">Logged </span>
+            {row.loggedLabel}
+          </span>
+          <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+            <span className="font-normal text-ink-400/70">Proposed </span>
+            {row.proposedLabel}
+          </span>
+          <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
+            <span className="font-normal text-ink-400/70">Min </span>
+            {row.minTargetLabel}
+          </span>
+          <span className="min-w-0 whitespace-nowrap tabular-nums">
+            <span className="font-normal text-ink-400/70">Max </span>
+            {row.maxTargetLabel}
+          </span>
+        </div>
+      </div>
+    </>
+  );
+}
+
 /* ─────────────────────────── Goal row (collapsed + expanded) ─────────────── */
 
 function truncateCohortSummaryLine(line: string, maxChars = 44): string {
@@ -681,6 +936,8 @@ function GoalRow({
   wheelAreas,
   wheelLabel,
   allocationSummary,
+  shareCheckSummary,
+  dualWeek,
   planMinutes,
   effectiveTarget,
   pace,
@@ -700,6 +957,11 @@ function GoalRow({
   wheelAreas: WheelOption[];
   wheelLabel: (id: string) => string;
   allocationSummary: GoalAllocationRowSummary;
+  shareCheckSummary: GoalAllocationRowSummary;
+  dualWeek?: {
+    summaries: readonly [GoalAllocationRowSummary, GoalAllocationRowSummary];
+    slices: readonly [PerfectWeekSliceStats, PerfectWeekSliceStats];
+  };
   planMinutes?: GoalPlanMinutes;
   effectiveTarget?: number;
   pace?: GoalPaceInfo;
@@ -738,17 +1000,40 @@ function GoalRow({
 
   const cohortSummaries = aggregateGroupConstraintSummariesForGoal(goal, goalGroups);
 
-  const allocationRow =
-    planMinutes !== undefined &&
-    effectiveTarget !== undefined &&
-    effectiveTarget > 0
-      ? goalAllocationRowDisplay(goal, allocationSummary, planMinutes, effectiveTarget)
+  const allocationRowDual =
+    dualWeek?.summaries?.[0] && dualWeek.summaries[1]
+      ? (() => {
+          const mk = (summ: GoalAllocationRowSummary, sl: PerfectWeekSliceStats) =>
+            goalAllocationRowDisplay(
+              goal,
+              summ,
+              sl.planMinutesByGoal[goal.id] ?? {
+                loggedMinutes: 0,
+                proposedFutureMinutes: 0
+              },
+              sl.effectiveTargetByGoal[goal.id]
+            );
+          return {
+            a: mk(dualWeek.summaries[0], dualWeek.slices[0]),
+            b: mk(dualWeek.summaries[1], dualWeek.slices[1])
+          };
+        })()
       : undefined;
 
-  const shareOverBudget =
-    effectiveTarget !== undefined &&
-    effectiveTarget > 0 &&
-    goalExceedsDeclaredWeekShare(goal, allocationSummary, effectiveTarget);
+  const allocationRow =
+    allocationRowDual
+      ? undefined
+      : planMinutes !== undefined &&
+          effectiveTarget !== undefined &&
+          effectiveTarget > 0
+        ? goalAllocationRowDisplay(goal, allocationSummary, planMinutes, effectiveTarget)
+        : undefined;
+
+  const shareOverBudget = allocationRowDual
+    ? false
+    : effectiveTarget !== undefined &&
+        effectiveTarget > 0 &&
+        goalExceedsDeclaredWeekShare(goal, shareCheckSummary, effectiveTarget);
 
   const defaultAllocationSharePercent =
     allocationSummary.equalShareGoals > 0
@@ -835,13 +1120,34 @@ function GoalRow({
               <span className="text-sm font-medium" style={{ color: goalColor }}>
                 {goal.title}
               </span>
-              {pace && pace.status !== "no-data" && <PacePill pace={pace} />}
+              {allocationRowDual && dualWeek ? (
+                <>
+                  {([0, 1] as const).map((idx) => {
+                    const pc = dualWeek!.slices[idx].paceByGoal[goal.id] as GoalPaceInfo | undefined;
+                    return pc?.status !== "no-data" && pc ? (
+                      <PacePill key={`p-${idx}`} pace={pc} />
+                    ) : null;
+                  })}
+                </>
+              ) : pace && pace.status !== "no-data" ? (
+                <PacePill pace={pace} />
+              ) : null}
               {rowChips.length === 0 && hiddenChips.length === 0 && !(goal.groupIds?.length) ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-1 text-xs text-ink-400 dark:bg-ink-900/40">
                   Equal share
-                  {effectiveTarget && effectiveTarget > 0
-                    ? ` · ~${formatMinutes(effectiveTarget)}/wk`
-                    : ""}
+                  {allocationRowDual && dualWeek ? (
+                    <span className="tabular-nums">
+                      {dualWeek.slices
+                        .map((s) => s.effectiveTargetByGoal[goal.id] ?? 0)
+                        .filter((m) => m > 0)
+                        .map((m) => `~${formatMinutes(m)}/wk`)
+                        .join(" · ")}
+                    </span>
+                  ) : effectiveTarget && effectiveTarget > 0 ? (
+                    ` · ~${formatMinutes(effectiveTarget)}/wk`
+                  ) : (
+                    ""
+                  )}
                 </span>
               ) : (
                 <>
@@ -889,73 +1195,19 @@ function GoalRow({
                 </>
               )}
             </div>
-            {allocationRow ? (
-              <>
-                <details className="group mt-0.5 w-full shrink-0 basis-full lg:block lg:@lg:hidden">
-                  <summary
-                    className="cursor-pointer list-none text-right text-[10px] leading-none text-ink-400/90 outline-none marker:content-none [&::-webkit-details-marker]:hidden focus-visible:ring-2 focus-visible:ring-accent/40"
-                    title={allocationRow.title}
-                    aria-label={`Schedule: logged ${allocationRow.loggedLabel}, proposed ${allocationRow.proposedLabel}, min ${allocationRow.minTargetLabel}, max ${allocationRow.maxTargetLabel}. Open for labels.`}
-                  >
-                    <span className="tabular-nums">
-                      {allocationRow.loggedLabel}
-                      <span className="px-1 text-ink-300/50" aria-hidden>
-                        ·
-                      </span>
-                      {allocationRow.proposedLabel}
-                      <span className="px-1 text-ink-300/50" aria-hidden>
-                        ·
-                      </span>
-                      {allocationRow.minTargetLabel}
-                      <span className="px-1 text-ink-300/50" aria-hidden>
-                        ·
-                      </span>
-                      {allocationRow.maxTargetLabel}
-                    </span>
-                  </summary>
-                  <dl className="mt-1 space-y-0.5 text-right text-[10px] leading-snug text-ink-500 dark:text-ink-400">
-                    <div className="flex justify-end gap-2">
-                      <dt className="font-normal text-ink-400/75">Logged</dt>
-                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.loggedLabel}</dd>
+            {allocationRowDual && dualWeek ? (
+              <div className="mt-0.5 flex w-full flex-col gap-2">
+                {([allocationRowDual.a, allocationRowDual.b] as const).map((row, ix) => (
+                  <div key={dualWeek.slices[ix as 0 | 1]!.weekStartMs} className="w-full">
+                    <div className="mb-0.5 text-[10px] font-medium text-ink-500 dark:text-ink-400">
+                      {dualWeek.slices[ix as 0 | 1]!.weekLabel}
                     </div>
-                    <div className="flex justify-end gap-2">
-                      <dt className="font-normal text-ink-400/75">Proposed</dt>
-                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.proposedLabel}</dd>
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <dt className="font-normal text-ink-400/75">Min</dt>
-                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.minTargetLabel}</dd>
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <dt className="font-normal text-ink-400/75">Max</dt>
-                      <dd className="tabular-nums text-ink-600 dark:text-ink-300">{allocationRow.maxTargetLabel}</dd>
-                    </div>
-                  </dl>
-                </details>
-                <div
-                  className="mt-0.5 hidden text-ink-400 lg:ml-auto lg:mt-0 lg:@lg:flex lg:shrink-0"
-                  title={allocationRow.title}
-                >
-                  <div className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[10px] leading-none text-ink-400/85 [word-spacing:-0.02em] dark:text-ink-500">
-                    <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
-                      <span className="font-normal text-ink-400/70">Logged </span>
-                      {allocationRow.loggedLabel}
-                    </span>
-                    <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
-                      <span className="font-normal text-ink-400/70">Proposed </span>
-                      {allocationRow.proposedLabel}
-                    </span>
-                    <span className="min-w-0 whitespace-nowrap tabular-nums after:px-1 after:text-ink-300/50 after:content-['·'] last:after:content-none">
-                      <span className="font-normal text-ink-400/70">Min </span>
-                      {allocationRow.minTargetLabel}
-                    </span>
-                    <span className="min-w-0 whitespace-nowrap tabular-nums">
-                      <span className="font-normal text-ink-400/70">Max </span>
-                      {allocationRow.maxTargetLabel}
-                    </span>
+                    <AllocationRowPanels row={row} />
                   </div>
-                </div>
-              </>
+                ))}
+              </div>
+            ) : allocationRow ? (
+              <AllocationRowPanels row={allocationRow} />
             ) : null}
           </div>
           {shareOverBudget ? (

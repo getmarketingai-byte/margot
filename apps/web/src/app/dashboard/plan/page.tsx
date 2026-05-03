@@ -9,12 +9,10 @@ import {
 } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
 import {
-  getCachedPlanWeekAllocationInputs,
-  invalidateUserAllocationCache
+  getCachedPlanWeekAllocationInputs
 } from "@/lib/cached-plan-week-allocation-inputs";
-import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";
-import { loadSettings, saveSettings } from "@/lib/settings-store";
+import { loadSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
 import { gymGoalTravelBlocksFromProposed, sleepIntervalsForAllocation } from "@/lib/week-blocks";
 import { computeGoalRollups } from "@/lib/review-rollup";
@@ -28,11 +26,14 @@ import { loadAllDailyReviewsForUser } from "@/lib/review-store";
 import { processExpiredWeeklyPlanTrash } from "@/lib/weekly-plan-trash";
 import { updateWeeklyIntent } from "./actions";
 import { ForceScheduleRefreshButton } from "./force-schedule-refresh-button";
-import { PlanClient } from "./plan-client";
-import { ResizableColumns } from "./resizable-columns";
+import PerfectWeekPlannerBody from "./perfect-week-planner-body";
 import { WeeklyIntentCard } from "./weekly-intent-card";
-import { WeekCalendar } from "../week-calendar";
-import { RangeToggleCalendar } from "./range-toggle-calendar";
+import type { PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";
+import {
+  approximateRollingSevenDayOccupancy,
+  daySheetLoggedMinutesByGoalInWindow,
+  rollingSevenDayWindowBounds
+} from "@/lib/rolling-seven-day-plan-stats";
 
 export const dynamic = "force-dynamic";
 
@@ -122,9 +123,7 @@ export default async function PlanPage() {
   const {
     busyFetch,
     weekStartMs,
-    weekEndMs,
     weatherTimemapEvents,
-    weekDates,
     reviewsByDate,
     dayIndex,
     weekSlices,
@@ -149,7 +148,6 @@ export default async function PlanPage() {
     })
   );
 
-  const allocation = allocationSlices[0]!;
   const mergedGoalBlocks = allocationSlices.flatMap((a) => a.blocks);
 
   const hasUserDragGoalOverrides = plan.overrides.some(
@@ -240,45 +238,111 @@ export default async function PlanPage() {
     return `${start} – ${end}`;
   });
 
-  const scheduledByGoal: Record<string, number> = {};
-  const effectiveTargetByGoal: Record<string, number> = {};
-  const planMinutesByGoal: Record<string, { loggedMinutes: number; proposedFutureMinutes: number }> =
-    {};
-  for (const [id, m] of Object.entries(allocation.metrics.perGoal)) {
-    scheduledByGoal[id] = m.scheduledMinutes;
-    effectiveTargetByGoal[id] = m.targetMinutes;
-    planMinutesByGoal[id] = {
-      loggedMinutes: m.loggedMinutes,
-      proposedFutureMinutes: m.proposedFutureMinutes
-    };
-  }
-
-  // Pace rollups: day-sheet vs final allocator targets for badges.
-  const goalRollups = computeGoalRollups({
-    goals: schedulingGoals,
-    reviewsByDate,
-    effectiveTargetByGoal,
-    allocatorAchievedByGoal: scheduledByGoal,
-    weekDates,
-    dayIndex
-  });
-  const paceByGoal: Record<
-    string,
-    {
-      status: import("@/lib/review-rollup").PaceStatus;
-      deltaMinutes: number;
-      actualMinutes: number;
-      targetToDateMinutes: number;
+  const perfectWeekStatsBySlice: PerfectWeekSliceStats[] = allocationSlices.map((alloc, idx) => {
+    const sliceMeta = weekSlices[idx]!;
+    const scheduledByGoal: Record<string, number> = {};
+    const effectiveTargetByGoal: Record<string, number> = {};
+    const planMinutesByGoal: Record<
+      string,
+      { loggedMinutes: number; proposedFutureMinutes: number }
+    > = {};
+    for (const [id, m] of Object.entries(alloc.metrics.perGoal)) {
+      scheduledByGoal[id] = m.scheduledMinutes;
+      effectiveTargetByGoal[id] = m.targetMinutes;
+      planMinutesByGoal[id] = {
+        loggedMinutes: m.loggedMinutes,
+        proposedFutureMinutes: m.proposedFutureMinutes
+      };
     }
-  > = {};
-  for (const r of goalRollups) {
-    paceByGoal[r.goalId] = {
-      status: r.status,
-      deltaMinutes: r.deltaMinutes,
-      actualMinutes: r.effectiveActualMinutes,
-      targetToDateMinutes: r.targetToDate
+    const rollupsSlice = computeGoalRollups({
+      goals: schedulingGoals,
+      reviewsByDate,
+      effectiveTargetByGoal,
+      allocatorAchievedByGoal: scheduledByGoal,
+      weekDates: sliceMeta.weekDates,
+      dayIndex: idx === 0 ? dayIndex : 6
+    });
+    const paceByGoalSlice: PerfectWeekSliceStats["paceByGoal"] = {};
+    for (const r of rollupsSlice) {
+      paceByGoalSlice[r.goalId] = {
+        status: r.status,
+        deltaMinutes: r.deltaMinutes,
+        actualMinutes: r.effectiveActualMinutes,
+        targetToDateMinutes: r.targetToDate
+      };
+    }
+    return {
+      weekStartMs: sliceMeta.weekStartMs,
+      weekEndMs: sliceMeta.weekEndMs,
+      weekDates: sliceMeta.weekDates,
+      weekLabel: previewWeekLabels[idx] ?? `Week ${idx + 1}`,
+      freeMinutesThisWeek: alloc.metrics.utilisation.weekCapacityMinutes,
+      capacityBreakdown: {
+        grossWeekMinutes: alloc.metrics.utilisation.grossWeekMinutes,
+        busyWeekMinutes: alloc.metrics.utilisation.busyWeekMinutes,
+        consistencyReservedWeekMinutes:
+          alloc.metrics.utilisation.consistencyReservedWeekMinutes,
+        busyTrueEventCount: alloc.metrics.utilisation.busyTrueEventCount
+      },
+      weekCapacityFromNowMinutes: alloc.metrics.utilisation.weekCapacityFromNowMinutes,
+      remainingWeekMinutes: alloc.metrics.utilisation.availableMinutes,
+      remainingFromNowMinutes: alloc.metrics.utilisation.availableFromNowMinutes,
+      planMinutesByGoal,
+      effectiveTargetByGoal,
+      paceByGoal: paceByGoalSlice,
+      goalGroupGaps: [...alloc.metrics.goalGroupGaps],
+      goalGroupMinutes: alloc.metrics.goalGroupMinutes,
+      overcommitted: alloc.metrics.overcommitted,
+      notScheduled: alloc.metrics.notScheduled
     };
-  }
+  });
+
+  const { windowStartMs: rollWinStart, windowEndMs: rollWinEnd } = rollingSevenDayWindowBounds(
+    weekStartMs,
+    settings.timezone,
+    nowMs
+  );
+  const occupiedRollBeforeGoals = approximateRollingSevenDayOccupancy({
+    windowStartMs: rollWinStart,
+    windowEndMs: rollWinEnd,
+    busy: busyForCalendar,
+    daySheetGoalBusy: daySheetGoalBusyForCalendar,
+    system: systemBlocksForCalendar,
+    proposed: proposedForCalendar,
+    includeProposedBlocks: false
+  });
+  const occupiedRollWithGoals = approximateRollingSevenDayOccupancy({
+    windowStartMs: rollWinStart,
+    windowEndMs: rollWinEnd,
+    busy: busyForCalendar,
+    daySheetGoalBusy: daySheetGoalBusyForCalendar,
+    system: systemBlocksForCalendar,
+    proposed: proposedForCalendar,
+    includeProposedBlocks: true
+  });
+  const loggedMinutesByGoalIdInWindow = daySheetLoggedMinutesByGoalInWindow(
+    daySheetGoalBusyForCalendar,
+    rollWinStart,
+    rollWinEnd
+  );
+  const rollingSevenDayApprox: RollingSevenDayApprox = {
+    windowStartMs: rollWinStart,
+    windowEndMs: rollWinEnd,
+    grossWindowMinutes: occupiedRollWithGoals.grossWindowMinutes,
+    occupiedBeforeGoalsApproxMinutes: occupiedRollBeforeGoals.occupiedApproxMinutes,
+    occupiedWithGoalsApproxMinutes: occupiedRollWithGoals.occupiedApproxMinutes,
+    freeBeforeGoalsApproxMinutes: Math.max(
+      0,
+      occupiedRollWithGoals.grossWindowMinutes - occupiedRollBeforeGoals.occupiedApproxMinutes
+    ),
+    freeAfterGoalsApproxMinutes: Math.max(
+      0,
+      occupiedRollWithGoals.grossWindowMinutes - occupiedRollWithGoals.occupiedApproxMinutes
+    ),
+    proposedMinutesByGoalId: occupiedRollWithGoals.proposedMinutesByGoalId,
+    loggedMinutesByGoalIdInWindow,
+    effectiveTargetBaselineByGoalId: perfectWeekStatsBySlice[0]?.effectiveTargetByGoal ?? {}
+  };
 
   const allDaySheetReviews = await loadAllDailyReviewsForUser(userId);
   const goalIdsWithDaySheetHistory = Array.from(
@@ -304,195 +368,29 @@ export default async function PlanPage() {
 
       <WeeklyIntentCard initial={plan.weeklyIntent} save={updateWeeklyIntent} />
 
-      {allocation.metrics.overcommitted ? (
-        <Overcommitted
-          neededMin={allocation.metrics.overcommitted.neededMin}
-          availableMin={allocation.metrics.overcommitted.availableMin}
-          mode={allocation.metrics.overcommitted.mode}
-        />
-      ) : null}
-
-      <ResizableColumns
-        left={
-          <div className="flex flex-col gap-5">
-            <PlanClient
-              initialGoals={perfectWeekAuthoringGoals}
-              initialDeletedGoals={plan.deletedGoals}
-              freeMinutesThisWeek={allocation.metrics.utilisation.weekCapacityMinutes}
-              capacityBreakdown={{
-                grossWeekMinutes: allocation.metrics.utilisation.grossWeekMinutes,
-                busyWeekMinutes: allocation.metrics.utilisation.busyWeekMinutes,
-                consistencyReservedWeekMinutes:
-                  allocation.metrics.utilisation.consistencyReservedWeekMinutes,
-                busyTrueEventCount: allocation.metrics.utilisation.busyTrueEventCount
-              }}
-              weekCapacityFromNowMinutes={allocation.metrics.utilisation.weekCapacityFromNowMinutes}
-              remainingWeekMinutes={allocation.metrics.utilisation.availableMinutes}
-              remainingFromNowMinutes={allocation.metrics.utilisation.availableFromNowMinutes}
-              wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
-              planMinutesByGoal={planMinutesByGoal}
-              effectiveTargetByGoal={effectiveTargetByGoal}
-              paceByGoal={paceByGoal}
-              goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
-              goalGroups={plan.goalGroups ?? []}
-              goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
-            />
-
-            {allocation.metrics.notScheduled.length > 0 && (
-              <section className="card border-amber-300/40">
-                <h2 className="text-sm font-semibold">Not scheduled this week</h2>
-                <p className="text-xs text-ink-400">
-                  With strict mode on, these goals didn&apos;t fit. Either soften their floors or
-                  switch to proportional under{" "}
-                  <Link className="underline" href="/dashboard/planner#scheduling-outcomes">
-                    Scheduling options
-                  </Link>{" "}
-                  on Planner.
-                </p>
-                <ul className="mt-2 list-disc pl-5 text-sm">
-                  {allocation.metrics.notScheduled.map((n) => (
-                    <li key={n.goalId}>{n.title}</li>
-                  ))}
-                </ul>
-              </section>
-            )}
-          </div>
-        }
-        right={
-          <>
-            {/*
-              On large screens this column becomes a sticky right rail so the
-              calendar stays visible while the goals list scrolls. On small
-              screens it stacks above the goals as a collapsible details block.
-            */}
-            <div className="lg:sticky lg:top-6 lg:self-start">
-              <div className="hidden lg:block">
-                <CalendarPreview
-                  weekStartMs={weekStartMs}
-                  calendarWeekStartsMs={calendarWeekStartsMs}
-                  previewWeekLabels={previewWeekLabels}
-                  timezone={settings.timezone}
-                  busy={busyForCalendar}
-                  daySheetGoalBusy={daySheetGoalBusyForCalendar}
-                  system={systemBlocksForCalendar}
-                  proposed={proposedForCalendar}
-                  compact
-                  schedulingGoals={schedulingGoals}
-                  frameworkSystem={settings.frameworkSystem}
-                  wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
-                  goalGroups={plan.goalGroups ?? []}
-                  goalGroupGaps={allocation.metrics.goalGroupGaps}
-                  goalGroupMinutes={allocation.metrics.goalGroupMinutes}
-                  hasUserDragGoalOverrides={hasUserDragGoalOverrides}
-                />
-              </div>
-              <details className="card lg:hidden" open>
-                <summary className="cursor-pointer text-sm font-semibold">Preview this week</summary>
-                <div className="mt-3">
-                  <RangeToggleCalendar
-                    weekStartMs={weekStartMs}
-                    calendarWeekStartsMs={calendarWeekStartsMs}
-                    previewWeekLabels={previewWeekLabels}
-                    timezone={settings.timezone}
-                    busy={busyForCalendar}
-                    daySheetGoalBusy={daySheetGoalBusyForCalendar}
-                    system={systemBlocksForCalendar}
-                    proposed={proposedForCalendar}
-                    schedulingGoals={schedulingGoals}
-                    frameworkSystem={settings.frameworkSystem}
-                    wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
-                    goalGroups={plan.goalGroups ?? []}
-                    goalGroupGaps={allocation.metrics.goalGroupGaps}
-                    goalGroupMinutes={allocation.metrics.goalGroupMinutes}
-                    hasUserDragGoalOverrides={hasUserDragGoalOverrides}
-                  />
-                </div>
-              </details>
-            </div>
-          </>
-        }
+      <PerfectWeekPlannerBody
+        calendarWeekStartsMs={calendarWeekStartsMs}
+        previewWeekLabels={previewWeekLabels}
+        timezone={settings.timezone}
+        nowMs={nowMs}
+        perfectWeekStatsBySlice={perfectWeekStatsBySlice}
+        rollingSevenDayApprox={rollingSevenDayApprox}
+        isoWeekStartsForRolling={calendarWeekStartsMs}
+        busyForCalendar={busyForCalendar}
+        daySheetGoalBusyForCalendar={daySheetGoalBusyForCalendar}
+        systemBlocksForCalendar={systemBlocksForCalendar}
+        proposedForCalendar={proposedForCalendar}
+        schedulingGoals={schedulingGoals}
+        frameworkSystem={settings.frameworkSystem}
+        wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
+        goalGroups={plan.goalGroups ?? []}
+        hasUserDragGoalOverrides={hasUserDragGoalOverrides}
+        planClientGoals={perfectWeekAuthoringGoals}
+        planClientDeletedGoals={plan.deletedGoals}
+        goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
+        goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
       />
     </div>
   );
 }
 
-function CalendarPreview({
-  weekStartMs,
-  calendarWeekStartsMs,
-  previewWeekLabels,
-  timezone,
-  busy,
-  daySheetGoalBusy,
-  system,
-  proposed,
-  compact,
-  schedulingGoals,
-  frameworkSystem,
-  wheelAreas,
-  goalGroups,
-  goalGroupGaps,
-  goalGroupMinutes,
-  hasUserDragGoalOverrides
-}: {
-  weekStartMs: number;
-  calendarWeekStartsMs?: readonly number[];
-  previewWeekLabels?: readonly string[];
-  timezone: string;
-  busy: Parameters<typeof WeekCalendar>[0]["busy"];
-  daySheetGoalBusy: Parameters<typeof WeekCalendar>[0]["daySheetGoalBusy"];
-  system: Parameters<typeof WeekCalendar>[0]["system"];
-  proposed: Parameters<typeof WeekCalendar>[0]["proposed"];
-  compact: boolean;
-  schedulingGoals: Parameters<typeof RangeToggleCalendar>[0]["schedulingGoals"];
-  frameworkSystem: Parameters<typeof RangeToggleCalendar>[0]["frameworkSystem"];
-  wheelAreas: Parameters<typeof RangeToggleCalendar>[0]["wheelAreas"];
-  goalGroups?: Parameters<typeof RangeToggleCalendar>[0]["goalGroups"];
-  goalGroupGaps?: Parameters<typeof RangeToggleCalendar>[0]["goalGroupGaps"];
-  goalGroupMinutes?: Parameters<typeof RangeToggleCalendar>[0]["goalGroupMinutes"];
-  hasUserDragGoalOverrides: boolean;
-}) {
-  return (
-    <RangeToggleCalendar
-      weekStartMs={weekStartMs}
-      calendarWeekStartsMs={calendarWeekStartsMs}
-      previewWeekLabels={previewWeekLabels}
-      timezone={timezone}
-      busy={busy}
-      daySheetGoalBusy={daySheetGoalBusy}
-      system={system ?? []}
-      proposed={proposed}
-      compact={compact}
-      schedulingGoals={schedulingGoals}
-      frameworkSystem={frameworkSystem}
-      wheelAreas={wheelAreas}
-      goalGroups={goalGroups}
-      goalGroupGaps={goalGroupGaps}
-      goalGroupMinutes={goalGroupMinutes}
-      hasUserDragGoalOverrides={hasUserDragGoalOverrides}
-    />
-  );
-}
-
-function Overcommitted({
-  neededMin,
-  availableMin,
-  mode
-}: {
-  neededMin: number;
-  availableMin: number;
-  mode: "proportional" | "strict";
-}) {
-  const trimPercent = Math.max(0, Math.round(((neededMin - availableMin) / neededMin) * 100));
-  return (
-    <section className="card border-amber-300/40 bg-amber-50/30 dark:bg-amber-900/10">
-      <div className="text-sm font-semibold">You&apos;re overcommitted</div>
-      <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">
-        Your minimums need {Math.round(neededMin / 60)}h but only {Math.round(availableMin / 60)}h
-        are free.{" "}
-        {mode === "proportional"
-          ? `Every goal is being trimmed by ~${trimPercent}%.`
-          : "Floors are being paid in order; later goals may be skipped this week."}
-      </p>
-    </section>
-  );
-}

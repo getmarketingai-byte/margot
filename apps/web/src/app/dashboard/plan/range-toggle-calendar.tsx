@@ -16,12 +16,11 @@ import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRef
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { WEEK_MS } from "@/lib/effective-schedule-horizon";
 import { WeekCalendar } from "../week-calendar";
+import { usePlanCalendarView } from "./plan-calendar-view-context";
+import type { GoalGroupRailBundle } from "./perfect-week-stats-types";
 import { clearAllUserDragGoalOverrides } from "./actions";
 import { formatMinutes, goalGroupAggregateSummaryLine } from "./goal-helpers";
 
-type CalendarRangeMode = "calendar-week" | "next-7-days";
-
-const STORAGE_KEY = "dashboard.plan.calendar.rangeMode";
 const WEATHER_STORAGE_KEY = "dashboard.plan.calendar.showWeather";
 const INVERTED_TIMEMAP_STORAGE_KEY = "dashboard.plan.calendar.invertedTimemapVisibility";
 
@@ -127,6 +126,9 @@ export function RangeToggleCalendar({
   goalGroups = [],
   goalGroupGaps = [],
   goalGroupMinutes = {},
+  goalGroupBundles,
+  fallbackGoalGroupGaps = [],
+  fallbackGoalGroupMinutes = {},
   hasUserDragGoalOverrides = false
 }: {
   weekStartMs: number;
@@ -144,29 +146,34 @@ export function RangeToggleCalendar({
   goalGroups?: readonly GoalGroup[];
   goalGroupGaps?: ReadonlyArray<WeekMetrics["goalGroupGaps"][number]>;
   goalGroupMinutes?: Readonly<Record<string, number>>;
+  goalGroupBundles?: readonly GoalGroupRailBundle[];
+  fallbackGoalGroupGaps?: ReadonlyArray<WeekMetrics["goalGroupGaps"][number]>;
+  fallbackGoalGroupMinutes?: Readonly<Record<string, number>>;
   /** Server: plan has at least one `goal` override with `source: "drag"`. */
   hasUserDragGoalOverrides?: boolean;
 }) {
   const router = useRouter();
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(750);
+  const {
+    rangeMode,
+    setRangeMode,
+    previewWeekIdx,
+    setPreviewWeekIdx,
+    rollingStatsMode,
+    setRollingStatsMode
+  } = usePlanCalendarView();
   const [timePatch, setTimePatch] = useState<Record<string, { startMs: number; endMs: number }>>({});
-  const [mode, setMode] = useState<CalendarRangeMode>("calendar-week");
   const [showWeather, setShowWeather] = useState(true);
   const [invertedVisibility, setInvertedVisibility] = useState<Record<string, boolean>>({});
-  const [previewWeekIdx, setPreviewWeekIdx] = useState(0);
   const [clearAllDragPending, setClearAllDragPending] = useState(false);
 
   const weekStarts =
     calendarWeekStartsMs && calendarWeekStartsMs.length > 0 ? calendarWeekStartsMs : [weekStartMs];
 
-  useEffect(() => {
-    setPreviewWeekIdx(0);
-  }, [calendarWeekStartsMs?.join("|") ?? String(weekStartMs)]);
-
   const safeWeekIdx = Math.min(previewWeekIdx, Math.max(0, weekStarts.length - 1));
   const anchorWeekStartMs = weekStarts[safeWeekIdx]!;
 
-  const useRollingStrip = mode === "next-7-days";
+  const useRollingStrip = rangeMode === "next-7-days";
   const calendarAnchorMs = useRollingStrip ? weekStartMs : anchorWeekStartMs;
   const calendarAnchorEndMs = calendarAnchorMs + WEEK_MS;
 
@@ -272,10 +279,6 @@ export function RangeToggleCalendar({
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored === "calendar-week" || stored === "next-7-days") {
-        setMode(stored);
-      }
       const weatherStored = window.localStorage.getItem(WEATHER_STORAGE_KEY);
       if (weatherStored === "false") setShowWeather(false);
       setInvertedVisibility(loadInvertedVisibilityMap());
@@ -285,19 +288,30 @@ export function RangeToggleCalendar({
   }, []);
 
   const dayOffsets = useMemo(() => {
-    if (mode === "calendar-week") return [0, 1, 2, 3, 4, 5, 6];
+    if (rangeMode === "calendar-week") return [0, 1, 2, 3, 4, 5, 6];
     const startOffset = todayOffsetFromWeekStart(weekStartMs, timezone);
     return Array.from({ length: 7 }, (_, i) => startOffset + i);
-  }, [mode, timezone, weekStartMs]);
+  }, [rangeMode, timezone, weekStartMs]);
 
-  const setAndPersist = (next: CalendarRangeMode) => {
-    setMode(next);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // Ignore storage failures.
-    }
-  };
+  const effectiveRailBundles: GoalGroupRailBundle[] = useMemo(() => {
+    if (goalGroupBundles && goalGroupBundles.length > 0) return [...goalGroupBundles];
+    return [
+      {
+        gaps: [...(fallbackGoalGroupGaps.length > 0 ? fallbackGoalGroupGaps : goalGroupGaps)],
+        minutes: {
+          ...(Object.keys(fallbackGoalGroupMinutes).length > 0
+            ? fallbackGoalGroupMinutes
+            : goalGroupMinutes)
+        }
+      }
+    ];
+  }, [
+    fallbackGoalGroupGaps,
+    fallbackGoalGroupMinutes,
+    goalGroupBundles,
+    goalGroupGaps,
+    goalGroupMinutes
+  ]);
 
   const setWeatherAndPersist = (next: boolean) => {
     setShowWeather(next);
@@ -344,8 +358,8 @@ export function RangeToggleCalendar({
   );
 
   const rollingSpansTwoIsoWeeks = useMemo(
-    () => mode === "next-7-days" && dayOffsets.some((d) => d > 6),
-    [mode, dayOffsets]
+    () => rangeMode === "next-7-days" && dayOffsets.some((d) => d > 6),
+    [rangeMode, dayOffsets]
   );
 
   return (
@@ -356,10 +370,10 @@ export function RangeToggleCalendar({
       <div className="flex flex-wrap items-center gap-1 px-1 text-xs">
         <button
           type="button"
-          onClick={() => setAndPersist("calendar-week")}
-          aria-pressed={mode === "calendar-week"}
+          onClick={() => setRangeMode("calendar-week")}
+          aria-pressed={rangeMode === "calendar-week"}
           className={`rounded border px-2 py-1 ${
-            mode === "calendar-week"
+            rangeMode === "calendar-week"
               ? "border-accent bg-accent text-accent-fg"
               : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
           }`}
@@ -368,10 +382,10 @@ export function RangeToggleCalendar({
         </button>
         <button
           type="button"
-          onClick={() => setAndPersist("next-7-days")}
-          aria-pressed={mode === "next-7-days"}
+          onClick={() => setRangeMode("next-7-days")}
+          aria-pressed={rangeMode === "next-7-days"}
           className={`rounded border px-2 py-1 ${
-            mode === "next-7-days"
+            rangeMode === "next-7-days"
               ? "border-accent bg-accent text-accent-fg"
               : "border-ink-200 text-ink-500 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
           }`}
@@ -379,7 +393,46 @@ export function RangeToggleCalendar({
           Next 7 days
         </button>
       </div>
-      {weekStarts.length > 1 && mode === "calendar-week" ? (
+      {rangeMode === "next-7-days" ? (
+        <div className="flex flex-wrap items-center gap-1 px-1 text-[11px]">
+          <span className="shrink-0 text-ink-500 dark:text-ink-400">Stats for this preview:</span>
+          <button
+            type="button"
+            onClick={() => setRollingStatsMode("split")}
+            aria-pressed={rollingStatsMode === "split"}
+            disabled={!rollingSpansTwoIsoWeeks}
+            title={
+              rollingSpansTwoIsoWeeks
+                ? "Shows two ISO week tallies side by side"
+                : "Only one ISO week is visible in this 7-day strip"
+            }
+            className={`rounded border px-2 py-0.5 ${
+              rollingStatsMode === "split"
+                ? "border-accent bg-accent text-accent-fg"
+                : "border-ink-200 text-ink-600 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+            } ${
+              !rollingSpansTwoIsoWeeks
+                ? "cursor-not-allowed opacity-40 hover:bg-transparent dark:hover:bg-transparent"
+                : ""
+            }`}
+          >
+            Split ISO weeks
+          </button>
+          <button
+            type="button"
+            onClick={() => setRollingStatsMode("combined")}
+            aria-pressed={rollingStatsMode === "combined"}
+            className={`rounded border px-2 py-0.5 ${
+              rollingStatsMode === "combined"
+                ? "border-accent bg-accent text-accent-fg"
+                : "border-ink-200 text-ink-600 hover:bg-ink-50 dark:border-ink-600 dark:text-ink-200 dark:hover:bg-ink-700/30"
+            }`}
+          >
+            Combined 7-day window
+          </button>
+        </div>
+      ) : null}
+      {weekStarts.length > 1 && rangeMode === "calendar-week" ? (
         <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
           <button
             type="button"
@@ -495,82 +548,98 @@ export function RangeToggleCalendar({
           );
         })}
       </div>
-      {goalGroupGaps.length > 0 ? (
-        <div
-          className="mx-1 mt-2 rounded-md border border-amber-300/50 bg-amber-500/10 px-2 py-2 text-[11px] text-amber-950 dark:border-amber-700/40 dark:bg-amber-500/15 dark:text-amber-100"
-          role="status"
-        >
-          <div className="font-semibold">Goal-group pressure</div>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            {goalGroupGaps.map((gap, i) => {
-              const title =
-                goalGroups.find((g) => g.id === gap.groupId)?.title ?? gap.groupId.slice(0, 8);
-              return (
-                <li key={`${gap.groupId}-${gap.reason}-${String(gap.dayIndex ?? "w")}-${i}`}>
-                  {formatGoalGroupGapLine(gap, title)}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
-      {goalGroups.length > 0 && schedulingGoals?.length ? (
-        <details className="mt-2 px-1 text-xs">
-          <summary className="cursor-pointer font-medium text-ink-600 dark:text-ink-300">
-            Goal groups
-          </summary>
-          <ul className="mt-2 flex flex-col gap-2">
-            {goalGroups.map((grp) => {
-              const members = (schedulingGoals ?? []).filter((g) => g.groupIds?.includes(grp.id));
-              const line = goalGroupAggregateSummaryLine(grp);
-              const totalMin = goalGroupMinutes[grp.id];
-              return (
-                <li
-                  key={grp.id}
-                  className="rounded-md border border-ink-200/80 p-2 dark:border-ink-600"
-                >
-                  <div className="font-medium text-ink-800 dark:text-ink-100">{grp.title}</div>
-                  {line ? (
-                    <div className="mt-0.5 text-[11px] leading-snug text-ink-600 dark:text-ink-300">
-                      {line}
-                    </div>
-                  ) : null}
-                  {totalMin !== undefined && totalMin > 0 ? (
-                    <div className="mt-0.5 text-[11px] tabular-nums text-ink-500 dark:text-ink-400">
-                      Achieved this week (sum of members): {formatMinutes(Math.round(totalMin))}
-                    </div>
-                  ) : null}
-                  {members.length > 0 ? (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {members.map((g) => {
-                        const short =
-                          g.title.length > 22 ? `${g.title.slice(0, 20).trimEnd()}…` : g.title;
-                        return (
-                          <span
-                            key={g.id}
-                            className="inline-flex max-w-[11rem] items-center gap-1 truncate rounded border border-ink-200 px-1.5 py-0.5 text-[10px] dark:border-ink-600"
-                          >
-                            <span
-                              aria-hidden
-                              className="h-2 w-2 shrink-0 rounded-sm border border-ink-300/60 dark:border-ink-500/60"
-                              style={{ backgroundColor: goalColorFromKey(g.id) }}
-                            />
-                            <span className="truncate">{short}</span>
-                          </span>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="mt-1 text-[11px] text-ink-400 dark:text-ink-500">
-                      No member goals in this planner list.
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </details>
-      ) : null}
+      {effectiveRailBundles.map((bundle, bi) =>
+        bundle.gaps.length > 0 ? (
+          <div
+            key={`gg-pressure-${bi}`}
+            className="mx-1 mt-2 rounded-md border border-amber-300/50 bg-amber-500/10 px-2 py-2 text-[11px] text-amber-950 dark:border-amber-700/40 dark:bg-amber-500/15 dark:text-amber-100"
+            role="status"
+          >
+            <div className="font-semibold">
+              Goal-group pressure
+              {bundle.weekLabel && effectiveRailBundles.length > 1 ? (
+                <span className="font-normal text-amber-900/90 dark:text-amber-50/90">
+                  {" "}
+                  · {bundle.weekLabel}
+                </span>
+              ) : null}
+            </div>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {bundle.gaps.map((gap, i) => {
+                const title =
+                  goalGroups.find((g) => g.id === gap.groupId)?.title ?? gap.groupId.slice(0, 8);
+                return (
+                  <li key={`${bi}-${gap.groupId}-${gap.reason}-${String(gap.dayIndex ?? "w")}-${i}`}>
+                    {formatGoalGroupGapLine(gap, title)}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null
+      )}
+      {goalGroups.length > 0 && schedulingGoals?.length
+        ? effectiveRailBundles.map((bundle, bi) => (
+            <details key={`gg-detail-${bi}`} className="mt-2 px-1 text-xs">
+              <summary className="cursor-pointer font-medium text-ink-600 dark:text-ink-300">
+                Goal groups
+                {bundle.weekLabel && effectiveRailBundles.length > 1 ? (
+                  <span className="font-normal text-ink-500"> · {bundle.weekLabel}</span>
+                ) : null}
+              </summary>
+              <ul className="mt-2 flex flex-col gap-2">
+                {goalGroups.map((grp) => {
+                  const members = (schedulingGoals ?? []).filter((g) => g.groupIds?.includes(grp.id));
+                  const line = goalGroupAggregateSummaryLine(grp);
+                  const totalMin = bundle.minutes[grp.id];
+                  return (
+                    <li
+                      key={grp.id}
+                      className="rounded-md border border-ink-200/80 p-2 dark:border-ink-600"
+                    >
+                      <div className="font-medium text-ink-800 dark:text-ink-100">{grp.title}</div>
+                      {line ? (
+                        <div className="mt-0.5 text-[11px] leading-snug text-ink-600 dark:text-ink-300">
+                          {line}
+                        </div>
+                      ) : null}
+                      {totalMin !== undefined && totalMin > 0 ? (
+                        <div className="mt-0.5 text-[11px] tabular-nums text-ink-500 dark:text-ink-400">
+                          Achieved this week (sum of members): {formatMinutes(Math.round(totalMin))}
+                        </div>
+                      ) : null}
+                      {members.length > 0 ? (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {members.map((g) => {
+                            const short =
+                              g.title.length > 22 ? `${g.title.slice(0, 20).trimEnd()}…` : g.title;
+                            return (
+                              <span
+                                key={g.id}
+                                className="inline-flex max-w-[11rem] items-center gap-1 truncate rounded border border-ink-200 px-1.5 py-0.5 text-[10px] dark:border-ink-600"
+                              >
+                                <span
+                                  aria-hidden
+                                  className="h-2 w-2 shrink-0 rounded-sm border border-ink-300/60 dark:border-ink-500/60"
+                                  style={{ backgroundColor: goalColorFromKey(g.id) }}
+                                />
+                                <span className="truncate">{short}</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-[11px] text-ink-400 dark:text-ink-500">
+                          No member goals in this planner list.
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          ))
+        : null}
       {taggableFrameworkRows.length > 0 && schedulingGoals?.length ? (
         <div className="flex flex-wrap items-center gap-1 px-1 text-xs">
           {taggableFrameworkRows.map((row) => {
