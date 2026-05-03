@@ -24,6 +24,16 @@ import { geocodeAddressToCoords } from "../geocode-address";
 
 const ORS_DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car";
 
+function normalizeOrsApiKey(raw: string | undefined): string | null {
+  if (raw == null) return null;
+  let t = raw.trim();
+  if (t === "") return null;
+  if (t.toLowerCase().startsWith("bearer ")) {
+    t = t.slice(7).trim();
+  }
+  return t === "" ? null : t;
+}
+
 export interface RoutingProviderClient {
   /**
    * Returns drive duration from origin to dest in minutes, or null when the
@@ -80,8 +90,8 @@ async function driveSeconds(origin: Coords, dest: Coords, apiKey: string): Promi
  * falling back to `fallbackDurationMinutes`).
  */
 export function createOpenRouteServiceProvider(): RoutingProviderClient | null {
-  const apiKey = process.env.OPENROUTESERVICE_API_KEY;
-  if (!apiKey || apiKey.trim() === "") return null;
+  const apiKey = normalizeOrsApiKey(process.env.OPENROUTESERVICE_API_KEY);
+  if (!apiKey) return null;
 
   return {
     async duration(origin, dest, ctx) {

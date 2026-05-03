@@ -1,10 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import {
-  routingProviderSchema,
-  settingsNeedHomeAddress,
-  type GeocodeCacheEntry
-} from "@calendar-automations/schema";
+import { routingProviderSchema, type GeocodeCacheEntry } from "@calendar-automations/schema";
 import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { loadBillingState } from "@/lib/billing-state-server";
@@ -19,7 +15,7 @@ import {
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import { PRODUCT } from "@/lib/marketing";
 import { FeedbackForm } from "./feedback-form";
-import { HomeAddressField } from "./home-address-field";
+import { TravelSettingsForm } from "./travel-settings-form";
 
 export const dynamic = "force-dynamic";
 
@@ -316,61 +312,19 @@ export default async function SettingsPage({
           is used for Open-Meteo forecasts when weather-based outside blocks are on (coordinates are
           saved with your weather settings when you save here).
         </p>
-        <form action={updateTravel} className="mt-3 grid gap-3 sm:grid-cols-2">
-          <div className="flex flex-col gap-1 text-xs sm:col-span-2">
-            <label htmlFor="home-address" className="font-normal">
-              Home address
-              {settingsNeedHomeAddress(settings) ? (
-                <span className="ml-1 text-red-600 dark:text-red-400">(required)</span>
-              ) : null}
-            </label>
-            <HomeAddressField
-              id="home-address"
-              name="homeAddress"
-              defaultValue={settings.travel.homeAddress ?? ""}
-              required={settingsNeedHomeAddress(settings)}
-              placeholder="e.g. 123 Example St, Melbourne VIC 3000  —  or  -37.910156,145.107420"
-            />
-            <span className="text-[11px] text-ink-400">
-              Origin/destination for drive legs, and the location for weather suitability when that
-              feature is enabled. Use current location to paste GPS coordinates (you can edit the
-              text into a street address later). Leave blank only when routing is disabled and
-              weather-based outside blocks are off.
-            </span>
-          </div>
-          <label className="flex flex-col gap-1 text-xs">
-            Routing provider
-            <select
-              name="routingProvider"
-              defaultValue={settings.travel.routingProvider}
-              className="field"
-            >
-              <option value="disabled">Disabled (fallback estimate only)</option>
-              <option value="openrouteservice">OpenRouteService (free tier)</option>
-            </select>
-            <span className="text-[11px] text-ink-400">
-              Server needs <code>OPENROUTESERVICE_API_KEY</code> for live lookups; otherwise drives
-              quietly stay at the fallback duration.
-            </span>
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            Max provider calls per render
-            <input
-              name="routingMaxCallsPerRender"
-              type="number"
-              min={0}
-              max={200}
-              defaultValue={settings.travel.routingMaxCallsPerRender}
-              className="field"
-            />
-            <span className="text-[11px] text-ink-400">
-              Caps cost on the free tier. Stale legs are refreshed soonest-event-first.
-            </span>
-          </label>
-          <div className="sm:col-span-2">
-            <button type="submit" className="btn-primary w-full">Save travel settings</button>
-          </div>
-        </form>
+        <TravelSettingsForm
+          key={[
+            settings.travel.routingProvider,
+            settings.travel.homeAddress ?? "",
+            settings.weather.enabled,
+            settings.travel.routingMaxCallsPerRender
+          ].join("|")}
+          updateTravel={updateTravel}
+          defaultHomeAddress={settings.travel.homeAddress ?? ""}
+          defaultRoutingProvider={settings.travel.routingProvider}
+          defaultRoutingMaxCalls={settings.travel.routingMaxCallsPerRender}
+          weatherEnabled={settings.weather.enabled}
+        />
       </section>
 
       <section className="card">
