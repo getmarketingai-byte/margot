@@ -416,6 +416,48 @@ describe("allocateWeek", () => {
     expect(b!.startMs).toBe(m0 + 12 * HOUR_MS);
   });
 
+  it("hard-clips placement to combined ideal after+before when no ideal clock list", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const busy: BusyEvent[] = [];
+    for (let d = 1; d < 7; d++) {
+      const ds = weekStartMs + d * DAY_MS;
+      busy.push({ id: `block-${d}`, startMs: ds, endMs: ds + DAY_MS, busy: true });
+    }
+    const m0 = weekStartMs;
+    busy.push({ id: "m-pre", startMs: m0, endMs: m0 + 6 * HOUR_MS, busy: true });
+    busy.push({ id: "m-post", startMs: m0 + 22 * HOUR_MS, endMs: m0 + DAY_MS, busy: true });
+
+    const result = allocateWeek({
+      plan: {
+        id: "ideal-hard-window",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "couple",
+            title: "Couple time",
+            targetMinutes: 60,
+            maxMinutesPerDay: 120,
+            dayOfWeek: "monday",
+            placementIdealClockAfter: { hour: 18, minute: 45 },
+            placementIdealClockBefore: { hour: 21, minute: 30 },
+            priority: 5
+          })
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const b = result.blocks.find((x) => x.goalId === "couple");
+    expect(b).toBeDefined();
+    const winStart = m0 + 18 * HOUR_MS + 45 * 60 * 1000;
+    const winEnd = m0 + 21 * HOUR_MS + 30 * 60 * 1000;
+    expect(b!.startMs).toBeGreaterThanOrEqual(winStart);
+    expect(b!.endMs).toBeLessThanOrEqual(winEnd);
+  });
+
   it("avoids duplicate same-goal auto blocks on the same day", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const mondayStart = weekStartMs;

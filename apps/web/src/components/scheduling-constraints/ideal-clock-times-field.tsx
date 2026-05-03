@@ -156,8 +156,9 @@ export function IdealPlacementClockAfterField({
       <span className="text-xs text-ink-500 dark:text-ink-300">At or after (local)</span>
       {boundaryInputs(b, minuteStep, (next) => onChange(next))}
       <p className="text-[11px] text-ink-400">
-        Narrows which listed ideal start times count toward the soft nudge. For hard day bounds,
-        add Earliest hour / Latest hour (separate constraints or Planner cohort fields).
+        If you also set &quot;Ideal times — before&quot; (later on the clock), the planner only places
+        this goal inside that combined local window. Without &quot;before&quot;, this row only filters
+        which listed ideal start times participate in soft placement nudges.
       </p>
     </div>
   );
@@ -182,8 +183,9 @@ export function IdealPlacementClockBeforeField({
       <span className="text-xs text-ink-500 dark:text-ink-300">Strictly before (local)</span>
       {boundaryInputs(b, minuteStep, (next) => onChange(next))}
       <p className="text-[11px] text-ink-400">
-        Narrows which listed ideal start times count toward the soft nudge. Pair with &quot;After&quot;
-        to keep nudges inside a local window.
+        If you also set &quot;Ideal times — after&quot; (earlier on the clock), the planner only places
+        this goal inside that combined local window. Without &quot;after&quot;, this row only filters
+        which listed ideal start times participate in soft placement nudges.
       </p>
     </div>
   );

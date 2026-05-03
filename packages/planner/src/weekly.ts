@@ -1322,7 +1322,35 @@ function dayIndexForMsInWeek(ms: number, weekStartMs: number, tz: string): numbe
   return -1;
 }
 
-/** True when [innerStart, innerEnd) lies contiguously inside the union of free gaps. */
+/**
+ * When both after and before local boundaries are set (and before is strictly later than after),
+ * placement is restricted to free time inside that wall-clock window on this calendar day.
+ * (Single-sided after/before without a pair still only filters listed ideal times — soft signal.)
+ */
+function dayHardPlacementIdealWindow(
+  goal: WeeklyGoal,
+  dayStartMs: number,
+  tz: string
+): Interval | null {
+  const after = effectivePlacementIdealAfterBoundary(goal);
+  const before = effectivePlacementIdealBeforeBoundary(goal);
+  if (!after || !before) return null;
+  const startMin = after.hour * 60 + after.minute;
+  const endMin = before.hour * 60 + before.minute;
+  if (endMin <= startMin) return null;
+  const dk = dateKeyInTz(dayStartMs, tz);
+  const segs = dk.split("-");
+  const ys = Number(segs[0]);
+  const mo = Number(segs[1]);
+  const da = Number(segs[2]);
+  if (!Number.isFinite(ys) || !Number.isFinite(mo) || !Number.isFinite(da)) return null;
+  const dayMid = localMidnightMs(ys, mo, da, tz);
+  return {
+    startMs: dayMid + startMin * MS_PER_MIN,
+    endMs: dayMid + endMin * MS_PER_MIN
+  };
+}
+
 /** Intersects free gaps with optional invert-calendar windows, then nice-weather outside windows. */
 function placementWindowsForDay(
   dayGaps: readonly Interval[],
@@ -1330,7 +1358,8 @@ function placementWindowsForDay(
   dayEndMs: number,
   availabilityWindows: readonly Interval[] | undefined,
   niceWeatherWindows: readonly Interval[] | undefined,
-  goal: WeeklyGoal
+  goal: WeeklyGoal,
+  tz: string
 ): Interval[] {
   let gaps: Interval[] = dayGaps as Interval[];
   if (availabilityWindows && availabilityWindows.length > 0) {
@@ -1342,6 +1371,10 @@ function placementWindowsForDay(
     niceWeatherWindows.length > 0
   ) {
     gaps = intersectWithAvailability(gaps, niceWeatherWindows, dayStartMs, dayEndMs);
+  }
+  const idealWin = dayHardPlacementIdealWindow(goal, dayStartMs, tz);
+  if (idealWin) {
+    gaps = intersectWithAvailability(gaps, [idealWin], dayStartMs, dayEndMs);
   }
   return gaps;
 }
@@ -1428,7 +1461,8 @@ function tryPinGoalBlock(
       day.endMs,
       availabilityWindows,
       niceWeatherWindows,
-      goal
+      goal,
+      tz
     );
     if (
       !intervalFullyInsideGaps(candidateGaps, startMs, endMs) ||
@@ -1591,7 +1625,8 @@ function allocateGoal(
       day.endMs,
       availabilityWindows,
       niceWeatherWindows,
-      goal
+      goal,
+      tz
     );
     const futureCandidateGaps =
       nowMs === undefined
@@ -1760,7 +1795,8 @@ function allocateGoal(
         day.endMs,
         availabilityWindows,
         niceWeatherWindows,
-        goal
+        goal,
+        tz
       );
       const futureCandidateGaps =
         nowMs === undefined

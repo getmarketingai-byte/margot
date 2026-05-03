@@ -198,11 +198,14 @@ export const weeklyGoalSchema = z.object({
    */
   placementIdealClockFilter: placementIdealClockFilterSchema.optional(),
   /**
-   * Only listed ideal times at or after this local wall clock participate in placement nudges.
+   * Lower bound (inclusive) for which listed `placementIdealClockTimes` participate in soft nudges.
+   * When **both** this and `placementIdealClockBefore` are set (before strictly later on the clock),
+   * the weekly allocator **hard-clips** free gaps to that local window for this goal.
    */
   placementIdealClockAfter: placementIdealClockBoundarySchema.optional(),
   /**
-   * Only listed ideal times strictly before this local wall clock participate.
+   * Upper bound (exclusive) for which listed `placementIdealClockTimes` participate in soft nudges.
+   * When paired with `placementIdealClockAfter` as above, placement is hard-clipped to that window.
    */
   placementIdealClockBefore: placementIdealClockBoundarySchema.optional(),
   /**
