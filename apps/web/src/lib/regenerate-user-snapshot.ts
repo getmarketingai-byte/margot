@@ -21,6 +21,7 @@ import { mergeOrphanGoalOverrideBlocks } from "./merge-orphan-goal-override-bloc
 import { saveSnapshot } from "./snapshots";
 import { loadBillingState } from "./billing-state-server";
 import { clipIntervalBlocksToHorizon } from "./effective-schedule-horizon";
+import { dedupeGeneratedEventsByUid } from "./dedupe-generated-events-by-uid";
 import {
   gymGoalTravelBlocksFromProposed,
   sleepIntervalsForAllocation,
@@ -221,8 +222,10 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     stableUid: buildStableUid
   });
 
-  const mergedEvents = [...events, ...systemEvents, ...weatherClipped, ...invertedTimemap].sort(
-    (a, b) => a.startMs - b.startMs
+  const mergedEvents = dedupeGeneratedEventsByUid(
+    [...events, ...systemEvents, ...weatherClipped, ...invertedTimemap].sort(
+      (a, b) => a.startMs - b.startMs || String(a.uid).localeCompare(String(b.uid))
+    )
   );
 
   await saveSnapshot(userId, {

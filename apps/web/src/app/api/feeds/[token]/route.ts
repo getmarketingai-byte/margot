@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { renderIcs } from "@calendar-automations/planner";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { dedupeGeneratedEventsByUid } from "@/lib/dedupe-generated-events-by-uid";
 import { findFeedByToken, filterEventsForFeed, normalizeEventTitlesForIcs } from "@/lib/feeds";
 import { filterEventsForCustomRules } from "@/lib/feeds-custom-filter";
 import {
@@ -60,12 +61,13 @@ export async function GET(
     }
   }
 
-  const events =
+  const events = dedupeGeneratedEventsByUid(
     snapshot && resolved.mode === "all"
       ? filterEventsForFeed(snapshot.events, "all")
       : snapshot && resolved.mode === "custom"
         ? filterEventsForCustomRules(snapshot.events, resolved.rules)
-        : [];
+        : []
+  );
 
 
   // When access is denied, return a single 4-hour explanatory event rather than

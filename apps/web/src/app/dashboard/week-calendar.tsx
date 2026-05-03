@@ -71,6 +71,7 @@ interface WeekCalendarProps {
 }
 
 const PX_PER_HOUR = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd && bStart < aEnd;
@@ -167,16 +168,28 @@ function position(
   startMs: number,
   endMs: number,
   weekStartMs: number,
+  gridClipStartMs: number,
+  gridClipEndMs: number,
   timezone: string,
   startHour: number,
   endHour: number,
   title: string
 ): PositionedBlock[] {
-  const startParts = partsInTimezone(startMs, timezone);
+  // Drive-pres and sleep often begin before the first visible column (e.g.
+  // Sunday night ahead of Monday) while still overlapping the grid. Without
+  // clamping, startDayIndex is negative and the loop below never runs, so
+  // those blocks disappear entirely.
+  const spanStartMs = Math.max(startMs, gridClipStartMs);
+  const spanEndMs = Math.min(endMs, gridClipEndMs);
+  if (spanEndMs <= spanStartMs) return [];
+  const clippedBeforeGrid = startMs < gridClipStartMs;
+  const clippedAfterGrid = endMs > gridClipEndMs;
+
+  const startParts = partsInTimezone(spanStartMs, timezone);
   const weekParts = partsInTimezone(weekStartMs, timezone);
   const startDayIndex = daysBetween(weekParts, startParts);
   const startMinuteOfDay = startParts.hour * 60 + startParts.minute;
-  const durationMin = Math.max(15, Math.floor((endMs - startMs) / 60_000));
+  const durationMin = Math.max(15, Math.floor((spanEndMs - spanStartMs) / 60_000));
   const endMinuteAbs = startMinuteOfDay + durationMin;
 
   const windowStart = startHour * 60;
@@ -207,6 +220,16 @@ function position(
 
     cursor = nextBoundary;
     dayIndex++;
+  }
+  if (out.length > 0) {
+    if (clippedBeforeGrid) {
+      const first = out[0]!;
+      out[0] = { ...first, clippedTop: first.clippedTop || clippedBeforeGrid };
+    }
+    if (clippedAfterGrid) {
+      const last = out[out.length - 1]!;
+      out[out.length - 1] = { ...last, clippedBottom: last.clippedBottom || clippedAfterGrid };
+    }
   }
   return out;
 }
@@ -470,6 +493,13 @@ export function WeekCalendar({
       return map;
     }
 
+    const dayOffsetsForClip =
+      days.length > 0 ? days : ([0, 1, 2, 3, 4, 5, 6] as const);
+    const minDay = Math.min(...dayOffsetsForClip);
+    const maxDay = Math.max(...dayOffsetsForClip);
+    const gridClipStartMs = weekStartMs + minDay * DAY_MS;
+    const gridClipEndMs = weekStartMs + (maxDay + 1) * DAY_MS;
+
     const busyPositions: PositionedBlock[] = [];
     for (const b of busy) {
       busyPositions.push(
@@ -477,6 +507,8 @@ export function WeekCalendar({
           b.startMs,
           b.endMs,
           weekStartMs,
+          gridClipStartMs,
+          gridClipEndMs,
           timezone,
           startHour,
           endHour,
@@ -492,6 +524,8 @@ export function WeekCalendar({
         b.startMs,
         b.endMs,
         weekStartMs,
+        gridClipStartMs,
+        gridClipEndMs,
         timezone,
         startHour,
         endHour,
@@ -521,7 +555,17 @@ export function WeekCalendar({
       }
     > = [];
     for (const b of system) {
-      const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+      const slices = position(
+        b.startMs,
+        b.endMs,
+        weekStartMs,
+        gridClipStartMs,
+        gridClipEndMs,
+        timezone,
+        startHour,
+        endHour,
+        b.title
+      );
       const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
       const invertedBarOffsetIndex =
         invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
@@ -540,7 +584,17 @@ export function WeekCalendar({
 
     const proposedPositionsRaw: ProposedPositioned[] = [];
     for (const b of proposed) {
-      const slices = position(b.startMs, b.endMs, weekStartMs, timezone, startHour, endHour, b.title);
+      const slices = position(
+        b.startMs,
+        b.endMs,
+        weekStartMs,
+        gridClipStartMs,
+        gridClipEndMs,
+        timezone,
+        startHour,
+        endHour,
+        b.title
+      );
       const gid = b.goalId;
       const canDragSlices =
         Boolean(b.dragKey) &&
@@ -604,6 +658,7 @@ export function WeekCalendar({
   }, [
     busy,
     daySheetGoalBusy,
+    days,
     proposed,
     system,
     weekStartMs,

@@ -203,10 +203,16 @@ export async function computeTravelBlocks(
   const home = travel.homeAddress?.trim() || "";
 
   // 1. Filter physical events and sort by start time.
+  // Only **busy** intervals count: transparent "free" rows with a venue still
+  // carry a location and used to participate in direct-drive collapse. A
+  // short free block ending just before a real appointment could merge into a
+  // tiny `drive-direct` and skip the appointment's outbound `drive-pre` while
+  // leaving `drive-post` — the mid-week symptom users saw in iCal.
   const physical: BusyEvent[] = [];
   for (const ev of busy) {
     if (!ev.location) continue;
     if (isVirtual(ev.location, travel.virtualLocationSubstrings)) continue;
+    if (ev.busy === false) continue;
     physical.push(ev);
   }
   physical.sort((a, b) => a.startMs - b.startMs);
@@ -281,7 +287,8 @@ export async function computeTravelBlocks(
     // Reserve both travel time AND the configured arrive-early buffer so
     // planner blocks cannot be squeezed between "drive done" and event start.
     if (!directIntoNext) {
-      const driveMin = legMin(home, ev.location!, fixed);
+      // Zero-minute legs are dropped by ICS rendering (`endMs > startMs`); keep a floor.
+      const driveMin = Math.max(1, legMin(home, ev.location!, fixed));
       const preEnd = ev.startMs;
       out.push({
         sourceId: `${ev.sourceId}-drive-pre`,
@@ -300,7 +307,7 @@ export async function computeTravelBlocks(
 
     if (!next) {
       // Last physical event of the week → always emit a post-leg home.
-      const postMin = legMin(ev.location!, home, fixed);
+      const postMin = Math.max(1, legMin(ev.location!, home, fixed));
       out.push({
         sourceId: `${ev.sourceId}-drive-post`,
         title: `${tag} ← ${ev.title}`,
@@ -349,7 +356,7 @@ export async function computeTravelBlocks(
     }
 
     // No collapse → normal drive-post.
-    const postMin = legMin(ev.location!, home, fixed);
+    const postMin = Math.max(1, legMin(ev.location!, home, fixed));
     out.push({
       sourceId: `${ev.sourceId}-drive-post`,
       title: `${tag} ← ${ev.title}`,
