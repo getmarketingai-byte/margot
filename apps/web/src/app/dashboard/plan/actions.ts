@@ -167,8 +167,19 @@ export async function addGoal(input: Omit<WeeklyGoal, "id">): Promise<{ id: stri
   if (input.specialGoalType === "inverted-timemap") {
     throw new Error("Calendar time-map rows are managed from Calendars, not added here.");
   }
+  if (input.specialGoalType === "gym") {
+    if (plan.goals.some((g) => g.specialGoalType === "gym")) {
+      throw new Error("Only one Physical activity (gym) row is allowed. Remove the existing one first.");
+    }
+  }
   const id = crypto.randomUUID();
   const parsed = weeklyGoalSchema.parse({ ...input, id });
+  if (parsed.specialGoalType === "gym") {
+    await saveSettings(userId, {
+      ...settings,
+      gym: { ...settings.gym, plannerBlockEnabled: false }
+    });
+  }
   plan.goals.push(parsed);
   await savePlan(userId, plan);
   afterPlanMutation(userId);
@@ -188,7 +199,20 @@ export async function updateGoal(id: string, input: Omit<WeeklyGoal, "id">): Pro
   const idx = plan.goals.findIndex((g) => g.id === id);
   if (idx < 0) return;
   if (isInvertedTimemapGoal(plan.goals[idx]!)) return;
-  plan.goals[idx] = weeklyGoalSchema.parse({ ...input, id });
+  const parsed = weeklyGoalSchema.parse({ ...input, id });
+  if (
+    parsed.specialGoalType === "gym" &&
+    plan.goals.some((g, i) => i !== idx && g.specialGoalType === "gym")
+  ) {
+    throw new Error("Only one Physical activity (gym) row is allowed. Remove the other row first.");
+  }
+  if (parsed.specialGoalType === "gym") {
+    await saveSettings(userId, {
+      ...settings,
+      gym: { ...settings.gym, plannerBlockEnabled: false }
+    });
+  }
+  plan.goals[idx] = parsed;
   await savePlan(userId, plan);
   afterPlanMutation(userId);
 }
@@ -212,7 +236,20 @@ export async function patchGoal(
   if (idx < 0) return;
   if (isInvertedTimemapGoal(plan.goals[idx]!)) return;
   const merged = { ...plan.goals[idx]!, ...patch, id };
-  plan.goals[idx] = weeklyGoalSchema.parse(merged);
+  if (
+    merged.specialGoalType === "gym" &&
+    plan.goals.some((g, i) => i !== idx && g.specialGoalType === "gym")
+  ) {
+    throw new Error("Only one Physical activity (gym) row is allowed. Remove the other row first.");
+  }
+  const parsed = weeklyGoalSchema.parse(merged);
+  plan.goals[idx] = parsed;
+  if (parsed.specialGoalType === "gym") {
+    await saveSettings(userId, {
+      ...settings,
+      gym: { ...settings.gym, plannerBlockEnabled: false }
+    });
+  }
   await savePlan(userId, plan);
   afterPlanMutation(userId);
 }

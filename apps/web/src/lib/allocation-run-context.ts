@@ -280,9 +280,7 @@ export async function loadPlanWeekAllocationInputs(options: {
   const daySheetGoalBusyThisWeek = slice0.daySheetGoalBusy;
   const daySheetGoalBusyNextWeek = slice1?.daySheetGoalBusy ?? [];
 
-  const userSchedulingGoalsNoRoutines = filterSchedulingGoals(plan.goals).filter(
-    (g) => g.specialGoalType !== "gym"
-  );
+  const userSchedulingGoalsNoRoutines = filterSchedulingGoals(plan.goals);
 
   const weekStartIso = isoCalendarDay(weekStartMs, tz);
   const weeklyReview = await loadWeeklyReview(userId, weekStartIso, tz);

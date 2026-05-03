@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_USER_SETTINGS } from "@calendar-automations/schema";
 import {
   physicalActivityWeeklyGoalFromGymSettings,
-  ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID
+  ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID,
+  schedulingGoalsWithWeeklyRoutines
 } from "../src/weekly-routines";
 
 describe("physicalActivityWeeklyGoalFromGymSettings", () => {
@@ -29,7 +30,7 @@ describe("physicalActivityWeeklyGoalFromGymSettings", () => {
     expect(g.maxMinutesPerWeek).toBe(120);
     expect(g.minMinutesPerDay).toBe(40);
     expect(g.maxMinutesPerDay).toBe(40);
-    expect(g.frequencyPerWeek).toBe(3);
+    expect(g.frequencyPerWeek).toBeUndefined();
   });
 
   it("derives weekly band from session min/max", () => {
@@ -45,7 +46,7 @@ describe("physicalActivityWeeklyGoalFromGymSettings", () => {
     expect(g.maxMinutesPerWeek).toBe(100);
     expect(g.minMinutesPerDay).toBe(35);
     expect(g.maxMinutesPerDay).toBe(50);
-    expect(g.frequencyPerWeek).toBe(2);
+    expect(g.frequencyPerWeek).toBeUndefined();
   });
 
   it("derives weekly band from cadence min/max", () => {
@@ -61,7 +62,7 @@ describe("physicalActivityWeeklyGoalFromGymSettings", () => {
     })!;
     expect(g.minMinutesPerWeek).toBe(60);
     expect(g.maxMinutesPerWeek).toBe(160);
-    expect(g.frequencyPerWeek).toBe(4);
+    expect(g.frequencyPerWeek).toBeUndefined();
   });
 
   it("normalizes swapped cadence bounds", () => {
@@ -77,7 +78,7 @@ describe("physicalActivityWeeklyGoalFromGymSettings", () => {
     })!;
     expect(g.minMinutesPerWeek).toBe(90);
     expect(g.maxMinutesPerWeek).toBe(150);
-    expect(g.frequencyPerWeek).toBe(5);
+    expect(g.frequencyPerWeek).toBeUndefined();
   });
 
   it("normalizes swapped session minute bounds using run fallback", () => {
@@ -115,5 +116,48 @@ describe("physicalActivityWeeklyGoalFromGymSettings", () => {
     })!;
     expect(g.minMinutesPerBlock).toBe(90);
     expect(g.maxAutoBlocksPerDay).toBe(1);
+  });
+
+  it("sets frequencyPerWeek only when min block size is set (session-day spread)", () => {
+    const gMin = physicalActivityWeeklyGoalFromGymSettings({
+      ...DEFAULT_USER_SETTINGS.gym,
+      plannerBlockEnabled: true,
+      sessionsPerWeek: 3,
+      minMinutesPerBlock: 60
+    })!;
+    expect(gMin.frequencyPerWeek).toBe(3);
+
+    const gMaxOnly = physicalActivityWeeklyGoalFromGymSettings({
+      ...DEFAULT_USER_SETTINGS.gym,
+      plannerBlockEnabled: true,
+      sessionsPerWeek: 4,
+      maxAutoBlocksPerDay: 2
+    })!;
+    expect(gMaxOnly.frequencyPerWeek).toBeUndefined();
+  });
+});
+
+describe("schedulingGoalsWithWeeklyRoutines", () => {
+  it("keeps a plan gym row and does not append the settings synthetic", () => {
+    const planGym = {
+      ...physicalActivityWeeklyGoalFromGymSettings({
+        ...DEFAULT_USER_SETTINGS.gym,
+        plannerBlockEnabled: true
+      })!,
+      id: "user-plan-gym",
+      title: "Strength"
+    };
+    const out = schedulingGoalsWithWeeklyRoutines([planGym], {
+      gym: { ...DEFAULT_USER_SETTINGS.gym, plannerBlockEnabled: true }
+    });
+    expect(out.some((g) => g.id === ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID)).toBe(false);
+    expect(out.some((g) => g.id === "user-plan-gym")).toBe(true);
+  });
+
+  it("appends the synthetic when the plan has no gym row and planner block is on", () => {
+    const out = schedulingGoalsWithWeeklyRoutines([], {
+      gym: { ...DEFAULT_USER_SETTINGS.gym, plannerBlockEnabled: true }
+    });
+    expect(out.some((g) => g.id === ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID)).toBe(true);
   });
 });

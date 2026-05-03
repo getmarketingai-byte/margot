@@ -4,7 +4,6 @@ import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import type { UserSettings } from "@calendar-automations/schema";
-import { PhysicalActivityRoutineForm } from "./physical-activity-routine-form";
 
 function afterConstraintsSave(userId: string): void {
   invalidateUserAllocationCache(userId);
@@ -101,14 +100,7 @@ function routineDisclosureSummary(settings: UserSettings): string {
   const s = settings.timemap.shutdownRoutine;
   const mPart = m.enabled ? `${m.minutes}m` : "off";
   const sPart = s.enabled ? `${s.minutes}m` : "off";
-  const g = settings.gym;
-  let act = "";
-  if (g.plannerBlockEnabled) {
-    const minS = g.sessionsPerWeekMin ?? g.sessionsPerWeek;
-    const maxS = g.sessionsPerWeekMax ?? g.sessionsPerWeek;
-    act = minS === maxS ? ` · Activity ${minS}/wk` : ` · Activity ${minS}–${maxS}/wk`;
-  }
-  return `Morning ${mPart} · Shutdown ${sPart}${act}`;
+  return `Morning ${mPart} · Shutdown ${sPart}`;
 }
 
 function catchUpDisclosureSummary(settings: UserSettings): string {
@@ -155,8 +147,7 @@ export async function ConstraintsSection() {
           </span>
         </summary>
         <p className="mt-1 text-xs text-ink-400">
-          Morning and shutdown routines reserve windows around sleep; physical activity uses the same
-          cadence / ideal-time controls as weekly goals.
+          Morning and shutdown routines reserve windows around sleep.
         </p>
         <form action={updateRoutines} className="mt-3">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -211,7 +202,15 @@ export async function ConstraintsSection() {
             </div>
           </div>
         </form>
-        <PhysicalActivityRoutineForm initial={settings.gym} />
+        <p className="mt-3 border-t border-ink-200 pt-3 text-xs text-ink-400 dark:border-ink-600">
+          Weekly physical activity is a{" "}
+          <a className="underline" href="/dashboard/plan">
+            Perfect Week
+          </a>{" "}
+          goal row (gym preset: drive padding, same constraint UI and list order as other goals). If
+          gym settings still have &quot;Plan weekly physical activity block&quot; on and you have no
+          gym row there, the planner injects a legacy synthetic block from those settings.
+        </p>
       </details>
 
       <details className="card">

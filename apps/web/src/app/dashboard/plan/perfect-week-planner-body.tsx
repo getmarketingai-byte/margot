@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { GoalGroup, WeeklyGoal } from "@calendar-automations/schema";
+import type { GoalGroup, GymSettings, WeeklyGoal } from "@calendar-automations/schema";
 import { useMemo } from "react";
 import { PlanCalendarViewProvider, usePlanCalendarView } from "./plan-calendar-view-context";
 import type { GoalGroupRailBundle, PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";
@@ -200,7 +200,7 @@ function NotScheduledForActiveSlices({
             <Link className="underline" href="/dashboard/planner#scheduling-outcomes">
               Scheduling options
             </Link>{" "}
-            on Planner.
+            on Planner (physical activity itself is a Perfect Week goal row).
           </p>
           <ul className="mt-2 list-disc pl-5 text-sm">
             {b.entries.map((n) => (
@@ -231,6 +231,8 @@ interface PerfectWeekPlannerBodyProps {
   goalGroups?: readonly GoalGroup[];
   hasUserDragGoalOverrides: boolean;
   planClientGoals: WeeklyGoal[];
+  /** Snapshot for “+ Physical activity” quick-add defaults (cadence, windows). */
+  gymTemplate: GymSettings;
   planClientDeletedGoals: Parameters<typeof PlanClient>[0]["initialDeletedGoals"];
   goalIdsWithDaySheetHistory: readonly string[];
   goalGroupTitles: Record<string, string>;
@@ -320,6 +322,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
     goalGroups = [],
     hasUserDragGoalOverrides,
     planClientGoals,
+    gymTemplate,
     planClientDeletedGoals,
     goalIdsWithDaySheetHistory,
     goalGroupTitles
@@ -348,6 +351,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
           <div className="flex flex-col gap-5">
             <PlanClient
               initialGoals={planClientGoals}
+              gymTemplate={gymTemplate}
               initialDeletedGoals={planClientDeletedGoals}
               perfectWeekStatsBySlice={[...perfectWeekStatsBySlice]}
               rollingSevenDayApprox={rollingSevenDayApprox}

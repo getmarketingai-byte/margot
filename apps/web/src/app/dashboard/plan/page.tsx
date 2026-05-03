@@ -116,9 +116,7 @@ export default async function PlanPage() {
     billing
   });
   const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
-  const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
-    (g) => g.specialGoalType !== "gym"
-  );
+  const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals);
   const resolvedCatchUpFloors = ctx.catchUpFloors;
   const {
     busyFetch,
@@ -364,8 +362,10 @@ export default async function PlanPage() {
         <div>
           <h1 className="text-2xl font-semibold">My Perfect Week</h1>
           <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
-            List the things you want each week. Type a goal and press Enter — we&apos;ll find the
-            time. Optional <strong>scheduling methods</strong> (e.g. energy-aware placement) live on{" "}
+            List the things you want each week — including{" "}
+            <strong>Physical activity</strong> (gym preset with drive padding). Type a goal and press
+            Enter — we&apos;ll find the time. Optional <strong>scheduling methods</strong> (e.g.
+            energy-aware placement) live on{" "}
             <Link className="underline" href="/dashboard/planner#framework-methods">
               Planner
             </Link>{" "}
@@ -395,6 +395,7 @@ export default async function PlanPage() {
         goalGroups={plan.goalGroups ?? []}
         hasUserDragGoalOverrides={hasUserDragGoalOverrides}
         planClientGoals={perfectWeekAuthoringGoals}
+        gymTemplate={settings.gym}
         planClientDeletedGoals={plan.deletedGoals}
         goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
         goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}

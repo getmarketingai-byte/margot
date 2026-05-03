@@ -115,9 +115,7 @@ export default async function PlannerHubPage() {
   const userId = session!.user!.id!;
   const settings = await loadSettings(userId);
   const plan = await loadPlan(userId, settings.timezone);
-  const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals).filter(
-    (g) => g.specialGoalType !== "gym"
-  );
+  const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals);
   const wheelAreas = settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }));
   const nowMs = Date.now();
   const billing = await loadBillingState(userId);

@@ -9,7 +9,7 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import type { GoalGroup, TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
+import type { GoalGroup, GymSettings, TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
 import {
   isInvertedTimemapGoal,
   normalisePlacementIdealClockBoundary,
@@ -34,6 +34,7 @@ import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRef
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
 import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
+import { planOwnedPhysicalActivitySkeleton } from "@calendar-automations/planner";
 import { addGoal, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } from "./actions";
 import {
   ConstraintCard,
@@ -85,6 +86,8 @@ interface GoalPaceInfo {
 
 interface PlanClientProps {
   initialGoals: WeeklyGoal[];
+  /** Defaults for the Physical activity (gym) quick-add button. */
+  gymTemplate: GymSettings;
   /** Per ISO week allocator metrics (Perfect Week horizon) */
   perfectWeekStatsBySlice: PerfectWeekSliceStats[];
   /** Rolling-window approximation for “next 7 days · combined” */
@@ -170,6 +173,7 @@ function ensureGoalShape(input: GoalInput): GoalInput {
 
 export function PlanClient({
   initialGoals,
+  gymTemplate,
   initialDeletedGoals,
   perfectWeekStatsBySlice,
   rollingSevenDayApprox,
@@ -447,6 +451,13 @@ export function PlanClient({
     });
   };
 
+  const handleAddPhysicalActivity = () => {
+    if (goals.some((g) => g.specialGoalType === "gym")) return;
+    const sk = planOwnedPhysicalActivitySkeleton(gymTemplate);
+    const { title, ...draftFields } = sk;
+    handleAdd(title, draftFields as GoalDraft);
+  };
+
   const handleUpdate = (id: string, next: GoalInput) => {
     const actionId = `goal-update-${id}-${crypto.randomUUID().slice(0, 8)}`;
     reportPerceivedInteraction("goal_update", actionId);
@@ -587,7 +598,11 @@ export function PlanClient({
       )}
 
       {goals.length === 0 ? (
-        <EmptyState onAdd={handleAdd} />
+        <EmptyState
+          onAdd={handleAdd}
+          onAddPhysicalActivity={handleAddPhysicalActivity}
+          physicalActivityDisabled={goals.some((g) => g.specialGoalType === "gym")}
+        />
       ) : (
         <ul className="flex flex-col gap-2" aria-label="Goals">
           {goals.map((goal, idx) => {
@@ -620,8 +635,23 @@ export function PlanClient({
             />
           );
           })}
-          <li className="list-none">
-            <AddGoalTitle onAdd={handleAdd} />
+          <li className="list-none flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <div className="min-w-0 flex-1">
+              <AddGoalTitle onAdd={handleAdd} />
+            </div>
+            <button
+              type="button"
+              onClick={handleAddPhysicalActivity}
+              disabled={goals.some((g) => g.specialGoalType === "gym")}
+              title={
+                goals.some((g) => g.specialGoalType === "gym")
+                  ? "You already have a Physical activity row"
+                  : "Add a gym-type row (drive padding, same constraints as other goals)"
+              }
+              className="btn-secondary h-fit shrink-0 self-stretch px-3 py-2 text-xs sm:self-auto sm:py-0"
+            >
+              + Physical activity
+            </button>
           </li>
         </ul>
       )}
@@ -1514,6 +1544,8 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
     const nf = normalisePlacementIdealClockFilter(goal.placementIdealClockFilter);
     if (nf) draft.placementIdealClockFilter = nf;
   }
+  if (goal.specialGoalType !== undefined) draft.specialGoalType = goal.specialGoalType;
+  if (goal.anchor !== undefined) draft.anchor = goal.anchor;
   return draft;
 }
 
@@ -2022,7 +2054,15 @@ function ConstraintBody({
 
 /* ─────────────────────────── Empty state ─────────────────────────────────── */
 
-function EmptyState({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => void }) {
+function EmptyState({
+  onAdd,
+  onAddPhysicalActivity,
+  physicalActivityDisabled
+}: {
+  onAdd: (title: string, draft: GoalDraft) => void;
+  onAddPhysicalActivity: () => void;
+  physicalActivityDisabled: boolean;
+}) {
   return (
     <section className="card flex flex-col gap-3">
       <div>
@@ -2051,6 +2091,16 @@ function EmptyState({ onAdd }: { onAdd: (title: string, draft: GoalDraft) => voi
             + {s.title}
           </button>
         ))}
+      </div>
+      <div className="flex flex-wrap gap-2 border-t border-ink-200 pt-3 dark:border-ink-600">
+        <button
+          type="button"
+          onClick={onAddPhysicalActivity}
+          disabled={physicalActivityDisabled}
+          className="btn-secondary text-xs"
+        >
+          + Physical activity
+        </button>
       </div>
     </section>
   );

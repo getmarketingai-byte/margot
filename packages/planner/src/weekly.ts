@@ -43,6 +43,8 @@
  *      or legacy `placementIdealClockFilter`) bias gap choice and in-gap start alignment;
  *      when after+before form a hard band, Pass 1–2 weekly targets are capped to
  *      placeable time in that band (merged with explicit `maxMinutesPerWeek`).
+ *      Prefer a Perfect Week goal row with `specialGoalType: "gym"` for ordering;
+ *      otherwise `gym.plannerBlockEnabled` still injects a synthetic fallback.
  *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
@@ -451,11 +453,12 @@ function buildAllocateWeekPass12Prep(
   const schedulingGoalsBase = plan.goals
     .filter((g) => !isInvertedTimemapGoal(g))
     .map((g) => mergeGoalGroupPlacementSchedulingOntoGoal(plan, g));
-  const withoutRoutineInjected = schedulingGoalsBase.filter((g) => g.specialGoalType !== "gym");
-  const physicalRoutine = physicalActivityWeeklyGoalFromGymSettings(settings.gym);
-  const schedulingGoals = withoutRoutineInjected;
-  const routineInject: WeeklyGoal[] = [];
-  if (physicalRoutine) routineInject.push(physicalRoutine);
+  const planGymGoals = schedulingGoalsBase.filter((g) => g.specialGoalType === "gym");
+  const nonGym = schedulingGoalsBase.filter((g) => g.specialGoalType !== "gym");
+  const settingsSynthetic = physicalActivityWeeklyGoalFromGymSettings(settings.gym);
+  const schedulingGoals = nonGym;
+  const routineInject: WeeklyGoal[] =
+    planGymGoals.length > 0 ? [...planGymGoals] : settingsSynthetic ? [settingsSynthetic] : [];
   const fw = settings.schedulerFrameworkInclusion;
   const wheelTopUps = wheelTopUpGoals(
     [...schedulingGoals, ...routineInject],

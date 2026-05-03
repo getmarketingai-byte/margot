@@ -189,8 +189,8 @@ export const weeklyGoalSchema = z.object({
   /**
    * Optional preferred local start times (wall clock) used when scoring gaps
    * and when placing the block inside a wide free window (start is clamped to
-   * the gap when ideal falls outside). Used by routines-driven blocks
-   * (`specialGoalType: "gym"`) from user settings.
+   * the gap when ideal falls outside). Used for `specialGoalType: "gym"` goals
+   * (Perfect Week row or legacy settings-driven synthetic).
    */
   placementIdealClockTimes: z
     .array(

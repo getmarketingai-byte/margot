@@ -251,10 +251,9 @@ export const gymSettingsSchema = z
      */
     sessionMinutesMax: z.number().int().min(1).max(240).optional(),
     /**
-     * When true, the weekly allocator schedules a single physical-activity block
-     * (gym-type padding, drive windows) from these settings instead of a Perfect
-     * Week goal row. Configure label, cadence, and ideal times under Planner →
-     * Daily routines.
+     * Legacy fallback: when true and the Perfect Week plan has no `specialGoalType: "gym"`
+     * row, the allocator injects a synthetic physical-activity goal from these fields.
+     * Prefer configuring physical activity on Perfect Week (list order + constraints).
      */
     plannerBlockEnabled: z.boolean().default(false),
     /** Shown on the calendar / goal chips for the planner block (not calendar title matching). */
@@ -281,7 +280,9 @@ export const gymSettingsSchema = z
     plannerDaysOfWeek: z.array(plannerDayOfWeek).min(1).max(7).optional(),
     /**
      * Optional minimum auto-block length for the planner physical-activity goal
-     * (same semantics as weekly goal `minMinutesPerBlock`).
+     * (same semantics as weekly goal `minMinutesPerBlock`). When set, the
+     * synthetic goal also sets `frequencyPerWeek` so the allocator keeps at most
+     * one auto block per calendar day for this routine (chunkier session days).
      */
     minMinutesPerBlock: z.number().int().min(15).max(8 * 60).optional(),
     /** Optional cap on auto blocks per calendar day for this routine. */
