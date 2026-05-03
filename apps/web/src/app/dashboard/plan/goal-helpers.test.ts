@@ -6,6 +6,7 @@ import {
   goalAllocationRowDisplay,
   goalExceedsDeclaredWeekShare,
   goalGroupAggregateSummaryLine,
+  goalPlannerPercentOfSchedulableWeek,
   summariseAllocation
 } from "./goal-helpers";
 
@@ -22,6 +23,26 @@ function baseGoal(over: Partial<WeeklyGoal> = {}): WeeklyGoal {
     ...over
   };
 }
+
+describe("goalPlannerPercentOfSchedulableWeek", () => {
+  it("returns null when free time is not positive", () => {
+    expect(goalPlannerPercentOfSchedulableWeek(120, 0)).toBeNull();
+    expect(goalPlannerPercentOfSchedulableWeek(120, -10)).toBeNull();
+  });
+
+  it("returns null when target is missing or non-positive", () => {
+    expect(goalPlannerPercentOfSchedulableWeek(undefined, 600)).toBeNull();
+    expect(goalPlannerPercentOfSchedulableWeek(0, 600)).toBeNull();
+  });
+
+  it("rounds target minutes as a percent of free minutes", () => {
+    expect(goalPlannerPercentOfSchedulableWeek(150, 600)).toBe(25);
+  });
+
+  it("caps at 100%", () => {
+    expect(goalPlannerPercentOfSchedulableWeek(900, 600)).toBe(100);
+  });
+});
 
 describe("summariseAllocation", () => {
   it("applies allocationSharePercent to the post-floor remainder for hints", () => {

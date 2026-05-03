@@ -365,6 +365,24 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
   };
 }
 
+/**
+ * Planner weekly target minutes as a percentage of full-week schedulable gap
+ * time `T` (same denominator as `% of week` / Pass 2 in {@link summariseAllocation}).
+ *
+ * Returns `null` when `freeMinutesThisWeek` is not positive or there is no
+ * positive finite weekly target.
+ */
+export function goalPlannerPercentOfSchedulableWeek(
+  effectiveTargetMinutes: number | undefined,
+  freeMinutesThisWeek: number
+): number | null {
+  const free = Math.max(0, Math.round(Number(freeMinutesThisWeek)));
+  if (!Number.isFinite(free) || free <= 0) return null;
+  const t = effectiveTargetMinutes;
+  if (t === undefined || !Number.isFinite(t) || t <= 0) return null;
+  return Math.min(100, Math.round((100 * t) / free));
+}
+
 /** Narrow summary shape consumed by [`goalAllocationRowDisplay`]. */
 export type GoalAllocationRowSummary = Pick<
   ReturnType<typeof summariseAllocation>,

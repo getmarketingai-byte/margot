@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { GoalGroup, TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
 import {
+  isInvertedTimemapGoal,
   normalisePlacementIdealClockBoundary,
   normalisePlacementIdealClockFilter
 } from "@calendar-automations/schema";
@@ -20,6 +21,7 @@ import {
   aggregateGroupConstraintSummariesForGoal,
   chipsForGoal,
   goalAllocationRowDisplay,
+  goalPlannerPercentOfSchedulableWeek,
   goalExceedsDeclaredWeekShare,
   summaryChipsForGoal,
   formatMinutes,
@@ -1109,6 +1111,28 @@ function GoalRow({
       ? Math.max(1, Math.min(100, Math.round(100 / allocationSummary.equalShareGoals)))
       : 40;
 
+  const invertedTimemap = isInvertedTimemapGoal(goal);
+  const schedulableWeekPercentSingle =
+    !invertedTimemap && !dualWeek
+      ? goalPlannerPercentOfSchedulableWeek(effectiveTarget, allocationSummary.freeMinutes)
+      : null;
+  const schedulableWeekPercentsDual =
+    !invertedTimemap && dualWeek
+      ? dualWeek.slices.map((sl) => ({
+          weekLabel: sl.weekLabel,
+          percent: goalPlannerPercentOfSchedulableWeek(
+            sl.effectiveTargetByGoal[goal.id],
+            sl.freeMinutesThisWeek
+          )
+        }))
+      : null;
+  const showSchedulableWeekShare =
+    schedulableWeekPercentSingle !== null ||
+    (schedulableWeekPercentsDual?.some((s) => s.percent !== null) ?? false);
+
+  const schedulableWeekShareTitle =
+    "% of full-week schedulable time (after calendar busy, sleep, travel, etc.) — same basis as “% of week” constraints. Uses this goal’s planner weekly target.";
+
   const commitDraft = (next: GoalDraft) => {
     setDraftDirty(next);
     onUpdate({ title: editTitle.trim() || goal.title, ...next });
@@ -1155,6 +1179,77 @@ function GoalRow({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
+      {showSchedulableWeekShare ? (
+        <div
+          className="flex flex-col gap-1.5 border-b border-ink-100 pb-2 dark:border-ink-700/60"
+          role="group"
+          aria-label={`${goal.title}: share of schedulable week`}
+        >
+          {schedulableWeekPercentsDual
+            ? schedulableWeekPercentsDual.map((seg, ix) =>
+                seg.percent === null ? null : (
+                  <div key={ix} className="flex flex-col gap-0.5">
+                    <div className="text-[9px] font-medium uppercase tracking-wide text-ink-400 dark:text-ink-500">
+                      {seg.weekLabel}
+                    </div>
+                    <div
+                      className="h-1 w-full overflow-hidden rounded-full bg-ink-200/90 dark:bg-ink-700/80"
+                      title={schedulableWeekShareTitle}
+                    >
+                      <div
+                        className="h-full min-w-px rounded-full"
+                        style={{
+                          width: `${seg.percent}%`,
+                          backgroundColor: goalColor
+                        }}
+                      />
+                    </div>
+                  </div>
+                )
+              )
+            : schedulableWeekPercentSingle !== null ? (
+                <div
+                  className="h-1 w-full overflow-hidden rounded-full bg-ink-200/90 dark:bg-ink-700/80"
+                  title={schedulableWeekShareTitle}
+                >
+                  <div
+                    className="h-full min-w-px rounded-full"
+                    style={{
+                      width: `${schedulableWeekPercentSingle}%`,
+                      backgroundColor: goalColor
+                    }}
+                  />
+                </div>
+              ) : null}
+          <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-[10px] tabular-nums text-ink-500 dark:text-ink-400">
+            {schedulableWeekPercentsDual ? (
+              schedulableWeekPercentsDual
+                .filter(
+                  (seg): seg is { weekLabel: string; percent: number } => seg.percent !== null
+                )
+                .map((seg, ix) => (
+                  <span key={seg.weekLabel} title={schedulableWeekShareTitle}>
+                    {ix > 0 ? (
+                      <span className="pr-1.5 text-ink-300/70 dark:text-ink-600" aria-hidden>
+                        ·
+                      </span>
+                    ) : null}
+                    <span className="text-ink-400 dark:text-ink-500">{seg.weekLabel}: </span>
+                    <span className="font-medium text-ink-700 dark:text-ink-200">{seg.percent}%</span>
+                    <span className="text-ink-400/90"> of week</span>
+                  </span>
+                ))
+            ) : schedulableWeekPercentSingle !== null ? (
+              <span title={schedulableWeekShareTitle}>
+                <span className="font-medium text-ink-700 dark:text-ink-200">
+                  {schedulableWeekPercentSingle}%
+                </span>
+                <span className="text-ink-400/90"> of week</span>
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div className="flex items-start gap-2">
         <button
           type="button"
