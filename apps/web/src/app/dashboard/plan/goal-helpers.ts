@@ -12,21 +12,34 @@ import type {
   EnergyMode,
   EnergyPolarity,
   GoalGroup,
-  PlacementIdealClockFilter,
   PpfPillarKey,
   SpecialGoalType,
   WeeklyGoal,
   WorkLayer
 } from "@calendar-automations/schema";
-import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
+import {
+  effectivePlacementIdealAfterBoundary,
+  effectivePlacementIdealBeforeBoundary,
+  filterSchedulingGoals,
+  normaliseGoalTime
+} from "@calendar-automations/schema";
 import { computePass2AllocMinutesFromShareOfWeek } from "@calendar-automations/planner/weekly";
 
-function formatPlacementIdealClockFilterSuffix(
-  filter: PlacementIdealClockFilter | undefined
+function formatPlacementIdealClockBoundsSuffix(
+  goal: Pick<
+    WeeklyGoal,
+    "placementIdealClockAfter" | "placementIdealClockBefore" | "placementIdealClockFilter"
+  >
 ): string {
-  if (!filter) return "";
-  const t = `${filter.hour}:${String(filter.minute).padStart(2, "0")}`;
-  return filter.kind === "after" ? ` (after ${t})` : ` (before ${t})`;
+  const after = effectivePlacementIdealAfterBoundary(goal);
+  const before = effectivePlacementIdealBeforeBoundary(goal);
+  const clock = (t: { hour: number; minute: number }) =>
+    `${t.hour}:${String(t.minute).padStart(2, "0")}`;
+  const bits: string[] = [];
+  if (after) bits.push(`after ${clock(after)}`);
+  if (before) bits.push(`before ${clock(before)}`);
+  if (bits.length === 0) return "";
+  return ` (${bits.join(", ")})`;
 }
 
 export type ChipKind =
@@ -185,7 +198,7 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
       (t) => `${t.hour}:${String(t.minute).padStart(2, "0")}`
     );
     const shown = labels.slice(0, 3).join(", ");
-    const suf = formatPlacementIdealClockFilterSuffix(goal.placementIdealClockFilter);
+    const suf = formatPlacementIdealClockBoundsSuffix(goal);
     chips.push({
       key: "ideal-times",
       label:
@@ -425,7 +438,7 @@ function aggregateSchedulingPartsForGoalGroup(grp: GoalGroup): string[] {
       (t) => `${t.hour}:${String(t.minute).padStart(2, "0")}`
     );
     const shown = labels.slice(0, 3).join(", ");
-    const suf = formatPlacementIdealClockFilterSuffix(grp.placementIdealClockFilter);
+    const suf = formatPlacementIdealClockBoundsSuffix(grp);
     parts.push(
       labels.length > 3 ? `∑ Ideal ~${shown}…${suf}` : `∑ Ideal ${shown}${suf}`
     );

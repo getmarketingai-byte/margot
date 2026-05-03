@@ -68,7 +68,8 @@ export type DayOfWeek = z.infer<typeof dayOfWeek>;
 
 /**
  * When set together with `placementIdealClockTimes`, only ideal times on the matching
- * side of this local wall clock participate in placement nudges.
+ * side of this local wall clock participate in placement nudges. Prefer
+ * `placementIdealClockAfter` / `placementIdealClockBefore` for independent bounds.
  */
 export const placementIdealClockFilterSchema = z.object({
   kind: z.enum(["after", "before"]),
@@ -76,6 +77,13 @@ export const placementIdealClockFilterSchema = z.object({
   minute: z.number().int().min(0).max(59)
 });
 export type PlacementIdealClockFilter = z.infer<typeof placementIdealClockFilterSchema>;
+
+/** Local wall-clock boundary (hour + minute) for ideal-time placement hints. */
+export const placementIdealClockBoundarySchema = z.object({
+  hour: z.number().int().min(0).max(23),
+  minute: z.number().int().min(0).max(59)
+});
+export type PlacementIdealClockBoundary = z.infer<typeof placementIdealClockBoundarySchema>;
 
 export const specialGoalType = z.enum([
   "morning-routine",
@@ -184,8 +192,19 @@ export const weeklyGoalSchema = z.object({
   /**
    * Optional filter: only ideal clock rows matching `kind` relative to the boundary
    * are used for gap scoring and in-gap start alignment (weak signal).
+   *
+   * Prefer {@link placementIdealClockAfter} / {@link placementIdealClockBefore}; this field
+   * remains for older saved plans.
    */
   placementIdealClockFilter: placementIdealClockFilterSchema.optional(),
+  /**
+   * Only listed ideal times at or after this local wall clock participate in placement nudges.
+   */
+  placementIdealClockAfter: placementIdealClockBoundarySchema.optional(),
+  /**
+   * Only listed ideal times strictly before this local wall clock participate.
+   */
+  placementIdealClockBefore: placementIdealClockBoundarySchema.optional(),
   /**
    * Optional semantic type used by the UI for routine presets that map to
    * existing timemap/sleep/travel patterns.
@@ -233,6 +252,50 @@ export const weeklyGoalSchema = z.object({
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
 
+export function normalisePlacementIdealClockBoundary(
+  b: { hour: unknown; minute: unknown } | undefined
+): PlacementIdealClockBoundary | undefined {
+  if (!b) return undefined;
+  const hour = Math.max(0, Math.min(23, Math.round(Number(b.hour))));
+  const minute = Math.max(0, Math.min(59, Math.round(Number(b.minute))));
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return undefined;
+  return { hour, minute };
+}
+
+export function normalisePlacementIdealClockFilter(
+  f: PlacementIdealClockFilter | undefined
+): PlacementIdealClockFilter | undefined {
+  if (!f) return undefined;
+  if (f.kind !== "after" && f.kind !== "before") return undefined;
+  const hour = Math.max(0, Math.min(23, Math.round(f.hour)));
+  const minute = Math.max(0, Math.min(59, Math.round(f.minute)));
+  return { kind: f.kind, hour, minute };
+}
+
+/** Effective “at or after” boundary, including legacy {@link PlacementIdealClockFilter}. */
+export function effectivePlacementIdealAfterBoundary(goal: {
+  placementIdealClockAfter?: PlacementIdealClockBoundary | undefined;
+  placementIdealClockFilter?: PlacementIdealClockFilter | undefined;
+}): PlacementIdealClockBoundary | undefined {
+  const direct = normalisePlacementIdealClockBoundary(goal.placementIdealClockAfter);
+  if (direct) return direct;
+  const legacy = normalisePlacementIdealClockFilter(goal.placementIdealClockFilter);
+  if (legacy?.kind === "after") return { hour: legacy.hour, minute: legacy.minute };
+  return undefined;
+}
+
+/** Effective “strictly before” boundary, including legacy {@link PlacementIdealClockFilter}. */
+export function effectivePlacementIdealBeforeBoundary(goal: {
+  placementIdealClockBefore?: PlacementIdealClockBoundary | undefined;
+  placementIdealClockFilter?: PlacementIdealClockFilter | undefined;
+}): PlacementIdealClockBoundary | undefined {
+  const direct = normalisePlacementIdealClockBoundary(goal.placementIdealClockBefore);
+  if (direct) return direct;
+  const legacy = normalisePlacementIdealClockFilter(goal.placementIdealClockFilter);
+  if (legacy?.kind === "before") return { hour: legacy.hour, minute: legacy.minute };
+  return undefined;
+}
+
 /**
  * Scheduling knobs shared by [`WeeklyGoal`] and [`GoalGroup`]. Validator matches
  * the corresponding fields on `weeklyGoalSchema` exactly (picked, all optional).
@@ -255,6 +318,8 @@ export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalSchema.pick({
   latestHour: true,
   placementIdealClockTimes: true,
   placementIdealClockFilter: true,
+  placementIdealClockAfter: true,
+  placementIdealClockBefore: true,
   allocationSharePercent: true,
   scheduleInNiceWeather: true
 });

@@ -2,15 +2,20 @@
 
 import { useEffect, useState, useTransition } from "react";
 import type { GoalGroup, WeeklyGoal } from "@calendar-automations/schema";
-import { stubWeeklyGoalFromGoalGroup } from "@calendar-automations/schema";
+import {
+  effectivePlacementIdealAfterBoundary,
+  effectivePlacementIdealBeforeBoundary,
+  normalisePlacementIdealClockBoundary,
+  stubWeeklyGoalFromGoalGroup
+} from "@calendar-automations/schema";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ConstraintCard,
   IdealClockTimesField,
-  IdealPlacementClockRelationField,
+  IdealPlacementClockAfterField,
+  IdealPlacementClockBeforeField,
   normaliseIdealClockTimes,
-  normalisePlacementIdealClockFilter,
   SessionsPerWeekField,
   WeekdayToggleGrid
 } from "@/components/scheduling-constraints";
@@ -385,22 +390,64 @@ function GroupConstraintEditors({
         </label>
       </ConstraintCard>
       <ConstraintCard
-        label="Ideal clock times"
+        label="Ideal start times"
         className="sm:col-span-2"
+        onRemove={() => onPatch({ placementIdealClockTimes: undefined })}
+      >
+        <IdealClockTimesField
+          value={normaliseIdealClockTimes(group.placementIdealClockTimes, { hour: 12, minute: 0 })}
+          onChange={(placementIdealClockTimes) => onPatch({ placementIdealClockTimes })}
+        />
+      </ConstraintCard>
+      <ConstraintCard
+        label="Ideal times — after (local)"
         onRemove={() =>
-          onPatch({ placementIdealClockTimes: undefined, placementIdealClockFilter: undefined })
+          onPatch({
+            placementIdealClockAfter: undefined,
+            placementIdealClockFilter:
+              group.placementIdealClockFilter?.kind === "before"
+                ? group.placementIdealClockFilter
+                : undefined
+          })
         }
       >
-        <div className="flex flex-col gap-2">
-          <IdealClockTimesField
-            value={normaliseIdealClockTimes(group.placementIdealClockTimes, { hour: 12, minute: 0 })}
-            onChange={(placementIdealClockTimes) => onPatch({ placementIdealClockTimes })}
-          />
-          <IdealPlacementClockRelationField
-            value={normalisePlacementIdealClockFilter(group.placementIdealClockFilter)}
-            onChange={(placementIdealClockFilter) => onPatch({ placementIdealClockFilter })}
-          />
-        </div>
+        <IdealPlacementClockAfterField
+          value={effectivePlacementIdealAfterBoundary(group)}
+          onChange={(next) =>
+            onPatch({
+              placementIdealClockAfter: normalisePlacementIdealClockBoundary(next),
+              placementIdealClockFilter:
+                group.placementIdealClockFilter?.kind === "before"
+                  ? group.placementIdealClockFilter
+                  : undefined
+            })
+          }
+        />
+      </ConstraintCard>
+      <ConstraintCard
+        label="Ideal times — before (local)"
+        onRemove={() =>
+          onPatch({
+            placementIdealClockBefore: undefined,
+            placementIdealClockFilter:
+              group.placementIdealClockFilter?.kind === "after"
+                ? group.placementIdealClockFilter
+                : undefined
+          })
+        }
+      >
+        <IdealPlacementClockBeforeField
+          value={effectivePlacementIdealBeforeBoundary(group)}
+          onChange={(next) =>
+            onPatch({
+              placementIdealClockBefore: normalisePlacementIdealClockBoundary(next),
+              placementIdealClockFilter:
+                group.placementIdealClockFilter?.kind === "after"
+                  ? group.placementIdealClockFilter
+                  : undefined
+            })
+          }
+        />
       </ConstraintCard>
     </div>
   );

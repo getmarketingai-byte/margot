@@ -10,6 +10,10 @@ import {
   type FormEvent
 } from "react";
 import type { GoalGroup, TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
+import {
+  normalisePlacementIdealClockBoundary,
+  normalisePlacementIdealClockFilter
+} from "@calendar-automations/schema";
 import Link from "next/link";
 import {
   STARTER_GOALS,
@@ -32,9 +36,9 @@ import { addGoal, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } f
 import {
   ConstraintCard,
   IdealClockTimesField,
-  IdealPlacementClockRelationField,
+  IdealPlacementClockAfterField,
+  IdealPlacementClockBeforeField,
   normaliseIdealClockTimes,
-  normalisePlacementIdealClockFilter,
   SessionsPerWeekField,
   WeekdayToggleGrid
 } from "@/components/scheduling-constraints";
@@ -1335,11 +1339,49 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.placementIdealClockTimes !== undefined && goal.placementIdealClockTimes.length > 0) {
     draft.placementIdealClockTimes = [...goal.placementIdealClockTimes];
   }
+  if (goal.placementIdealClockAfter !== undefined) {
+    const na = normalisePlacementIdealClockBoundary(goal.placementIdealClockAfter);
+    if (na) draft.placementIdealClockAfter = na;
+  }
+  if (goal.placementIdealClockBefore !== undefined) {
+    const nb = normalisePlacementIdealClockBoundary(goal.placementIdealClockBefore);
+    if (nb) draft.placementIdealClockBefore = nb;
+  }
   if (goal.placementIdealClockFilter !== undefined) {
     const nf = normalisePlacementIdealClockFilter(goal.placementIdealClockFilter);
     if (nf) draft.placementIdealClockFilter = nf;
   }
   return draft;
+}
+
+function draftIdealAfterBoundary(d: GoalDraft) {
+  const direct = normalisePlacementIdealClockBoundary(d.placementIdealClockAfter);
+  if (direct) return direct;
+  const leg = normalisePlacementIdealClockFilter(d.placementIdealClockFilter);
+  return leg?.kind === "after" ? { hour: leg.hour, minute: leg.minute } : undefined;
+}
+
+function draftIdealBeforeBoundary(d: GoalDraft) {
+  const direct = normalisePlacementIdealClockBoundary(d.placementIdealClockBefore);
+  if (direct) return direct;
+  const leg = normalisePlacementIdealClockFilter(d.placementIdealClockFilter);
+  return leg?.kind === "before" ? { hour: leg.hour, minute: leg.minute } : undefined;
+}
+
+function patchIdealAfter(d: GoalDraft, next: ReturnType<typeof normalisePlacementIdealClockBoundary>) {
+  return {
+    placementIdealClockAfter: next,
+    placementIdealClockFilter:
+      d.placementIdealClockFilter?.kind === "before" ? d.placementIdealClockFilter : undefined
+  };
+}
+
+function patchIdealBefore(d: GoalDraft, next: ReturnType<typeof normalisePlacementIdealClockBoundary>) {
+  return {
+    placementIdealClockBefore: next,
+    placementIdealClockFilter:
+      d.placementIdealClockFilter?.kind === "after" ? d.placementIdealClockFilter : undefined
+  };
 }
 
 /* ─────────────────────────── Options editor ──────────────────────────────── */
@@ -1360,7 +1402,9 @@ type ConstraintId =
   | "frequency"
   | "days"
   | "nice-weather"
-  | "ideal-times";
+  | "ideal-start-times"
+  | "ideal-after-local"
+  | "ideal-before-local";
 
 interface ConstraintDef {
   id: ConstraintId;
@@ -1446,16 +1490,47 @@ function OptionsEditor({
       clear: () => ({ scheduleInNiceWeather: undefined })
     },
     {
-      id: "ideal-times",
-      label: "Ideal times of day",
+      id: "ideal-start-times",
+      label: "Ideal start times",
       isSet: (d) =>
         Array.isArray(d.placementIdealClockTimes) && d.placementIdealClockTimes.length > 0,
       initialise: () => ({
         placementIdealClockTimes: normaliseIdealClockTimes(undefined, { hour: 12, minute: 0 })
       }),
-      clear: () => ({
-        placementIdealClockTimes: undefined,
-        placementIdealClockFilter: undefined
+      clear: () => ({ placementIdealClockTimes: undefined })
+    },
+    {
+      id: "ideal-after-local",
+      label: "Ideal times — after",
+      isSet: (d) =>
+        d.placementIdealClockAfter !== undefined ||
+        d.placementIdealClockFilter?.kind === "after",
+      initialise: (d) => ({
+        placementIdealClockAfter: { hour: 18, minute: 0 },
+        placementIdealClockFilter:
+          d.placementIdealClockFilter?.kind === "before" ? d.placementIdealClockFilter : undefined
+      }),
+      clear: (d) => ({
+        placementIdealClockAfter: undefined,
+        placementIdealClockFilter:
+          d.placementIdealClockFilter?.kind === "before" ? d.placementIdealClockFilter : undefined
+      })
+    },
+    {
+      id: "ideal-before-local",
+      label: "Ideal times — before",
+      isSet: (d) =>
+        d.placementIdealClockBefore !== undefined ||
+        d.placementIdealClockFilter?.kind === "before",
+      initialise: (d) => ({
+        placementIdealClockBefore: { hour: 22, minute: 0 },
+        placementIdealClockFilter:
+          d.placementIdealClockFilter?.kind === "after" ? d.placementIdealClockFilter : undefined
+      }),
+      clear: (d) => ({
+        placementIdealClockBefore: undefined,
+        placementIdealClockFilter:
+          d.placementIdealClockFilter?.kind === "after" ? d.placementIdealClockFilter : undefined
       })
     }
   ];
@@ -1686,7 +1761,7 @@ function ConstraintBody({
           overlaps your free time, this is ignored so the goal can still land.
         </p>
       );
-    case "ideal-times": {
+    case "ideal-start-times": {
       const clocks = normaliseIdealClockTimes(
         draft.placementIdealClockTimes,
         { hour: 12, minute: 0 }
@@ -1697,15 +1772,29 @@ function ConstraintBody({
             value={clocks}
             onChange={(placementIdealClockTimes) => update({ placementIdealClockTimes })}
           />
-          <IdealPlacementClockRelationField
-            value={normalisePlacementIdealClockFilter(draft.placementIdealClockFilter)}
-            onChange={(placementIdealClockFilter) => update({ placementIdealClockFilter })}
-          />
           <p className="text-[11px] text-ink-400">
             Nudges gap choice and tries to start blocks at these local times when the gap allows
             (weak signal versus hard earliest/latest hour, if you add those elsewhere).
           </p>
         </div>
+      );
+    }
+    case "ideal-after-local": {
+      const b = draftIdealAfterBoundary(draft);
+      return (
+        <IdealPlacementClockAfterField
+          value={b}
+          onChange={(next) => update(patchIdealAfter(draft, normalisePlacementIdealClockBoundary(next)))}
+        />
+      );
+    }
+    case "ideal-before-local": {
+      const b = draftIdealBeforeBoundary(draft);
+      return (
+        <IdealPlacementClockBeforeField
+          value={b}
+          onChange={(next) => update(patchIdealBefore(draft, normalisePlacementIdealClockBoundary(next)))}
+        />
       );
     }
   }

@@ -146,6 +146,21 @@ describe("WeeklyGoal energy classification fields", () => {
       minute: 0
     });
   });
+
+  it("accepts placementIdealClockAfter and placementIdealClockBefore together", () => {
+    const goal = weeklyGoalSchema.parse({
+      id: "g1",
+      title: "Window",
+      placementIdealClockTimes: [
+        { hour: 6, minute: 0 },
+        { hour: 12, minute: 0 }
+      ],
+      placementIdealClockAfter: { hour: 9, minute: 0 },
+      placementIdealClockBefore: { hour: 15, minute: 0 }
+    });
+    expect(goal.placementIdealClockAfter).toEqual({ hour: 9, minute: 0 });
+    expect(goal.placementIdealClockBefore).toEqual({ hour: 15, minute: 0 });
+  });
   it("derives min/week from min/day × 7 when cadence is unconstrained", () => {
     const norm = normaliseGoalTime(
       weeklyGoalSchema.parse({

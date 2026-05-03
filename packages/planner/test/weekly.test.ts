@@ -372,6 +372,50 @@ describe("allocateWeek", () => {
     expect(b!.startMs).toBe(m0 + 7 * HOUR_MS);
   });
 
+  it("placement ideal clock after+before boundaries use only ideals inside the window", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const busy: BusyEvent[] = [];
+    for (let d = 1; d < 7; d++) {
+      const ds = weekStartMs + d * DAY_MS;
+      busy.push({ id: `block-${d}`, startMs: ds, endMs: ds + DAY_MS, busy: true });
+    }
+    const m0 = weekStartMs;
+    busy.push({ id: "m-pre", startMs: m0, endMs: m0 + 8 * HOUR_MS, busy: true });
+    busy.push({ id: "m-post", startMs: m0 + 22 * HOUR_MS, endMs: m0 + DAY_MS, busy: true });
+
+    const result = allocateWeek({
+      plan: {
+        id: "ideal-filter-window",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "split-ideal-mid",
+            title: "Split ideal mid",
+            targetMinutes: 120,
+            maxMinutesPerDay: 120,
+            dayOfWeek: "monday",
+            placementIdealClockTimes: [
+              { hour: 7, minute: 0 },
+              { hour: 12, minute: 0 },
+              { hour: 19, minute: 0 }
+            ],
+            placementIdealClockAfter: { hour: 10, minute: 0 },
+            placementIdealClockBefore: { hour: 14, minute: 0 },
+            priority: 5
+          })
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const b = result.blocks.find((x) => x.goalId === "split-ideal-mid");
+    expect(b).toBeDefined();
+    expect(b!.startMs).toBe(m0 + 12 * HOUR_MS);
+  });
+
   it("avoids duplicate same-goal auto blocks on the same day", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0); // Mon
     const mondayStart = weekStartMs;

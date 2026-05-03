@@ -31,8 +31,8 @@
  *      default one-way drive as calendar gym legs). That block is scheduled
  *      **before** other goals at the same commitment/floor tier so earlier list
  *      order cannot occupy those drive windows first. Optional
- *      `placementIdealClockTimes` (optionally narrowed by
- *      `placementIdealClockFilter`) bias gap choice and in-gap start alignment.
+ *      `placementIdealClockTimes` (optionally narrowed by after/before boundaries
+ *      or legacy `placementIdealClockFilter`) bias gap choice and in-gap start alignment.
  *   6. Within a day, sort blocks to preserve the energy curve
  *      (hyperfocus → neutral → hyperaware) when mode is "balanced" or "strict".
  *
@@ -68,6 +68,8 @@ import type {
 } from "@calendar-automations/schema";
 import {
   effectiveEnergyBatteryProfile,
+  effectivePlacementIdealAfterBoundary,
+  effectivePlacementIdealBeforeBoundary,
   filterSchedulingGoals,
   hydrateFrameworkSystemMirrors,
   isInvertedTimemapGoal,
@@ -2176,13 +2178,17 @@ function effectivePlacementIdealClockTimes(
 ): readonly { hour: number; minute: number }[] | undefined {
   const raw = goal.placementIdealClockTimes;
   if (!raw?.length) return undefined;
-  const f = goal.placementIdealClockFilter;
-  if (!f) return raw;
-  const boundaryMin = f.hour * 60 + f.minute;
-  const filtered = raw.filter((t) => {
-    const m = t.hour * 60 + t.minute;
-    return f.kind === "after" ? m >= boundaryMin : m < boundaryMin;
-  });
+  const after = effectivePlacementIdealAfterBoundary(goal);
+  const before = effectivePlacementIdealBeforeBoundary(goal);
+  let filtered = raw;
+  if (after) {
+    const boundaryMin = after.hour * 60 + after.minute;
+    filtered = filtered.filter((t) => t.hour * 60 + t.minute >= boundaryMin);
+  }
+  if (before) {
+    const boundaryMin = before.hour * 60 + before.minute;
+    filtered = filtered.filter((t) => t.hour * 60 + t.minute < boundaryMin);
+  }
   return filtered.length > 0 ? filtered : undefined;
 }
 
