@@ -134,6 +134,18 @@ export const weeklyGoalSchema = z.object({
   minMinutesPerDay: z.number().int().nonnegative().optional(),
   /** Daily cap; allocator never schedules more than this much on a single day. */
   maxMinutesPerDay: z.number().int().positive().optional(),
+  /**
+   * Prefer each **auto** block to be at least this long (15‑minute grid) while enough
+   * weekly demand remains; smaller gaps are skipped until the tail so deep-work style
+   * goals are not shredded into crumbs before gym or other peers run.
+   */
+  minMinutesPerBlock: z.number().int().positive().max(600).optional(),
+  /**
+   * Max auto-generated blocks per calendar day for this goal (pins do not count).
+   * Omit for no cap. When `minMinutesPerBlock` is set and this is omitted, the
+   * allocator defaults to **2** so the same day can hold e.g. work → gym → work.
+   */
+  maxAutoBlocksPerDay: z.number().int().min(1).max(8).optional(),
   /** "Show up N days a week"; if set, the goal's weekly minutes split across N days. */
   frequencyPerWeek: z.number().int().min(1).max(14).optional(),
   /** When set, the goal must land on this day; otherwise the allocator floats it. */
@@ -315,6 +327,8 @@ export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalSchema.pick({
   maxMinutesPerWeek: true,
   minMinutesPerDay: true,
   maxMinutesPerDay: true,
+  minMinutesPerBlock: true,
+  maxAutoBlocksPerDay: true,
   frequencyPerWeek: true,
   dayOfWeek: true,
   daysOfWeek: true,

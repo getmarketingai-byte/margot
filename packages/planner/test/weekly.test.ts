@@ -1025,6 +1025,77 @@ describe("allocateWeek", () => {
     expect(result.metrics.perGoal["share"]!.targetMinutes).toBeGreaterThan(0);
   });
 
+  it("maxAutoBlocksPerDay caps auto-generated blocks per calendar day", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "max-blocks-day",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "chunky",
+            title: "Chunky",
+            minMinutesPerWeek: 400,
+            maxMinutesPerDay: 400,
+            maxAutoBlocksPerDay: 1,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const countsByDay = new Map<number, number>();
+    for (const b of result.blocks) {
+      if (b.goalId !== "chunky" || b.segment) continue;
+      const d = Math.floor((b.startMs - weekStartMs) / DAY_MS);
+      countsByDay.set(d, (countsByDay.get(d) ?? 0) + 1);
+    }
+    for (const c of countsByDay.values()) {
+      expect(c).toBeLessThanOrEqual(1);
+    }
+    expect(result.metrics.perGoal["chunky"]!.scheduledMinutes).toBeGreaterThan(0);
+  });
+
+  it("minMinutesPerDay-only goals join Pass 2 remainder above derived weekly floor", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const result = allocateWeek({
+      plan: {
+        id: "daily-min-plus-share",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "daily",
+            title: "Daily only",
+            minMinutesPerDay: 30,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "share",
+            title: "Share",
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    expect(result.metrics.perGoal["daily"]!.targetMinutes).toBeGreaterThan(30 * 7);
+    expect(result.metrics.perGoal["share"]!.targetMinutes).toBeGreaterThan(0);
+  });
+
   it("clamps daily allocation to maxMinutesPerDay", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const result = allocateWeek({

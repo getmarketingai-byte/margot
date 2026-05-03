@@ -37,6 +37,7 @@ import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
 import { addGoal, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } from "./actions";
 import {
   ConstraintCard,
+  DurationField,
   IdealClockTimesField,
   IdealPlacementClockAfterField,
   IdealPlacementClockBeforeField,
@@ -1484,6 +1485,8 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.maxMinutesPerWeek !== undefined) draft.maxMinutesPerWeek = goal.maxMinutesPerWeek;
   if (goal.minMinutesPerDay !== undefined) draft.minMinutesPerDay = goal.minMinutesPerDay;
   if (goal.maxMinutesPerDay !== undefined) draft.maxMinutesPerDay = goal.maxMinutesPerDay;
+  if (goal.minMinutesPerBlock !== undefined) draft.minMinutesPerBlock = goal.minMinutesPerBlock;
+  if (goal.maxAutoBlocksPerDay !== undefined) draft.maxAutoBlocksPerDay = goal.maxAutoBlocksPerDay;
   if (goal.frequencyPerWeek !== undefined) draft.frequencyPerWeek = goal.frequencyPerWeek;
   if (goal.daysOfWeek !== undefined) draft.daysOfWeek = goal.daysOfWeek;
   if (goal.dayOfWeek !== undefined) draft.dayOfWeek = goal.dayOfWeek;
@@ -1558,6 +1561,8 @@ type ConstraintId =
   | "min-day"
   | "max-week"
   | "max-day"
+  | "min-block"
+  | "max-blocks-day"
   | "share-remainder"
   | "frequency"
   | "days"
@@ -1620,6 +1625,20 @@ function OptionsEditor({
       isSet: (d) => d.maxMinutesPerDay !== undefined,
       initialise: () => ({ maxMinutesPerDay: 120 }),
       clear: () => ({ maxMinutesPerDay: undefined })
+    },
+    {
+      id: "min-block",
+      label: "Min block size",
+      isSet: (d) => d.minMinutesPerBlock !== undefined,
+      initialise: () => ({ minMinutesPerBlock: 4 * 60 }),
+      clear: () => ({ minMinutesPerBlock: undefined })
+    },
+    {
+      id: "max-blocks-day",
+      label: "Max blocks / day",
+      isSet: (d) => d.maxAutoBlocksPerDay !== undefined,
+      initialise: () => ({ maxAutoBlocksPerDay: 2 }),
+      clear: () => ({ maxAutoBlocksPerDay: undefined })
     },
     {
       id: "share-remainder",
@@ -1873,6 +1892,47 @@ function ConstraintBody({
           sliderMaxMinutes={24 * 60}
         />
       );
+    case "min-block":
+      return (
+        <DurationField
+          value={draft.minMinutesPerBlock}
+          onChange={(v) => update({ minMinutesPerBlock: v === undefined ? undefined : Math.max(15, v) })}
+          hint="Auto blocks prefer at least this long while demand remains; small gaps are skipped until the end. With only min block set, the planner allows up to 2 auto blocks per day (e.g. work → gym → work)."
+          sliderMinMinutes={15}
+          sliderMaxMinutes={8 * 60}
+        />
+      );
+    case "max-blocks-day": {
+      const v = draft.maxAutoBlocksPerDay;
+      return (
+        <div className="flex flex-col gap-1 text-xs">
+          <label className="flex flex-col gap-1">
+            <span>Max auto blocks per calendar day (1–8)</span>
+            <input
+              type="number"
+              min={1}
+              max={8}
+              className="field max-w-[8rem] tabular-nums"
+              value={v === undefined ? "" : String(v)}
+              placeholder="2 (default with min block)"
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                if (raw === "") {
+                  update({ maxAutoBlocksPerDay: undefined });
+                  return;
+                }
+                const n = Number(raw);
+                if (!Number.isFinite(n)) return;
+                update({ maxAutoBlocksPerDay: Math.min(8, Math.max(1, Math.round(n))) });
+              }}
+            />
+          </label>
+          <p className="text-[11px] text-ink-400">
+            Pins don’t count. Leave empty to use the planner default (2 when min block size is set).
+          </p>
+        </div>
+      );
+    }
     case "share-remainder":
       return (
         <PercentShareField
@@ -1958,136 +2018,6 @@ function ConstraintBody({
       );
     }
   }
-}
-
-const DURATION_SLIDER_STEP = 5;
-
-/**
- * Combined number + h/m unit toggle for any "minutes" field. Stores minutes
- * internally and lets the user input either decimal hours (1.5) or whole
- * minutes (90). Defaults to hours since most goals are expressed that way.
- */
-function DurationField({
-  value,
-  onChange,
-  hint,
-  sliderMinMinutes = 0,
-  sliderMaxMinutes = 40 * 60
-}: {
-  value: number | undefined;
-  onChange: (next: number | undefined) => void;
-  hint?: string;
-  /** Inclusive lower bound for the scrubber (minutes). */
-  sliderMinMinutes?: number;
-  /** Inclusive upper bound for the scrubber (minutes). Values above still show in the numeric field; the thumb stays at the high end until moved. */
-  sliderMaxMinutes?: number;
-}) {
-  const [unit, setUnit] = useState<"hours" | "minutes">("hours");
-
-  const display = value === undefined ? "" : unit === "hours" ? String(value / 60) : String(value);
-
-  const onInput = (raw: string) => {
-    if (raw === "") return onChange(undefined);
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return;
-    onChange(Math.max(0, Math.round(unit === "hours" ? n * 60 : n)));
-  };
-
-  const minutes = value ?? 0;
-  const sliderThumbMinutes = Math.min(
-    sliderMaxMinutes,
-    Math.max(sliderMinMinutes, minutes)
-  );
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <input
-          type="number"
-          min={0}
-          step={unit === "hours" ? 0.25 : 15}
-          value={display}
-          onChange={(e) => onInput(e.target.value)}
-          className="field !w-auto min-w-[6rem] flex-1 basis-0 tabular-nums"
-        />
-        <UnitToggle
-          value={unit}
-          onChange={setUnit}
-          ariaLabel="Unit"
-          options={[
-            { value: "hours", label: "h" },
-            { value: "minutes", label: "m" }
-          ]}
-        />
-      </div>
-      {value !== undefined ? (
-        <p className="text-[11px] font-medium tabular-nums text-ink-700 dark:text-ink-200">
-          {formatMinutes(value)}
-        </p>
-      ) : (
-        <p className="text-[11px] text-ink-400">No duration set</p>
-      )}
-      <label className="flex flex-col gap-1">
-        <span className="sr-only">Adjust duration with a slider</span>
-        <input
-          type="range"
-          min={sliderMinMinutes}
-          max={sliderMaxMinutes}
-          step={DURATION_SLIDER_STEP}
-          value={sliderThumbMinutes}
-          onChange={(e) => {
-            const next = Number(e.target.value);
-            if (!Number.isFinite(next)) return;
-            onChange(next);
-          }}
-          className="h-2 w-full cursor-pointer accent-accent"
-          aria-valuetext={value !== undefined ? formatMinutes(value) : undefined}
-        />
-      </label>
-      {hint ? <span className="text-[11px] text-ink-400">{hint}</span> : null}
-    </div>
-  );
-}
-
-function UnitToggle({
-  value,
-  onChange,
-  ariaLabel,
-  options
-}: {
-  value: "hours" | "minutes";
-  onChange: (v: "hours" | "minutes") => void;
-  ariaLabel?: string;
-  options?: ReadonlyArray<{ value: "hours" | "minutes"; label: string }>;
-}) {
-  const toggleOptions = options ?? [
-    { value: "hours", label: "h" },
-    { value: "minutes", label: "m" }
-  ];
-  return (
-    <div
-      role="radiogroup"
-      aria-label={ariaLabel ?? "Unit"}
-      className="flex shrink-0 overflow-hidden rounded-md border border-ink-200 text-xs dark:border-ink-600"
-    >
-      {toggleOptions.map((unit) => (
-        <button
-          key={unit.value}
-          type="button"
-          role="radio"
-          aria-checked={value === unit.value}
-          onClick={() => onChange(unit.value)}
-          className={`px-2 py-1 ${
-            value === unit.value
-              ? "bg-accent text-accent-fg"
-              : "text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
-          }`}
-        >
-          {unit.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 /* ─────────────────────────── Empty state ─────────────────────────────────── */

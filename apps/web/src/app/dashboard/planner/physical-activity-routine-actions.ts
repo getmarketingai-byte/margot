@@ -5,31 +5,59 @@ import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import type { GymSettings } from "@calendar-automations/schema";
+import { z } from "zod";
 
 function afterPhysicalRoutineSave(userId: string): void {
   invalidateUserAllocationCache(userId);
   revalidatePlanningRoutes();
 }
 
-function parseIdealTimesJson(raw: unknown): GymSettings["idealBlockTimes"] | null {
-  if (raw == null || raw === "") return null;
-  try {
-    const v = JSON.parse(String(raw)) as unknown;
-    if (!Array.isArray(v) || v.length === 0) return null;
-    const out: GymSettings["idealBlockTimes"] = [];
-    for (const row of v.slice(0, 8)) {
-      if (!row || typeof row !== "object") continue;
-      const h = Number((row as { hour?: unknown }).hour);
-      const m = Number((row as { minute?: unknown }).minute);
-      if (!Number.isInteger(h) || h < 0 || h > 23) continue;
-      if (!Number.isInteger(m) || m < 0 || m > 59) continue;
-      out.push({ hour: h, minute: m });
+const plannerDay = z.enum([
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday"
+]);
+
+const clock = z.object({
+  hour: z.number().int().min(0).max(23),
+  minute: z.number().int().min(0).max(59)
+});
+
+const routinePayloadSchema = z
+  .object({
+    plannerBlockEnabled: z.boolean(),
+    blockLabel: z.string().min(1).max(120),
+    sessionsPerWeekMin: z.number().int().min(1).max(14),
+    sessionsPerWeekMax: z.number().int().min(1).max(14),
+    sessionMinutesMin: z.number().int().min(1).max(240),
+    sessionMinutesMax: z.number().int().min(1).max(240),
+    plannerDaysOfWeek: z.array(plannerDay).min(1).max(7).optional(),
+    idealBlockTimes: z.array(clock).min(1).max(8),
+    earliestStart: clock,
+    latestEnd: clock,
+    minMinutesPerBlock: z.number().int().min(15).max(8 * 60).optional(),
+    maxAutoBlocksPerDay: z.number().int().min(1).max(8).optional()
+  })
+  .superRefine((p, ctx) => {
+    if (p.sessionMinutesMin > p.sessionMinutesMax) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "sessionMinutesMin cannot exceed sessionMinutesMax",
+        path: ["sessionMinutesMax"]
+      });
     }
-    return out.length > 0 ? out : null;
-  } catch {
-    return null;
-  }
-}
+    if (p.sessionsPerWeekMin > p.sessionsPerWeekMax) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "sessionsPerWeekMin cannot exceed sessionsPerWeekMax",
+        path: ["sessionsPerWeekMax"]
+      });
+    }
+  });
 
 export async function savePhysicalActivityRoutine(formData: FormData): Promise<void> {
   const session = await authOrPreview();
@@ -37,86 +65,58 @@ export async function savePhysicalActivityRoutine(formData: FormData): Promise<v
   const userId = session.user.id;
   const settings = await loadSettings(userId);
 
-  const plannerBlockEnabled = formData.get("planner_block_enabled") === "on";
-  const blockLabel = String(formData.get("block_label") ?? "").trim() || "Physical activity";
-  const cadenceFb = settings.gym.sessionsPerWeek;
-  const parseCadence = (key: string, fallback: number): number => {
-    const raw = Number(formData.get(key));
-    const base = Number.isFinite(raw) ? raw : fallback;
-    return Math.max(1, Math.min(14, Math.round(base)));
-  };
-  let sessionsPerWeekMin = parseCadence(
-    "sessions_per_week_min",
-    settings.gym.sessionsPerWeekMin ?? cadenceFb
-  );
-  let sessionsPerWeekMax = parseCadence(
-    "sessions_per_week_max",
-    settings.gym.sessionsPerWeekMax ?? cadenceFb
-  );
+  const jsonRaw = formData.get("routine_payload_json");
+  if (typeof jsonRaw !== "string" || !jsonRaw.trim()) return;
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(jsonRaw);
+  } catch {
+    return;
+  }
+
+  const parsed = routinePayloadSchema.safeParse(parsedJson);
+  if (!parsed.success) return;
+
+  const p = parsed.data;
+  let sessionsPerWeekMin = p.sessionsPerWeekMin;
+  let sessionsPerWeekMax = p.sessionsPerWeekMax;
   if (sessionsPerWeekMin > sessionsPerWeekMax) {
     const t = sessionsPerWeekMin;
     sessionsPerWeekMin = sessionsPerWeekMax;
     sessionsPerWeekMax = t;
   }
-  /** Legacy field: upper cadence bound for older readers. */
-  const sessionsPerWeek = sessionsPerWeekMax;
-  const runFb = settings.gym.runMinutes;
-  const parseSessionMins = (key: string, fallback: number): number => {
-    const raw = Number(formData.get(key));
-    const base = Number.isFinite(raw) ? raw : fallback;
-    return Math.max(1, Math.min(240, Math.round(base)));
-  };
-  let sessionMinutesMin = parseSessionMins(
-    "session_minutes_min",
-    settings.gym.sessionMinutesMin ?? runFb
-  );
-  let sessionMinutesMax = parseSessionMins(
-    "session_minutes_max",
-    settings.gym.sessionMinutesMax ?? runFb
-  );
+  let sessionMinutesMin = p.sessionMinutesMin;
+  let sessionMinutesMax = p.sessionMinutesMax;
   if (sessionMinutesMin > sessionMinutesMax) {
     const t = sessionMinutesMin;
     sessionMinutesMin = sessionMinutesMax;
     sessionMinutesMax = t;
   }
-  /** Legacy single field: upper bound matches longest session for drive/travel hints. */
-  const runMinutes = sessionMinutesMax;
-  const parsedTimes = parseIdealTimesJson(formData.get("ideal_times_json"));
-  const idealBlockTimes = parsedTimes ?? settings.gym.idealBlockTimes;
 
-  const pinRaw = formData.get("planner_days");
-  let plannerDaysOfWeek: GymSettings["plannerDaysOfWeek"] = undefined;
-  if (typeof pinRaw === "string" && pinRaw.trim() !== "") {
-    const allowed = new Set([
-      "monday",
-      "tuesday",
-      "wednesday",
-      "thursday",
-      "friday",
-      "saturday",
-      "sunday"
-    ]);
-    const days = pinRaw
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter((d) => allowed.has(d)) as NonNullable<GymSettings["plannerDaysOfWeek"]>;
-    plannerDaysOfWeek = days.length > 0 ? days : undefined;
-  }
+  const sessionsPerWeek = sessionsPerWeekMax;
+  const runMinutes = sessionMinutesMax;
+  const plannerDaysOfWeek: GymSettings["plannerDaysOfWeek"] =
+    p.plannerDaysOfWeek && p.plannerDaysOfWeek.length > 0 ? [...p.plannerDaysOfWeek] : undefined;
 
   await saveSettings(userId, {
     ...settings,
     gym: {
       ...settings.gym,
-      plannerBlockEnabled,
-      blockLabel,
+      plannerBlockEnabled: p.plannerBlockEnabled,
+      blockLabel: p.blockLabel.trim() || "Physical activity",
       sessionsPerWeek,
       sessionsPerWeekMin,
       sessionsPerWeekMax,
       runMinutes,
       sessionMinutesMin,
       sessionMinutesMax,
-      idealBlockTimes,
-      plannerDaysOfWeek
+      idealBlockTimes: p.idealBlockTimes,
+      plannerDaysOfWeek,
+      earliestStart: p.earliestStart,
+      latestEnd: p.latestEnd,
+      minMinutesPerBlock: p.minMinutesPerBlock,
+      maxAutoBlocksPerDay: p.maxAutoBlocksPerDay
     }
   });
   afterPhysicalRoutineSave(userId);

@@ -47,6 +47,8 @@ export type ChipKind =
   | "max-week"
   | "min-day"
   | "max-day"
+  | "min-block"
+  | "max-blocks-day"
   | "frequency"
   | "day"
   | "nice-weather"
@@ -77,6 +79,8 @@ const SUMMARY_ROW_CHIP_KEYS = new Set<ChipKind>([
   "max-week",
   "min-day",
   "max-day",
+  "min-block",
+  "max-blocks-day",
   "frequency",
   "day",
   "nice-weather",
@@ -171,6 +175,18 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
   }
   if (goal.maxMinutesPerDay !== undefined) {
     chips.push({ key: "max-day", label: `≤ ${formatMinutes(goal.maxMinutesPerDay)}/day` });
+  }
+  if (goal.minMinutesPerBlock !== undefined) {
+    chips.push({
+      key: "min-block",
+      label: `Block ≥ ${formatMinutes(goal.minMinutesPerBlock)}`
+    });
+  }
+  if (goal.maxAutoBlocksPerDay !== undefined) {
+    chips.push({
+      key: "max-blocks-day",
+      label: `≤ ${goal.maxAutoBlocksPerDay} blocks/day`
+    });
   }
   if (goal.allocationSharePercent !== undefined) {
     chips.push({
@@ -298,7 +314,8 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
    * Pass-2-style minutes from `remainingMinutes` for each goal that participates
    * in the post-floor remainder (`% of week` vs equal split of leftovers; same as
    * `computePass2AllocMinutesFromShareOfWeek`).
-   * Goals with a weekly floor and no `% share` are omitted — they do not take remainder.
+   * Goals with an **explicit** `minMinutesPerWeek` and no `% share` are omitted from
+   * the remainder cohort (daily-only floors still take Pass‑2 remainder like the planner).
    */
   remainderHintByGoalId: Record<string, number>;
   /** True when any scheduling goal references at least one goal group. */
@@ -315,7 +332,9 @@ export function summariseAllocation(goals: readonly WeeklyGoal[], freeMinutes: n
     reserved += floor;
     const ceiling = norm.maxMinutesPerWeek;
     const participatesInRemainder =
-      floor <= 0 || g.allocationSharePercent !== undefined;
+      g.minMinutesPerWeek === undefined ||
+      floor <= 0 ||
+      g.allocationSharePercent !== undefined;
     if (participatesInRemainder && (ceiling === undefined || floor < ceiling)) {
       equalShareCount++;
       eligibleForRemainder.push(g);
@@ -427,6 +446,12 @@ function aggregateSchedulingPartsForGoalGroup(grp: GoalGroup): string[] {
   }
   if (grp.maxMinutesPerDay !== undefined) {
     parts.push(`∑ ≤ ${formatMinutes(grp.maxMinutesPerDay)}/day`);
+  }
+  if (grp.minMinutesPerBlock !== undefined) {
+    parts.push(`∑ block ≥ ${formatMinutes(grp.minMinutesPerBlock)}`);
+  }
+  if (grp.maxAutoBlocksPerDay !== undefined) {
+    parts.push(`∑ ≤ ${grp.maxAutoBlocksPerDay} blocks/day`);
   }
   if (grp.allocationSharePercent !== undefined) {
     parts.push(`∑ ${grp.allocationSharePercent}% of week`);
@@ -638,37 +663,7 @@ export function goalExceedsDeclaredWeekShare(
     const baseline =
       pctHint !== undefined ? pctHint : (pct / 100) * summary.freeMinutes;
     if (pass2 <= baseline) return false;
-    const exceeds = pass2 > baseline + PASS2_WARN_SLACK_MIN;
-    // #region agent log
-    if (exceeds) {
-      fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a035b6" },
-        body: JSON.stringify({
-          sessionId: "a035b6",
-          location: "goal-helpers.ts:goalExceedsDeclaredWeekShare",
-          message: "pct row exceeds share baseline",
-          data: {
-            goalId: goal.id,
-            pct,
-            usedHint: pctHint !== undefined,
-            baseline,
-            capPctT: (pct / 100) * summary.freeMinutes,
-            pass2,
-            rawPass2,
-            logCred,
-            demandM: allocatorDemandMinutesBeforePass3,
-            floor,
-            effectiveTargetMinutes,
-            freeMinutes: summary.freeMinutes
-          },
-          timestamp: Date.now(),
-          hypothesisId: "pct-hint"
-        })
-      }).catch(() => {});
-    }
-    // #endregion
-    return exceeds;
+    return pass2 > baseline + PASS2_WARN_SLACK_MIN;
   }
   if (summary.hasWeightedShare && pct === undefined) return false;
 
@@ -680,37 +675,7 @@ export function goalExceedsDeclaredWeekShare(
         ? summary.perEqualShareMinutes
         : summary.equalSliceOfWeekMinutes;
   if (pass2 <= baseline) return false;
-  const exceedsEq = pass2 > baseline + PASS2_WARN_SLACK_MIN;
-  // #region agent log
-  if (exceedsEq) {
-    fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a035b6" },
-      body: JSON.stringify({
-        sessionId: "a035b6",
-        location: "goal-helpers.ts:goalExceedsDeclaredWeekShare",
-        message: "equal-share row exceeds baseline",
-        data: {
-          goalId: goal.id,
-          baseline,
-          hintDefined: hint !== undefined,
-          pass2,
-          rawPass2: Math.max(0, effectiveTargetMinutes - floor),
-          logCred: Math.max(0, daySheetLoggedMinutesForShare),
-          pass2FromDisplay,
-          demandM: allocatorDemandMinutesBeforePass3,
-          floor,
-          effectiveTargetMinutes,
-          hasWeightedShare: summary.hasWeightedShare,
-          freeMinutes: summary.freeMinutes
-        },
-        timestamp: Date.now(),
-        hypothesisId: "eq-baseline"
-      })
-    }).catch(() => {});
-  }
-  // #endregion
-  return exceedsEq;
+  return pass2 > baseline + PASS2_WARN_SLACK_MIN;
 }
 
 /**

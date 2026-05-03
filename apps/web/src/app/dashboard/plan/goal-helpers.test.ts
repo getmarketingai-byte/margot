@@ -68,6 +68,19 @@ describe("summariseAllocation", () => {
     const summary = summariseAllocation([g], 100);
     expect(summary.hasAnyGoalGroupMembership).toBe(true);
   });
+
+  it("includes daily-only floors in Pass-2 remainder hints (matches planner)", () => {
+    const daily = baseGoal({
+      id: "daily",
+      title: "Neutrino-like",
+      minMinutesPerDay: 30
+    });
+    const share = baseGoal({ id: "share", title: "Peer" });
+    const summary = summariseAllocation([daily, share], 1000);
+    expect(summary.remainderHintByGoalId["daily"]).toBeDefined();
+    expect(summary.remainderHintByGoalId["share"]).toBeDefined();
+    expect(summary.reservedMinutes).toBe(30 * 7);
+  });
 });
 
 describe("goalExceedsDeclaredWeekShare", () => {

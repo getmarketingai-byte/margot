@@ -279,9 +279,18 @@ export const gymSettingsSchema = z
     sessionsPerWeekMax: z.number().int().min(1).max(14).optional(),
     /** When set, sessions may only land on these weekdays; when unset, any day is allowed. */
     plannerDaysOfWeek: z.array(plannerDayOfWeek).min(1).max(7).optional(),
+    /**
+     * Optional minimum auto-block length for the planner physical-activity goal
+     * (same semantics as weekly goal `minMinutesPerBlock`).
+     */
+    minMinutesPerBlock: z.number().int().min(15).max(8 * 60).optional(),
+    /** Optional cap on auto blocks per calendar day for this routine. */
+    maxAutoBlocksPerDay: z.number().int().min(1).max(8).optional(),
+    /** Wall-clock start of the planner physical-activity band; becomes `placementIdealClockAfter` on the synthetic gym goal. */
     earliestStart: z
       .object({ hour: hour.default(6), minute: minute.default(0) })
       .default({ hour: 6, minute: 0 }),
+    /** Wall-clock end of that band; becomes `placementIdealClockBefore` on the synthetic gym goal. */
     latestEnd: z
       .object({ hour: hour.default(20), minute: minute.default(0) })
       .default({ hour: 20, minute: 0 }),

@@ -45,12 +45,15 @@ export function physicalActivityWeeklyGoalFromGymSettings(gym: GymSettings): Wee
   /** One workout block per day — spill passes otherwise stack extra slices on the same day. */
   const maxMinutesPerDay = sessionMax;
   const label = (gym.blockLabel ?? "").trim() || "Physical activity";
-  const earliestHour = Math.max(0, Math.min(23, gym.earliestStart.hour));
-  const latestEnd = gym.latestEnd;
-  const latestHour = Math.min(
-    24,
-    latestEnd.minute > 0 ? latestEnd.hour + 1 : latestEnd.hour
-  );
+  /** Same hard band as manual goals’ paired ideal-after / ideal-before (minute precision). */
+  const placementIdealClockAfter = {
+    hour: Math.max(0, Math.min(23, gym.earliestStart.hour)),
+    minute: Math.max(0, Math.min(59, gym.earliestStart.minute))
+  };
+  const placementIdealClockBefore = {
+    hour: Math.max(0, Math.min(23, gym.latestEnd.hour)),
+    minute: Math.max(0, Math.min(59, gym.latestEnd.minute))
+  };
   const dayPin =
     gym.plannerDaysOfWeek && gym.plannerDaysOfWeek.length > 0
       ? { daysOfWeek: [...gym.plannerDaysOfWeek] }
@@ -64,8 +67,8 @@ export function physicalActivityWeeklyGoalFromGymSettings(gym: GymSettings): Wee
     minMinutesPerDay: sessionMin,
     maxMinutesPerDay,
     frequencyPerWeek: sessionsHi,
-    earliestHour,
-    latestHour,
+    placementIdealClockAfter,
+    placementIdealClockBefore,
     energyMode: "hyperfocus",
     energyPolarity: "neutral",
     attentionMode: "unspecified",
@@ -75,6 +78,12 @@ export function physicalActivityWeeklyGoalFromGymSettings(gym: GymSettings): Wee
     specialGoalType: "gym",
     anchor: "gym-preferred-window",
     placementIdealClockTimes: [...gym.idealBlockTimes],
-    ...dayPin
+    ...dayPin,
+    ...(gym.minMinutesPerBlock !== undefined
+      ? { minMinutesPerBlock: gym.minMinutesPerBlock }
+      : {}),
+    ...(gym.maxAutoBlocksPerDay !== undefined
+      ? { maxAutoBlocksPerDay: gym.maxAutoBlocksPerDay }
+      : {})
   };
 }

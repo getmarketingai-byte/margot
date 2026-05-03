@@ -92,4 +92,28 @@ describe("physicalActivityWeeklyGoalFromGymSettings", () => {
     expect(g.minMinutesPerDay).toBe(40);
     expect(g.maxMinutesPerDay).toBe(48);
   });
+
+  it("maps gym earliest/latest to placement ideal after/before (hard window, minute precision)", () => {
+    const g = physicalActivityWeeklyGoalFromGymSettings({
+      ...DEFAULT_USER_SETTINGS.gym,
+      plannerBlockEnabled: true,
+      earliestStart: { hour: 7, minute: 15 },
+      latestEnd: { hour: 21, minute: 45 }
+    })!;
+    expect(g.placementIdealClockAfter).toEqual({ hour: 7, minute: 15 });
+    expect(g.placementIdealClockBefore).toEqual({ hour: 21, minute: 45 });
+    expect(g.earliestHour).toBeUndefined();
+    expect(g.latestHour).toBeUndefined();
+  });
+
+  it("passes optional min block and max blocks per day to the synthetic goal", () => {
+    const g = physicalActivityWeeklyGoalFromGymSettings({
+      ...DEFAULT_USER_SETTINGS.gym,
+      plannerBlockEnabled: true,
+      minMinutesPerBlock: 90,
+      maxAutoBlocksPerDay: 1
+    })!;
+    expect(g.minMinutesPerBlock).toBe(90);
+    expect(g.maxAutoBlocksPerDay).toBe(1);
+  });
 });

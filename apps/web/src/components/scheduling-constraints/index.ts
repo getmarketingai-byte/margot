@@ -1,4 +1,5 @@
 export { ConstraintCard } from "./constraint-card";
+export { DurationField } from "./duration-field";
 export {
   IdealClockTimesField,
   IdealPlacementClockAfterField,
