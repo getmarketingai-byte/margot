@@ -1,7 +1,8 @@
 /**
  * Travel / drive events module.
  * Scans configured calendars for events with locations, gets drive durations via Maps (no tolls),
- * and creates [Drive] events on a dedicated travel calendar. Arrive 15 min before each event,
+ * and creates [Drive] events on a dedicated travel calendar. Arrive 15 min before each event
+ * (except gym / physical-activity legs at the configured venue — no arrival buffer),
  * leave immediately after. When time at home between two events would be < 30 min, travel
  * goes directly between those locations instead of via home.
  * If the source event is marked as "free", the drive events for that leg are also created as free.
@@ -237,13 +238,15 @@ function _travelIsGymLocation(loc) {
 }
 
 /**
- * Returns true if the event is the special-case Gym (fixed drive minutes, no arrival buffer).
- * Location is matched by containing GYM_LOCATION_SUBSTRING (handles full address e.g. "..., 234 High St, ...").
+ * Returns true if the event is the special-case Gym / physical-activity venue visit
+ * (fixed drive minutes, no arrival buffer). Location is matched by containing
+ * GYM_LOCATION_SUBSTRING (handles full address e.g. "..., 234 High St, ...").
  */
 function _travelIsGymAshburton(calendarEvent) {
   var title = (calendarEvent.getTitle() || "").trim();
   var loc = (calendarEvent.getLocation() || "").trim();
-  return title === GYM_TITLE && _travelIsGymLocation(loc);
+  if (!_travelIsGymLocation(loc)) return false;
+  return title === GYM_TITLE || title === GYM_PLANNER_BLOCK_TITLE;
 }
 
 function _travelIsGymTitle(titleText) {

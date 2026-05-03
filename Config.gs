@@ -16,6 +16,8 @@ const CALENDARS_TO_EXCLUDE = ["Travel", "Waverley Valley Scout Group - Shared Ca
 
 // Shared gym constants.
 const GYM_TITLE = "Gym";
+/** Calendar title for planner-style physical activity at {@link GYM_LOCATION_SUBSTRING} (no drive arrival buffer). */
+const GYM_PLANNER_BLOCK_TITLE = "Physical activity";
 const GYM_LOCATION_SUBSTRING = "Snap Fitness 24/7 Ashburton";
 const GYM_DRIVE_MINUTES = 10;
 const GYM_RUN_MINUTES = 30;

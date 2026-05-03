@@ -64,4 +64,64 @@ describe("computeTravelBlocks", () => {
     expect(outbound.some((b) => b.title.includes("Technician"))).toBe(true);
     expect(direct).toHaveLength(0);
   });
+
+  it("applies arriveMinutesBefore to drive-pre duration for normal events", async () => {
+    const travel = travelSettingsSchema.parse({
+      homeAddress: "1 Home Rd",
+      routingProvider: "disabled",
+      fallbackDurationMinutes: 60,
+      arriveMinutesBefore: 15,
+      minHomeMinutes: 30
+    });
+    const gym = gymSettingsSchema.parse({
+      enabled: true,
+      title: "Gym",
+      blockLabel: "Physical activity",
+      locationSubstring: "Snap Fitness",
+      driveMinutes: 10
+    });
+
+    const t0 = Date.UTC(2026, 4, 6, 0, 0, 0, 0);
+    const gymVenue = "Snap Fitness 24/7, Example St";
+
+    const workMeeting: BusyEvent = {
+      sourceId: "cal:work",
+      title: "Client review",
+      startMs: t0 + 9 * HOUR_MS,
+      endMs: t0 + 10 * HOUR_MS,
+      busy: true,
+      location: "100 Collins St, Melbourne",
+      source: "google"
+    };
+
+    const physicalAtGym: BusyEvent = {
+      sourceId: "cal:gym-block",
+      title: "Physical activity",
+      startMs: t0 + 12 * HOUR_MS,
+      endMs: t0 + 13 * HOUR_MS,
+      busy: true,
+      location: gymVenue,
+      source: "google"
+    };
+
+    const blocks = await computeTravelBlocks(
+      [workMeeting, physicalAtGym],
+      travel,
+      gym,
+      noopResolver()
+    );
+
+    const workPre = blocks.find(
+      (b) => b.variant === "drive-pre" && b.title.includes("Client review")
+    );
+    const gymPre = blocks.find(
+      (b) => b.variant === "drive-pre" && b.title.includes("Physical activity")
+    );
+
+    expect(workPre).toBeDefined();
+    expect(workPre!.endMs - workPre!.startMs).toBe((60 + 15) * MINUTE_MS);
+
+    expect(gymPre).toBeDefined();
+    expect(gymPre!.endMs - gymPre!.startMs).toBe(10 * MINUTE_MS);
+  });
 });

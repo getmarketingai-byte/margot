@@ -11,9 +11,10 @@
  * and `Travel.gs` Apps Script logic. Travel now consults a `LegResolver`
  * (see `lib/routing`) for real drive durations, with three short-circuits:
  *
- *   • Gym events match `settings.gym.title` + `gym.locationSubstring` and
- *     use `gym.driveMinutes` flat with no arrive-before buffer (matches
- *     the legacy `_travelIsGymAshburton` path).
+ *   • Physical-activity / gym venue events match `settings.gym.title` **or**
+ *     `settings.gym.blockLabel` (same trimmed casing) plus
+ *     `gym.locationSubstring`, use `gym.driveMinutes` flat, and skip the
+ *     arrive-before buffer (matches the legacy `_travelIsGymAshburton` path).
  *   • Direct-drive collapse: when time at home between two consecutive
  *     events would be `< minHomeMinutes`, emit one drive A→B instead of
  *     drive-home(A) + drive-pre(B).
@@ -178,12 +179,13 @@ export interface SystemBlock extends BusyEvent {
  * Returns drive blocks bracketing every busy event with a physical location.
  *
  * Behaviour summary:
- *   • Each physical event gets a `drive-pre` (ending `arriveMinutesBefore`
- *     before the event start) and `drive-post` (starting at event end),
+ *   • Each physical event gets a `drive-pre` (long enough to finish travel
+ *     plus `arriveMinutesBefore` before the event start) and `drive-post`
+ *     (starting at event end),
  *     each lasting either the resolver-supplied duration or
  *     `fallbackDurationMinutes`.
- *   • Gym events skip the arrive-before buffer and use a flat
- *     `gym.driveMinutes` (free, no provider call).
+ *   • Gym / planner block-label events at the configured venue skip the
+ *     arrive-before buffer and use a flat `gym.driveMinutes` (no provider call).
  *   • Two consecutive events that don't allow `minHomeMinutes` at home in
  *     between get a single direct drive replacing the pair of home-legs.
  *   • Even without a resolver, overlapping post(A) + pre(B) blocks are
@@ -452,17 +454,22 @@ function isVirtual(location: string, substrings: readonly string[]): boolean {
 }
 
 /**
- * True when an event matches the configured Gym title + location. Mirrors
+ * True when an event is the configured physical-activity venue visit:
+ * `gym.title` or `gym.blockLabel` (planner label, e.g. "Physical activity")
+ * plus location containing `gym.locationSubstring`. Mirrors
  * `_travelIsGymAshburton` from `Travel.gs`.
  */
 function isGymEvent(ev: BusyEvent, gym: GymSettings): boolean {
   if (!gym.enabled) return false;
   if (!ev.location) return false;
-  const title = (ev.title || "").trim();
-  if (title.toLowerCase() !== gym.title.trim().toLowerCase()) return false;
   const sub = (gym.locationSubstring || "").trim().toLowerCase();
   if (!sub) return false;
-  return ev.location.toLowerCase().includes(sub);
+  if (!ev.location.toLowerCase().includes(sub)) return false;
+  const title = (ev.title || "").trim().toLowerCase();
+  const gymTitle = gym.title.trim().toLowerCase();
+  if (title === gymTitle) return true;
+  const blockLabel = (gym.blockLabel || "").trim().toLowerCase();
+  return blockLabel.length > 0 && title === blockLabel;
 }
 
 /* ─────────────────────────────── Sleep ───────────────────────────────────── */
