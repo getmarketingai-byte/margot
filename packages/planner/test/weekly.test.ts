@@ -8,6 +8,7 @@ import {
   computeAllocationRemainderFractions,
   computePass2AllocMinutesFromShareOfWeek,
   computeDayCalendarDrainScores,
+  maxNonAdjacentPlacementDaysOnCalendar,
   loggedMinutesForGoal,
   proposedFutureMinutesForGoal
 } from "../src/weekly";
@@ -180,15 +181,50 @@ describe("allocateWeek", () => {
       expect(b.endMs).toBeLessThanOrEqual(niceWeatherWindows[0]!.endMs);
     }
 
-    expect(
-      result.blocks.some(
-        (b) =>
-          b.goalId === "indoor-deep" &&
-          b.startMs >= saturday &&
-          b.endMs <= saturday + DAY_MS
-      )
-    ).toBe(false);
+    const niceStart = saturday + 9 * HOUR_MS;
+    const niceEnd = saturday + 16 * HOUR_MS;
+    for (const b of result.blocks.filter((b) => b.goalId === "indoor-deep")) {
+      if (b.startMs >= saturday + DAY_MS || b.endMs <= saturday) continue;
+      const overlapsNice = b.endMs > niceStart && b.startMs < niceEnd;
+      expect(overlapsNice).toBe(false);
+    }
     expect(result.blocks.filter((b) => b.goalId === "indoor-deep")).not.toHaveLength(0);
+  });
+
+  it("maxNonAdjacentPlacementDaysOnCalendar counts independent ISO weekdays", () => {
+    expect(maxNonAdjacentPlacementDaysOnCalendar([0, 1, 2])).toBe(2);
+    expect(maxNonAdjacentPlacementDaysOnCalendar([0, 1, 2, 3, 4, 5, 6])).toBe(4);
+  });
+
+  it("allows heavy Pass-3 demand to ignore pass-0 non-adjacent spread (still places on Saturday)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const saturday = weekStartMs + 5 * DAY_MS;
+    const niceWeatherWindows = [{ startMs: saturday + 9 * HOUR_MS, endMs: saturday + 16 * HOUR_MS }];
+    const result = allocateWeek({
+      plan: {
+        id: "weekend-bypass",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "big",
+            title: "Big work",
+            minMinutesPerWeek: 960,
+            maxMinutesPerDay: 480,
+            energyMode: "neutral"
+          })
+        ]
+      },
+      busy: [],
+      niceWeatherWindows,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const satBlocks = result.blocks.filter(
+      (b) => b.goalId === "big" && b.startMs >= saturday && b.endMs <= saturday + DAY_MS
+    );
+    expect(satBlocks.length).toBeGreaterThan(0);
   });
 
   it("places goals into free gaps and reports per-goal scheduled minutes", () => {
@@ -2878,5 +2914,56 @@ describe("allocator stability helpers", () => {
     const gymBlocks = res.blocks.filter((b) => b.goalId === "gym" && !b.segment);
     expect(gymBlocks.length).toBeLessThanOrEqual(3);
     expect(res.metrics.perGoal["gym"]!.targetMinutes).toBeLessThanOrEqual(480);
+  });
+
+  it("Pass 3 does not place another goal between two auto blocks of the same goal on one day (contiguity bias)", () => {
+    const ws = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const mon = ["monday"] as const;
+    const sandwichPlan: WeeklyPlan = {
+      id: "p-sandwich",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "heavy-mono",
+          title: "Heavy mono",
+          targetMinutes: 400,
+          daysOfWeek: [...mon],
+          energyMode: "neutral"
+        }),
+        goal({
+          id: "light-peer",
+          title: "Light peer",
+          targetMinutes: 100,
+          daysOfWeek: [...mon],
+          energyMode: "neutral"
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+    const res = allocateWeek({
+      plan: sandwichPlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs: ws,
+      weekEndMs: ws + 7 * DAY_MS,
+      weekAnchorDate: "2026-04-27"
+    });
+    const day0Start = ws;
+    const day0End = ws + DAY_MS;
+    const dayBlocks = res.blocks
+      .filter((b) => !b.segment && b.startMs >= day0Start && b.endMs <= day0End)
+      .sort((a, b) => a.startMs - b.startMs);
+    let prevHeavy = -1;
+    for (let i = 0; i < dayBlocks.length; i++) {
+      if (dayBlocks[i]!.goalId !== "heavy-mono") continue;
+      if (prevHeavy >= 0) {
+        const mid = dayBlocks.slice(prevHeavy + 1, i);
+        expect(mid.some((b) => b.goalId !== "heavy-mono")).toBe(false);
+      }
+      prevHeavy = i;
+    }
   });
 });

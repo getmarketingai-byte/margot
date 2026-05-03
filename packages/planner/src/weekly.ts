@@ -96,6 +96,13 @@ import { QUANTUM } from "./weekly-grid";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Pass‑0 "non-adjacent spread" is low priority: at most this many deferrals per goal per week. */
+const PASS0_NONADJ_SPREAD_MAX_DEFERRALS_PER_WEEK = 2;
+/**
+ * Only consider pass‑0 non-adjacent spread when Pass‑3 demand is at or below this
+ * (minutes). Heavier rows skip the rule so Fri→Sat and large stacks stay placeable.
+ */
+const PASS0_NONADJ_SPREAD_MAX_DEMAND_FOR_RULE_MIN = 12 * 60;
 /** Reference waking-day busy proxy (14h) for normalising calendar load to 0–1. */
 const DRAIN_REF_MS = 14 * 60 * MS_PER_MIN;
 
@@ -737,22 +744,43 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       allocationNowMs,
       sleepIntervals,
       batteryContext,
-      groupPlacement
+      groupPlacement,
+      prepared
     );
   };
 
   for (const p of pass3Sequential) runAllocateGoalPass3(p);
 
-  // Repeated passes over the round-robin cohort in **plan list order** (same comparator
-  // as the initial `prepared` sort). Earlier goals get first pick of gaps each wave;
-  // multiple waves still let later rows place once earlier demands shrink.
+  // Repeated passes over the round-robin cohort. Base order matches `prepared` Pass‑3
+  // comparator; **each wave** re-sorts so goals that already have more auto time on the
+  // calendar run first. That lets a heavy row extend contiguously before lighter peers
+  // claim a gap that would otherwise sit between two chunks after the next wave (see
+  // gym-pad contiguity + peer gap filters in `allocateGoal`).
   const RR_ROUNDS = 128;
-  const pass3RoundRobinOrdered = [...pass3RoundRobin].sort((a, b) =>
+  const pass3RoundRobinBase = [...pass3RoundRobin].sort((a, b) =>
     comparePreparedGoalsForPass3Placement(a, b, fw)
   );
   for (let r = 0; r < RR_ROUNDS; r++) {
+    const placedAutoMinByGoal = new Map<string, number>();
+    for (const b of blocks) {
+      if (b.segment) continue;
+      const gid = b.goalId;
+      placedAutoMinByGoal.set(
+        gid,
+        (placedAutoMinByGoal.get(gid) ?? 0) + Math.floor((b.endMs - b.startMs) / MS_PER_MIN)
+      );
+    }
+    const ordered = [...pass3RoundRobinBase].sort((a, b) => {
+      const pa = placedAutoMinByGoal.get(a.goal.id) ?? 0;
+      const pb = placedAutoMinByGoal.get(b.goal.id) ?? 0;
+      if (pa !== pb) return pb - pa;
+      const aDefer = respectsPeerContinuationPocketsWhenChoosingGaps(a.goal) ? 1 : 0;
+      const bDefer = respectsPeerContinuationPocketsWhenChoosingGaps(b.goal) ? 1 : 0;
+      if (aDefer !== bDefer) return aDefer - bDefer;
+      return comparePreparedGoalsForPass3Placement(a, b, fw);
+    });
     let progressed = false;
-    for (const p of pass3RoundRobinOrdered) {
+    for (const p of ordered) {
       if (p.effectiveMinutes < QUANTUM) continue;
       const before = p.effectiveMinutes;
       runAllocateGoalPass3(p);
@@ -1758,6 +1786,35 @@ function tryPinGoalBlock(
   return durMin;
 }
 
+/**
+ * Largest subset of `allowedDayIdx` where no two ISO weekdays are adjacent (|d − d′| ≠ 1).
+ * Used to decide whether pass‑0 "non-adjacent spread" can ever absorb weekly demand.
+ */
+export function maxNonAdjacentPlacementDaysOnCalendar(allowedDayIdx: readonly number[]): number {
+  const sorted = [...new Set(allowedDayIdx)].sort((a, b) => a - b);
+  const n = sorted.length;
+  if (n === 0) return 0;
+  if (n > 12) return 7;
+  let best = 0;
+  for (let mask = 0; mask < 1 << n; mask++) {
+    const picked: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) picked.push(sorted[i]!);
+    }
+    let ok = true;
+    for (let a = 0; a < picked.length && ok; a++) {
+      for (let b = a + 1; b < picked.length; b++) {
+        if (Math.abs(picked[a]! - picked[b]!) === 1) {
+          ok = false;
+          break;
+        }
+      }
+    }
+    if (ok) best = Math.max(best, picked.length);
+  }
+  return best;
+}
+
 function allocateGoal(
   prepared: PreparedGoal,
   days: { startMs: number; endMs: number; gaps: Interval[] }[],
@@ -1783,12 +1840,16 @@ function allocateGoal(
     dayDrainScores: readonly number[];
     personalSystem: PersonalSystem;
   },
-  groupPlacement?: GoalGroupPlacementContext
+  groupPlacement?: GoalGroupPlacementContext,
+  /** Full Pass‑3 cohort (mutating `effectiveMinutes`) for anti–peer-sandwich gap filtering. */
+  pass3PreparedCohort: readonly PreparedGoal[]
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
   try {
     if (remainingMinutes <= 0) return;
+
+  const entryPass3DemandMinutes = remainingMinutes;
 
   const gymTravelPadMin = gymTravelPadMinutesForGoal(goal, settings.gym);
   const gymTravelPadMs = gymTravelPadMin * MS_PER_MIN;
@@ -1965,6 +2026,22 @@ function allocateGoal(
     }
   }
 
+  let pass0NonAdjacentSpreadDeferrals = 0;
+  const sliceCapForSpreadRule = Math.min(
+    perDayBudget,
+    norm.maxMinutesPerDay !== undefined ? norm.maxMinutesPerDay : Number.POSITIVE_INFINITY
+  );
+  const sliceQuantisedForSpread = Math.max(QUANTUM, Math.floor(sliceCapForSpreadRule / QUANTUM) * QUANTUM);
+  const minCalendarDaysAtPass0Slice = Math.ceil(entryPass3DemandMinutes / sliceQuantisedForSpread);
+  const maxNonAdjacentPlacementDays = maxNonAdjacentPlacementDaysOnCalendar(allowedDays);
+  // Without an explicit daily cap, "needs every second day" is ill-defined for Pass‑3
+  // geometry; keep spread available for nice-weather spill tests (uncapped rows).
+  const pass0SpreadRequiresAdjacentDays =
+    norm.maxMinutesPerDay !== undefined &&
+    minCalendarDaysAtPass0Slice > maxNonAdjacentPlacementDays;
+  const pass0NonAdjacentSpreadLightDemand =
+    entryPass3DemandMinutes <= PASS0_NONADJ_SPREAD_MAX_DEMAND_FOR_RULE_MIN;
+
   let slotIndex = nextAutoGoalSlotIndex(blocks, goal.id, weekAnchorDate);
   /** Drag overrides that failed `tryPinGoalBlock` — treat as unpinned so we do not auto-place duplicates on later passes. */
   const ignoredGoalPinKeys = new Set<string>();
@@ -1981,6 +2058,7 @@ function allocateGoal(
         niceWeatherWindows &&
         niceWeatherWindows.length > 0
     );
+
   // Each pass schedules at most one auto block per allowed day. Fragmented weeks
   // (many small pockets on the same day, or invert / nice-weather windows) may need
   // far more passes than a tiny fixed cap — otherwise we stop at `maxPasses` with
@@ -2073,17 +2151,20 @@ function allocateGoal(
       // one auto block per day (pins already consumed placement above via `continue`).
       if (norm.frequencyPerWeek !== undefined && dayGoalBlocks.length > 0) continue;
 
-      // Secondary guardrail (even-split pass only): avoid placing this goal on
-      // consecutive days when a non-adjacent day is still available. Skip this when
-      // the goal already uses invert / nice-weather windows — pockets are scarce and
-      // pass-0 deferral leaves demand unplaced while peers fill shared gaps.
+      // Pass‑0 "non-adjacent spread" (low priority): defer placing next to an existing
+      // same-goal day when a non-adjacent empty day still exists. Capped per week,
+      // skipped for heavy demand or when demand cannot fit without consecutive days.
       const occupiedDays = occupiedGoalDayIndexes();
-      if (
+      const eligiblePass0NonAdjacentSpread =
         pass === 0 &&
         !needsExtraPasses &&
+        pass0NonAdjacentSpreadLightDemand &&
+        !pass0SpreadRequiresAdjacentDays &&
+        pass0NonAdjacentSpreadDeferrals < PASS0_NONADJ_SPREAD_MAX_DEFERRALS_PER_WEEK &&
         hasAdjacentGoalDay(dayIdx, occupiedDays) &&
-        hasNonAdjacentAlternativeDay(dayIdx, occupiedDays)
-      ) {
+        hasNonAdjacentAlternativeDay(dayIdx, occupiedDays);
+      if (eligiblePass0NonAdjacentSpread) {
+        pass0NonAdjacentSpreadDeferrals++;
         continue;
       }
 
@@ -2106,25 +2187,63 @@ function allocateGoal(
       // Energy-suggestion pass needs to see only blocks already placed on the
       // current day so adjacency scoring doesn't reach across day boundaries.
       const placedToday = blocksByDay[dayIdx] ?? [];
-      const slot = pickGapForGoal(
-        futureCandidateGaps,
-        goal,
-        dayHeadroom,
-        energy,
-        placement,
-        frameworkInclusion,
-        tz,
-        placedToday,
-        gymTravelPadMin,
-        battery
-          ? {
-              goalsById: battery.goalsById,
-              dayDrainScores: battery.dayDrainScores,
-              dayIdx,
-              personalSystem: battery.personalSystem
-            }
-          : undefined
-      );
+      const ownNonSegment = dayGoalBlocks.filter((b) => !b.segment);
+      const contiguitySlackMs = Math.max(MS_PER_MIN, gymTravelPadMs + MS_PER_MIN);
+      const gapPool: readonly Interval[] =
+        norm.frequencyPerWeek === undefined
+          ? filterGapsAvoidSandwichingPeerWithUnmetDemand(
+              futureCandidateGaps,
+              placedToday,
+              day.endMs,
+              goal.id,
+              pass3PreparedCohort,
+              contiguitySlackMs,
+              respectsPeerContinuationPocketsWhenChoosingGaps(goal)
+            )
+          : futureCandidateGaps;
+      const gapsTouchingOwn =
+        norm.frequencyPerWeek === undefined && ownNonSegment.length > 0
+          ? gapsTouchingOwnDayBlocks(gapPool, ownNonSegment, contiguitySlackMs)
+          : [];
+      const batteryArg = battery
+        ? {
+            goalsById: battery.goalsById,
+            dayDrainScores: battery.dayDrainScores,
+            dayIdx,
+            personalSystem: battery.personalSystem
+          }
+        : undefined;
+      let slot =
+        gapsTouchingOwn.length > 0
+          ? pickGapForGoal(
+              gapsTouchingOwn,
+              goal,
+              dayHeadroom,
+              energy,
+              placement,
+              frameworkInclusion,
+              tz,
+              placedToday,
+              gymTravelPadMin,
+              batteryArg,
+              false
+            )
+          : null;
+      if (!slot) {
+        slot = pickGapForGoal(
+          gapPool,
+          goal,
+          dayHeadroom,
+          energy,
+          placement,
+          frameworkInclusion,
+          tz,
+          placedToday,
+          gymTravelPadMin,
+          batteryArg,
+          norm.frequencyPerWeek === undefined
+        );
+      }
       if (!slot) continue;
       if (minPerDay > 0 && slot.minutes < minPerDay) continue;
       // Pass 0 caps each placement at `perDayBudget` for an even spread. Spill passes
@@ -2183,7 +2302,9 @@ function allocateGoal(
       slotIndex++;
       daysScheduledThisPass++;
     }
-    if (daysScheduledThisPass === 0) break;
+    if (daysScheduledThisPass === 0) {
+      break;
+    }
   }
   const nodeEnv =
     (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV ?? "";
@@ -2563,7 +2684,143 @@ function scoreGapForPlacementIdeals(
     const distMin = Math.abs(clampedStart - idealMs) / MS_PER_MIN;
     bestDistMin = Math.min(bestDistMin, distMin);
   }
-  return -PLACEMENT_IDEAL_CLOCK_WEIGHT * bestDistMin;
+  const raw = -PLACEMENT_IDEAL_CLOCK_WEIGHT * bestDistMin;
+  return Math.max(raw, PLACEMENT_IDEAL_CLOCK_SCORE_FLOOR);
+}
+
+/**
+ * When multiple auto blocks per day are allowed, strongly prefer extending an
+ * existing same-goal run wall-to-wall so Pass‑3 round-robin peers cannot slot
+ * into a gap between two chunks of the same goal.
+ */
+const SAME_GOAL_GAP_TOUCH_SCORE_BONUS = 22;
+
+function scoreGapTouchingPlacedSameGoalWall(
+  gap: Interval,
+  goalId: string,
+  placedToday: readonly AllocatedBlock[],
+  slackMs: number
+): number {
+  for (const b of placedToday) {
+    if (b.segment || b.goalId !== goalId) continue;
+    if (
+      Math.abs(gap.startMs - b.endMs) <= slackMs ||
+      Math.abs(b.startMs - gap.endMs) <= slackMs
+    ) {
+      return SAME_GOAL_GAP_TOUCH_SCORE_BONUS;
+    }
+  }
+  return 0;
+}
+
+/** Free gaps whose interval is within `slackMs` of an existing same-goal block (accounts for gym drive padding after `consumeFromGaps`). */
+function gapsTouchingOwnDayBlocks(
+  gaps: readonly Interval[],
+  ownBlocks: readonly AllocatedBlock[],
+  slackMs: number
+): Interval[] {
+  if (ownBlocks.length === 0) return [];
+  return gaps.filter((g) =>
+    ownBlocks.some(
+      (b) =>
+        !b.segment &&
+        (Math.abs(g.startMs - b.endMs) <= slackMs || Math.abs(b.startMs - g.endMs) <= slackMs)
+    )
+  );
+}
+
+function mergeAdjacentSameGoalRunsOnDay(
+  pieces: readonly AllocatedBlock[],
+  slackMs: number
+): { startMs: number; endMs: number }[] {
+  if (pieces.length === 0) return [];
+  const sorted = [...pieces].sort((a, b) => a.startMs - b.startMs);
+  const runs: { startMs: number; endMs: number }[] = [];
+  for (const b of sorted) {
+    const last = runs[runs.length - 1];
+    if (last && b.startMs - last.endMs <= slackMs) {
+      last.endMs = Math.max(last.endMs, b.endMs);
+    } else runs.push({ startMs: b.startMs, endMs: b.endMs });
+  }
+  return runs;
+}
+
+/**
+ * Goals the allocator may move to another gap/day so they do not sit in another
+ * cohort member’s continuation pocket when that peer still has Pass‑3 demand
+ * (House Work reshuffling around 3dCad, etc.).
+ */
+function respectsPeerContinuationPocketsWhenChoosingGaps(goal: WeeklyGoal): boolean {
+  if (goal.commitmentLevel === "nice_to_have") return true;
+  const raw = goal.title.trim().toLowerCase();
+  const compact = raw.replace(/\s+/g, "");
+  if (compact.includes("housework")) return true;
+  return raw.includes("house") && raw.includes("work");
+}
+
+/**
+ * Remove free gaps that (a) sit strictly between two chunks of another cohort goal
+ * with unmet demand, and (b) strict interiors of the pocket after a single run of
+ * such a goal when the placer is reshuffle-friendly **or** the peer sets any
+ * positive `minMinutesPerBlock` (continuation rows like 3dCad).
+ */
+function filterGapsAvoidSandwichingPeerWithUnmetDemand(
+  gaps: readonly Interval[],
+  placedToday: readonly AllocatedBlock[],
+  dayEndMs: number,
+  selfGoalId: string,
+  cohort: readonly PreparedGoal[],
+  slackMs: number,
+  placerReshuffleFriendly: boolean
+): Interval[] {
+  if (gaps.length === 0) return [];
+  const demandFor = new Map(cohort.map((p) => [p.goal.id, p.effectiveMinutes]));
+  const dayBlocks = placedToday.filter((b) => !b.segment);
+  const kept: Interval[] = [];
+  nextGap: for (const g of gaps) {
+    for (const pg of cohort) {
+      const peerId = pg.goal.id;
+      if (peerId === selfGoalId) continue;
+      const rem = demandFor.get(peerId) ?? 0;
+      if (rem < QUANTUM) continue;
+      const peerPieces = dayBlocks.filter((b) => b.goalId === peerId);
+      if (peerPieces.length === 0) continue;
+      const merged = mergeAdjacentSameGoalRunsOnDay(peerPieces, slackMs);
+      if (merged.length >= 2) {
+        for (let i = 0; i < merged.length - 1; i++) {
+          const leftEnd = merged[i]!.endMs;
+          const rightStart = merged[i + 1]!.startMs;
+          if (rightStart - leftEnd < QUANTUM * MS_PER_MIN) continue;
+          if (
+            g.startMs > leftEnd + slackMs &&
+            g.endMs < rightStart - slackMs
+          ) {
+            continue nextGap;
+          }
+        }
+      } else if (merged.length === 1) {
+        const rigidPeer = minMinutesPerBlockFloor(pg.goal) > 0;
+        if (!placerReshuffleFriendly && !rigidPeer) continue;
+        const b0 = merged[0]!;
+        const sortedDay = [...dayBlocks].sort((a, b) => a.startMs - b.startMs);
+        let nextStart: number | null = null;
+        for (const h of sortedDay) {
+          if (h.startMs < b0.endMs - slackMs) continue;
+          if (h.goalId === peerId && h.startMs <= b0.endMs + slackMs) continue;
+          nextStart = h.startMs;
+          break;
+        }
+        const pocketEnd = nextStart ?? dayEndMs;
+        if (pocketEnd - b0.endMs >= QUANTUM * MS_PER_MIN) {
+          if (g.startMs > b0.endMs + slackMs && g.endMs < pocketEnd - slackMs) {
+            continue nextGap;
+          }
+        }
+      }
+    }
+    kept.push(g);
+  }
+  return kept.length > 0 ? kept : [...gaps];
 }
 
 function pickGapForGoal(
@@ -2581,8 +2838,10 @@ function pickGapForGoal(
     dayDrainScores: readonly number[];
     dayIdx: number;
     personalSystem: PersonalSystem;
-  }
+  },
+  sameDayMultiAutoAllowed = false
 ): { gap: Interval; minutes: number } | null {
+  const contiguitySlackMs = Math.max(MS_PER_MIN, gymTravelPadMin * MS_PER_MIN + MS_PER_MIN);
   const earliest = goal.earliestHour ?? 0;
   const latest = goal.latestHour ?? 24;
   const weights = placementWeightsFromPriority(placement);
@@ -2604,10 +2863,13 @@ function pickGapForGoal(
         : scoreEnergyAwareness(g, goal, tz, placedToday, weights, frameworkInclusion);
     const batteryScore = battery ? scoreBatteryPlacement(g, goal, tz, placedToday, battery) : 0;
     const idealScore = scoreGapForPlacementIdeals(g, goal, tz, blockMin);
+    const contiguityScore = sameDayMultiAutoAllowed
+      ? scoreGapTouchingPlacedSameGoalWall(g, goal.id, placedToday, contiguitySlackMs)
+      : 0;
     candidates.push({
       gap: g,
       minutes: blockMin,
-      score: energyScore + suggestionScore + batteryScore + idealScore
+      score: energyScore + suggestionScore + batteryScore + idealScore + contiguityScore
     });
   }
   if (candidates.length === 0) return null;
@@ -2630,6 +2892,14 @@ function scoreGapForEnergy(
   // Hyperfocus prefers earlier morning (8-12), hyperaware prefers afternoon (14-18).
   if (mode === "hyperfocus") return -Math.abs(startHour - 9);
   if (mode === "hyperaware") return -Math.abs(startHour - 15);
+  if (mode === "neutral") {
+    // Before noon: favour earlier starts (finish-early) so a 7am pocket is not skipped
+    // for a later same-day gap — that left prime mornings for lower RR peers.
+    // After noon: keep a mild mid-afternoon peak so workLayer / attention signals can
+    // still outrank distant-morning gaps for evening-biased goals (see weekly tests).
+    if (startHour < 12) return (12 - startHour) * 0.06;
+    return -Math.abs(startHour - 12) * 0.35;
+  }
   return -Math.abs(startHour - 12);
 }
 
@@ -2748,6 +3018,13 @@ function placementWeightsFromPriority(
  */
 /** Weight for `placementIdealClockTimes`: gaps where the block can start nearer ideal score higher. */
 const PLACEMENT_IDEAL_CLOCK_WEIGHT = 0.12;
+/**
+ * Far ideal times must not dominate `energyMode` / finish-early morning bias — raw
+ * `-PLACEMENT_IDEAL_CLOCK_WEIGHT * distMin` can exceed 40 for a morning gap vs a
+ * mid-afternoon ideal, starving prime weekday morning gaps for lower RR peers.
+ * Floor stays shallow so `workLayer` / `attentionMode` nudges still win vs AM.
+ */
+const PLACEMENT_IDEAL_CLOCK_SCORE_FLOOR = -1;
 
 export const ENERGY_SUGGESTION_WEIGHTS = {
   /** Per-hour distance penalty when a goal carries an attentionMode. */
