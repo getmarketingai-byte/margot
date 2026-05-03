@@ -114,14 +114,26 @@ describe("computeTravelBlocks", () => {
     const workPre = blocks.find(
       (b) => b.variant === "drive-pre" && b.title.includes("Client review")
     );
+    const workArrival = blocks.find(
+      (b) => b.variant === "drive-arrival-buffer" && b.title.includes("Client review")
+    );
     const gymPre = blocks.find(
       (b) => b.variant === "drive-pre" && b.title.includes("Physical activity")
     );
 
     expect(workPre).toBeDefined();
-    expect(workPre!.endMs - workPre!.startMs).toBe((60 + 15) * MINUTE_MS);
+    expect(workPre!.endMs - workPre!.startMs).toBe(60 * MINUTE_MS);
+    expect(workPre!.endMs).toBe(workMeeting.startMs - 15 * MINUTE_MS);
+
+    expect(workArrival).toBeDefined();
+    expect(workArrival!.endMs - workArrival!.startMs).toBe(15 * MINUTE_MS);
+    expect(workArrival!.startMs).toBe(workPre!.endMs);
+    expect(workArrival!.endMs).toBe(workMeeting.startMs);
 
     expect(gymPre).toBeDefined();
     expect(gymPre!.endMs - gymPre!.startMs).toBe(10 * MINUTE_MS);
+    expect(
+      blocks.some((b) => b.variant === "drive-arrival-buffer" && b.title.includes("Physical activity"))
+    ).toBe(false);
   });
 });

@@ -85,6 +85,11 @@ function isInboundDriveLegTitle(rawTitle: string, tag: string): boolean {
   );
 }
 
+/** Synthetic block after wheel-time `drive-pre` / `drive-direct` (parking, walk-in). */
+function isDriveArrivalBufferTitle(rawTitle: string, tag: string): boolean {
+  return rawTitle.trim().startsWith(`${tag} (arrive by) `);
+}
+
 /**
  * Calendar rows that log real sleep (e.g. `[Sleep][Actual]` or `[Sleep] [Actual]`) — busy only.
  * Case-insensitive; tolerates whitespace between tags (collapsed check + substring fallback).
@@ -118,7 +123,8 @@ function internalTravelDriveLeg(ev: BusyEvent, driveTag: string): boolean {
   const title = (ev.title || "").trim();
   return (
     isOutboundDriveLegTitle(title, tag, "includeDirect") ||
-    isInboundDriveLegTitle(title, tag)
+    isInboundDriveLegTitle(title, tag) ||
+    isDriveArrivalBufferTitle(title, tag)
   );
 }
 
@@ -148,7 +154,7 @@ export interface SystemBlock extends BusyEvent {
   /**
    * Optional UI hint:
    *   - "split" / "underMinimum"  — sleep
-   *   - "drive-pre" / "drive-post" / "drive-direct" — travel
+   *   - "drive-pre" / "drive-post" / "drive-direct" / "drive-arrival-buffer" — travel
    *   - "morning" / "shutdown"    — routine
    */
   variant?:
@@ -157,6 +163,7 @@ export interface SystemBlock extends BusyEvent {
     | "drive-pre"
     | "drive-post"
     | "drive-direct"
+    | "drive-arrival-buffer"
     | "morning"
     | "shutdown";
   /**
@@ -179,9 +186,10 @@ export interface SystemBlock extends BusyEvent {
  * Returns drive blocks bracketing every busy event with a physical location.
  *
  * Behaviour summary:
- *   • Each physical event gets a `drive-pre` (long enough to finish travel
- *     plus `arriveMinutesBefore` before the event start) and `drive-post`
- *     (starting at event end),
+ *   • Each physical event gets a `drive-pre` (wheel time only) ending at
+ *     `eventStart − arriveMinutesBefore`, then a `drive-arrival-buffer` busy
+ *     slice up to the event start (parking / on-site prep). Gym legs omit both.
+ *   • `drive-post` starts at event end.
  *     each lasting either the resolver-supplied duration or
  *     `fallbackDurationMinutes`.
  *   • Gym / planner block-label events at the configured venue skip the
@@ -286,24 +294,39 @@ export async function computeTravelBlocks(
     const evArriveBuffer = isGym ? 0 : arriveBufferMs;
 
     // --- drive-pre (skipped if prev iter emitted a direct drive INTO us)
-    // Reserve both travel time AND the configured arrive-early buffer so
-    // planner blocks cannot be squeezed between "drive done" and event start.
+    // Wheel time ends at "arrive by"; a separate `drive-arrival-buffer` block
+    // keeps the pre-event window busy for allocation (matches Travel.gs).
     if (!directIntoNext) {
       // Zero-minute legs are dropped by ICS rendering (`endMs > startMs`); keep a floor.
       const driveMin = Math.max(1, legMin(home, ev.location!, fixed));
-      const preEnd = ev.startMs;
+      const transportEnd = ev.startMs - evArriveBuffer;
+      const preStart = transportEnd - driveMin * MINUTE_MS;
       out.push({
         sourceId: `${ev.sourceId}-drive-pre`,
         title: `${tag} → ${ev.title}`,
         calendarDisplayName: PLANNER_TRAVEL_BUSY_CALENDAR,
-        startMs: preEnd - (driveMin * MINUTE_MS + evArriveBuffer),
-        endMs: preEnd,
+        startMs: preStart,
+        endMs: evArriveBuffer > 0 ? transportEnd : ev.startMs,
         busy: true,
         source: "internal",
         system: "travel",
         variant: "drive-pre",
         location: ev.location
       });
+      if (evArriveBuffer > 0 && transportEnd < ev.startMs) {
+        out.push({
+          sourceId: `${ev.sourceId}-drive-arrival-buffer`,
+          title: `${tag} (arrive by) ${ev.title}`,
+          calendarDisplayName: PLANNER_TRAVEL_BUSY_CALENDAR,
+          startMs: transportEnd,
+          endMs: ev.startMs,
+          busy: true,
+          source: "internal",
+          system: "travel",
+          variant: "drive-arrival-buffer",
+          location: ev.location
+        });
+      }
     }
     directIntoNext = false;
 
@@ -353,6 +376,20 @@ export async function computeTravelBlocks(
         variant: "drive-direct",
         location: next.location
       });
+      if (nextArriveBuffer > 0 && next.startMs > decision.endMs) {
+        out.push({
+          sourceId: `${next.sourceId}-direct-arrival-buffer`,
+          title: `${tag} (arrive by) ${next.title}`,
+          calendarDisplayName: PLANNER_TRAVEL_BUSY_CALENDAR,
+          startMs: decision.endMs,
+          endMs: next.startMs,
+          busy: true,
+          source: "internal",
+          system: "travel",
+          variant: "drive-arrival-buffer",
+          location: next.location
+        });
+      }
       directIntoNext = true;
       continue;
     }
@@ -430,8 +467,8 @@ function decideCollapse(input: CollapseDecisionInput): CollapseDecision {
       if (timeAtHomeMs < minHomeMs) {
         return {
           collapse: true,
-          startMs: eventStartB - (aToB * MINUTE_MS + arriveBufferB),
-          endMs: eventStartB
+          startMs: arriveAtB - aToB * MINUTE_MS,
+          endMs: arriveAtB
         };
       }
       return { collapse: false };
@@ -442,7 +479,13 @@ function decideCollapse(input: CollapseDecisionInput): CollapseDecision {
   const postEnd = aEnd + input.aPostMinFallback * MINUTE_MS;
   const preStart = eventStartB - (input.bPreMinFallback * MINUTE_MS + arriveBufferB);
   if (preStart < postEnd) {
-    // Fill the whole gap from A.end through to B.start.
+    if (arriveBufferB > 0) {
+      const driveEnd = eventStartB - arriveBufferB;
+      if (driveEnd > aEnd) {
+        return { collapse: true, startMs: aEnd, endMs: driveEnd };
+      }
+    }
+    // Fill the whole gap from A.end through to B.start (no room to split buffer).
     return { collapse: true, startMs: aEnd, endMs: eventStartB };
   }
   return { collapse: false };
