@@ -27,6 +27,16 @@ import { loadSettings } from "@/lib/settings-store";
  */
 const GOOGLE_BUSY_BACKGROUND_REFRESH_AFTER_MS = 20 * 60 * 1000;
 
+function payloadFromGoogleBusyRow(row: typeof schema.googleBusyCache.$inferSelect): {
+  busyEvents: BusyEvent[];
+  goalAvailabilityWindows: Record<string, Interval[]>;
+} {
+  return {
+    busyEvents: row.busyEvents as BusyEvent[],
+    goalAvailabilityWindows: row.goalAvailabilityWindows as Record<string, Interval[]>
+  };
+}
+
 export function fingerprintGoogleCalendarSources(sources: readonly CalendarSource[]): string {
   const normalized = sources
     .map((s) => normaliseCalendarSource(s))
@@ -116,7 +126,12 @@ export async function fetchGoogleBusy(
   windowEndMs: number
 ): Promise<{ busyEvents: BusyEvent[]; goalAvailabilityWindows: Record<string, Interval[]> }> {
   if (!db) {
-    return fetchGoogleBusyLive(userId, sources, windowStartMs, windowEndMs);
+    try {
+      return await fetchGoogleBusyLive(userId, sources, windowStartMs, windowEndMs);
+    } catch (err) {
+      console.warn("[google-busy-cache] live fetch failed (no DATABASE_URL cache)", err);
+      return { busyEvents: [], goalAvailabilityWindows: {} };
+    }
   }
 
   const fp = fingerprintGoogleCalendarSources(sources);
@@ -140,24 +155,34 @@ export async function fetchGoogleBusy(
     if (rowAgeMs >= GOOGLE_BUSY_BACKGROUND_REFRESH_AFTER_MS) {
       scheduleQuietGoogleBusyRefresh(userId);
     }
-    return {
-      busyEvents: row.busyEvents as BusyEvent[],
-      goalAvailabilityWindows: row.goalAvailabilityWindows as Record<string, Interval[]>
-    };
+    return payloadFromGoogleBusyRow(row);
   }
 
   const settings = await loadSettings(userId);
   const billing = await loadBillingState(userId);
   const { fetchStartMs, fetchEndMs } = googleBusyFetchWindowForPlanner(settings, now, billing);
 
-  const live = await fetchGoogleBusyLive(userId, sources, fetchStartMs, fetchEndMs);
-  await upsertGoogleBusyCacheRow({
-    userId,
-    sourcesFingerprint: fp,
-    windowStartMs: fetchStartMs,
-    windowEndMs: fetchEndMs,
-    payload: live
-  });
-  scheduleInvalidateUserAllocationCache(userId);
-  return live;
+  try {
+    const live = await fetchGoogleBusyLive(userId, sources, fetchStartMs, fetchEndMs);
+    await upsertGoogleBusyCacheRow({
+      userId,
+      sourcesFingerprint: fp,
+      windowStartMs: fetchStartMs,
+      windowEndMs: fetchEndMs,
+      payload: live
+    });
+    scheduleInvalidateUserAllocationCache(userId);
+    return live;
+  } catch (err) {
+    const staleMatchesSources = row && row.sourcesFingerprint === fp;
+    if (staleMatchesSources) {
+      console.warn(
+        "[google-busy-cache] live Google Calendar fetch failed; using last Postgres snapshot (may not cover the full planner window)",
+        err
+      );
+      return payloadFromGoogleBusyRow(row);
+    }
+    console.error("[google-busy-cache] live fetch failed and no matching cached row", err);
+    throw err;
+  }
 }
