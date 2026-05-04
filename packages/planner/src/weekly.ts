@@ -712,26 +712,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
         allocationNowMs
       );
       if (placeable < p.effectiveMinutes) {
-        // #region agent log
-        fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5d14b3" },
-          body: JSON.stringify({
-            sessionId: "5d14b3",
-            location: "weekly.ts:allocateWeek:capPass3FromNow",
-            message: "capped goal demand to future Pass3 placeable minutes",
-            data: {
-              hypothesisId: "H-phantom-demand",
-              goalId: p.goal.id,
-              title: p.goal.title,
-              beforeMinutes: p.effectiveMinutes,
-              afterMinutes: placeable,
-              allocationNowMs
-            },
-            timestamp: Date.now()
-          })
-        }).catch(() => {});
-        // #endregion
         p.effectiveMinutes = placeable;
       }
     }
@@ -771,39 +751,32 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       const weights = members.map((m) => m.effectiveMinutes);
       const alloc = proportionalMinutesOnGrid(weights, sharedBudget);
       for (let i = 0; i < members.length; i++) {
-        const before = members[i]!.effectiveMinutes;
-        const after = alloc[i] ?? 0;
-        if (after < before) {
-          // #region agent log
-          fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5d14b3" },
-            body: JSON.stringify({
-              sessionId: "5d14b3",
-              location: "weekly.ts:allocateWeek:sharedInvertCalendarCap",
-              message: "split shared invert-calendar future pocket across cohort",
-              data: {
-                hypothesisId: "H-shared-pocket",
-                cohortSize: members.length,
-                sharedBudget,
-                sumEffBefore: sumEff,
-                goalId: members[i]!.goal.id,
-                title: members[i]!.goal.title,
-                beforeMinutes: before,
-                afterMinutes: after
-              },
-              timestamp: Date.now()
-            })
-          }).catch(() => {});
-          // #endregion
-        }
-        members[i]!.effectiveMinutes = after;
+        members[i]!.effectiveMinutes = alloc[i] ?? 0;
       }
     }
   }
 
   /** Free gaps after segments, before goals — used to even out inter-goal slack in "even" mode. */
   const gapsBeforeGoals = days.map((d) => d.gaps.map((g) => ({ ...g })));
+
+  if (allocationNowMs !== undefined) {
+    for (const p of prepared) {
+      if (p.effectiveMinutes <= 0) continue;
+      const minBlk = minMinutesPerBlockFloor(p.goal);
+      const mx = maxFuturePlacementGapMinutesAcrossWeek(
+        p.goal,
+        days,
+        gapsBeforeGoals,
+        tz,
+        input.goalAvailabilityWindows?.[p.goal.id],
+        input.niceWeatherWindows,
+        allocationNowMs
+      );
+      if (minBlk > 0 && mx < minBlk) {
+        p.effectiveMinutes = 0;
+      }
+    }
+  }
 
   // Pass 3 — placement: schedule each prepared goal, day by day, honouring
   // per-day caps. Order matters when free time is scarce, so we sort:
@@ -894,47 +867,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     }
     if (!progressed) break;
   }
-
-  // #region agent log
-  {
-    const unmet = prepared
-      .filter((p) => p.effectiveMinutes >= QUANTUM)
-      .map((p) => {
-        const win = input.goalAvailabilityWindows?.[p.goal.id];
-        const invertWindowCount = win?.length ?? 0;
-        const base = {
-          goalId: p.goal.id,
-          title: p.goal.title,
-          remainingMinutes: p.effectiveMinutes,
-          invertWindowCount
-        };
-        if (!win || win.length === 0) return base;
-        return {
-          ...base,
-          invertCohortKey: invertCalendarAvailabilityCohortKey(win, p.goal.scheduleInNiceWeather === true)
-        };
-      });
-    if (unmet.length > 0) {
-      fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5d14b3" },
-        body: JSON.stringify({
-          sessionId: "5d14b3",
-          location: "weekly.ts:allocateWeek:postPass3Unmet",
-          message: "remaining Pass3 demand after placement waves",
-          data: {
-            hypothesisId: "H-postP3",
-            planId: plan.id,
-            weekStartMs,
-            weekCapacityFromNowMinutes,
-            unmet
-          },
-          timestamp: Date.now()
-        })
-      }).catch(() => {});
-    }
-  }
-  // #endregion
 
   for (const b of blocks) {
     if (!b.dragKey || b.segment) continue;
@@ -1882,6 +1814,48 @@ function futurePass3PlaceableMinutesFromNowForGoal(
     }
   }
   return Math.max(0, Math.floor(sum / QUANTUM) * QUANTUM);
+}
+
+/**
+ * Longest single contiguous future gap (minutes) this goal could use on one day,
+ * using the same windows as Pass 3 but on a gap snapshot before goals consume
+ * geometry (`gapsBeforeGoals`).
+ */
+function maxFuturePlacementGapMinutesAcrossWeek(
+  goal: WeeklyGoal,
+  days: readonly WeekDayBuckets[],
+  gapSnapshot: readonly Interval[][],
+  tz: string,
+  availabilityWindows: readonly Interval[] | undefined,
+  niceWeatherWindows: readonly Interval[] | undefined,
+  allocationNowMs: number
+): number {
+  const allowedDays =
+    goal.daysOfWeek && goal.daysOfWeek.length > 0
+      ? goal.daysOfWeek.map((d) => DAY_INDEX[d])
+      : goal.dayOfWeek
+        ? [DAY_INDEX[goal.dayOfWeek]]
+        : [0, 1, 2, 3, 4, 5, 6];
+  let maxMin = 0;
+  for (const dayIdx of allowedDays) {
+    const day = days[dayIdx];
+    if (!day) continue;
+    const snap = gapSnapshot[dayIdx];
+    if (!snap) continue;
+    const candidateGaps = placementWindowsForDay(
+      snap,
+      day.startMs,
+      day.endMs,
+      availabilityWindows,
+      niceWeatherWindows,
+      goal,
+      tz
+    );
+    for (const g of candidateGaps) {
+      maxMin = Math.max(maxMin, intervalMinutesFromNow(g, allocationNowMs));
+    }
+  }
+  return maxMin;
 }
 
 /**
@@ -3032,11 +3006,6 @@ function filterGapsAvoidSandwichingPeerWithUnmetDemand(
       if (peerId === selfGoalId) continue;
       const rem = demandFor.get(peerId) ?? 0;
       if (rem < QUANTUM) continue;
-      // Reshuffle-friendly peers (House Work, nice-to-have, etc.) are allowed to move;
-      // reserving sandwich interiors against them while they still have demand creates
-      // deadlocks between two flexible rows on large calendars (runtime: unmet with
-      // huge weekCapacityFromNowMinutes and no invert windows).
-      if (respectsPeerContinuationPocketsWhenChoosingGaps(pg.goal)) continue;
       const peerPieces = dayBlocks.filter((b) => b.goalId === peerId);
       if (peerPieces.length === 0) continue;
       const merged = mergeAdjacentSameGoalRunsOnDay(peerPieces, slackMs);

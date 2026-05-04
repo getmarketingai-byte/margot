@@ -1930,6 +1930,55 @@ describe("allocateWeek", () => {
     expect(placed).toBeLessThanOrEqual(120);
   });
 
+  it("clears Pass-3 demand when no future single gap fits minMinutesPerBlock", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = weekStartMs;
+    const busy: BusyEvent[] = [];
+    for (let d = 0; d < 7; d++) {
+      const day = weekStartMs + d * DAY_MS;
+      busy.push({
+        sourceId: `blk-${d}-a`,
+        title: "busy",
+        startMs: day,
+        endMs: day + 10 * HOUR_MS,
+        busy: true,
+        source: "internal"
+      });
+      busy.push({
+        sourceId: `blk-${d}-b`,
+        title: "busy",
+        startMs: day + 11 * HOUR_MS,
+        endMs: day + DAY_MS,
+        busy: true,
+        source: "internal"
+      });
+    }
+    const result = allocateWeek({
+      plan: {
+        id: "minblk-gap",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          goal({
+            id: "chunky",
+            title: "Chunky",
+            minMinutesPerWeek: 400,
+            minMinutesPerBlock: 90,
+            allocationSharePercent: 100,
+            priority: 3
+          })
+        ]
+      },
+      busy,
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      nowMs
+    });
+    expect(result.blocks.filter((b) => b.goalId === "chunky").length).toBe(0);
+    expect(result.metrics.perGoal.chunky!.unplacedMinutes).toBe(0);
+  });
+
   it("caps demand from now when raw week slack exists but placement windows are entirely in the past", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const nowMs = weekStartMs + 5 * DAY_MS + 18 * HOUR_MS; // Sat 18:00 UTC — Mon morning window is past
