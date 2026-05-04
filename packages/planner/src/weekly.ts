@@ -604,7 +604,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   }> = [];
   applyGoalGroupWeeklyCaps(prepared, plan, weekCapacityMinutes, goalGroupWeeklyGapsPre);
 
-  applyCatchUpDemandAdjustments(prepared, input.catchUpFloors);
+  applyCatchUpDemandAdjustments(prepared, input.catchUpFloors, weekCapacityMinutes);
 
   const groupPlacement = initGoalGroupPlacementContext(plan, busy, goalOverrides, days);
 
@@ -692,6 +692,112 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
         for (let i = 0; i < schedulable.length; i++) {
           schedulable[i]!.effectiveMinutes = alloc[i] ?? 0;
         }
+      }
+    }
+  }
+
+  // Pass 3 only packs into `placementWindowsForDay` (invert-calendar, nice-weather,
+  // hard ideal clock). Raw `weekCapacityFromNowMinutes` can still count evening gaps
+  // when a row is restricted to morning windows that are already past — trim demand so
+  // we do not show Pass‑2 targets that Pass 3 can never place from `nowMs`.
+  if (allocationNowMs !== undefined) {
+    for (const p of prepared) {
+      if (p.effectiveMinutes <= 0) continue;
+      const placeable = futurePass3PlaceableMinutesFromNowForGoal(
+        p.goal,
+        days,
+        tz,
+        input.goalAvailabilityWindows?.[p.goal.id],
+        input.niceWeatherWindows,
+        allocationNowMs
+      );
+      if (placeable < p.effectiveMinutes) {
+        // #region agent log
+        fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5d14b3" },
+          body: JSON.stringify({
+            sessionId: "5d14b3",
+            location: "weekly.ts:allocateWeek:capPass3FromNow",
+            message: "capped goal demand to future Pass3 placeable minutes",
+            data: {
+              hypothesisId: "H-phantom-demand",
+              goalId: p.goal.id,
+              title: p.goal.title,
+              beforeMinutes: p.effectiveMinutes,
+              afterMinutes: placeable,
+              allocationNowMs
+            },
+            timestamp: Date.now()
+          })
+        }).catch(() => {});
+        // #endregion
+        p.effectiveMinutes = placeable;
+      }
+    }
+  }
+
+  // Goals that reuse the **same** merged invert-calendar interval list compete for one
+  // physical pocket of future placement time. Solo caps above each allow the full
+  // pocket per row, which can over-commit (sum of demands > pocket). Split the
+  // pocket across the cohort on the same quantised grid as Pass‑2 remainder splits.
+  if (allocationNowMs !== undefined && input.goalAvailabilityWindows) {
+    const av = input.goalAvailabilityWindows;
+    const groups = new Map<string, PreparedGoal[]>();
+    for (const p of prepared) {
+      if (p.effectiveMinutes <= 0) continue;
+      const win = av[p.goal.id];
+      if (!win || win.length === 0) continue;
+      const key = invertCalendarAvailabilityCohortKey(win, p.goal.scheduleInNiceWeather === true);
+      const list = groups.get(key) ?? [];
+      list.push(p);
+      groups.set(key, list);
+    }
+    for (const [, members] of groups) {
+      if (members.length < 2) continue;
+      const caps = members.map((m) =>
+        futurePass3PlaceableMinutesFromNowForGoal(
+          m.goal,
+          days,
+          tz,
+          av[m.goal.id],
+          input.niceWeatherWindows,
+          allocationNowMs
+        )
+      );
+      const sharedBudget = Math.min(...caps);
+      const sumEff = members.reduce((a, m) => a + m.effectiveMinutes, 0);
+      if (sumEff <= sharedBudget) continue;
+      const weights = members.map((m) => m.effectiveMinutes);
+      const alloc = proportionalMinutesOnGrid(weights, sharedBudget);
+      for (let i = 0; i < members.length; i++) {
+        const before = members[i]!.effectiveMinutes;
+        const after = alloc[i] ?? 0;
+        if (after < before) {
+          // #region agent log
+          fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5d14b3" },
+            body: JSON.stringify({
+              sessionId: "5d14b3",
+              location: "weekly.ts:allocateWeek:sharedInvertCalendarCap",
+              message: "split shared invert-calendar future pocket across cohort",
+              data: {
+                hypothesisId: "H-shared-pocket",
+                cohortSize: members.length,
+                sharedBudget,
+                sumEffBefore: sumEff,
+                goalId: members[i]!.goal.id,
+                title: members[i]!.goal.title,
+                beforeMinutes: before,
+                afterMinutes: after
+              },
+              timestamp: Date.now()
+            })
+          }).catch(() => {});
+          // #endregion
+        }
+        members[i]!.effectiveMinutes = after;
       }
     }
   }
@@ -788,6 +894,47 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     }
     if (!progressed) break;
   }
+
+  // #region agent log
+  {
+    const unmet = prepared
+      .filter((p) => p.effectiveMinutes >= QUANTUM)
+      .map((p) => {
+        const win = input.goalAvailabilityWindows?.[p.goal.id];
+        const invertWindowCount = win?.length ?? 0;
+        const base = {
+          goalId: p.goal.id,
+          title: p.goal.title,
+          remainingMinutes: p.effectiveMinutes,
+          invertWindowCount
+        };
+        if (!win || win.length === 0) return base;
+        return {
+          ...base,
+          invertCohortKey: invertCalendarAvailabilityCohortKey(win, p.goal.scheduleInNiceWeather === true)
+        };
+      });
+    if (unmet.length > 0) {
+      fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5d14b3" },
+        body: JSON.stringify({
+          sessionId: "5d14b3",
+          location: "weekly.ts:allocateWeek:postPass3Unmet",
+          message: "remaining Pass3 demand after placement waves",
+          data: {
+            hypothesisId: "H-postP3",
+            planId: plan.id,
+            weekStartMs,
+            weekCapacityFromNowMinutes,
+            unmet
+          },
+          timestamp: Date.now()
+        })
+      }).catch(() => {});
+    }
+  }
+  // #endregion
 
   for (const b of blocks) {
     if (!b.dragKey || b.segment) continue;
@@ -1127,51 +1274,88 @@ function quantiseCatchUpAdjustment(delta: number): number {
   return sign * quantise(Math.abs(delta));
 }
 
+/** Upper bound on total weekly target from `% of full-week schedulable time` (same quantum as Pass 2). */
+function maxPlannedMinutesForAllocationSharePercent(
+  goal: WeeklyGoal,
+  norm: NormalisedGoalTime,
+  weekCapacityMinutes: number
+): number | undefined {
+  if (goal.allocationSharePercent === undefined || weekCapacityMinutes <= 0) return undefined;
+  const frac = Math.min(100, Math.max(0, goal.allocationSharePercent)) / 100;
+  let cap = quantise(frac * weekCapacityMinutes);
+  if (norm.maxMinutesPerWeek !== undefined) cap = Math.min(cap, norm.maxMinutesPerWeek);
+  return cap;
+}
+
+/**
+ * Catch-up can raise `plannedWeeklyMinutes` without going through Pass 2's `%×T` slice cap.
+ * Treat explicit `% of week` as a **ceiling** on the weekly target (after `maxMinutesPerWeek`, if any).
+ */
+function clampPreparedGoalsToAllocationShareWeekCeiling(
+  prepared: PreparedGoal[],
+  weekCapacityMinutes: number
+): void {
+  if (!(weekCapacityMinutes > 0)) return;
+  for (const p of prepared) {
+    const upper = maxPlannedMinutesForAllocationSharePercent(p.goal, p.norm, weekCapacityMinutes);
+    if (upper === undefined) continue;
+    const minKeep = Math.max(p.pass1EndEffectiveMinutes, p.norm.minMinutesPerWeek ?? 0);
+    if (minKeep > upper) continue;
+    if (p.plannedWeeklyMinutes <= upper && p.effectiveMinutes <= upper) continue;
+    const nextPlanned = quantise(Math.min(p.plannedWeeklyMinutes, upper));
+    p.plannedWeeklyMinutes = Math.max(minKeep, nextPlanned);
+    p.effectiveMinutes = Math.max(0, Math.min(p.effectiveMinutes, p.plannedWeeklyMinutes));
+  }
+}
+
 /**
  * Goal-local catch-up after Pass 1+2 and weekly group caps — does **not** pass through `distributeMinutes`,
  * so other goals keep their Pass‑2 splits. Applies only to goals listed with non-zero deltas.
  */
 function applyCatchUpDemandAdjustments(
   prepared: PreparedGoal[],
-  catchUpFloors?: Readonly<Record<string, number>>
+  catchUpFloors: Readonly<Record<string, number>> | undefined,
+  weekCapacityMinutes: number
 ): void {
-  if (!catchUpFloors) return;
-  for (const p of prepared) {
-    const raw = catchUpFloors[p.goal.id];
-    if (raw === undefined || raw === 0) continue;
-    const delta = quantiseCatchUpAdjustment(raw);
-    if (delta === 0) continue;
+  if (catchUpFloors) {
+    for (const p of prepared) {
+      const raw = catchUpFloors[p.goal.id];
+      if (raw === undefined || raw === 0) continue;
+      const delta = quantiseCatchUpAdjustment(raw);
+      if (delta === 0) continue;
 
-    const minPlanned = p.weeklyFloorBeforeCatchUpBump;
-    const maxPlanned = p.norm.maxMinutesPerWeek;
+      const minPlanned = p.weeklyFloorBeforeCatchUpBump;
+      const maxPlanned = p.norm.maxMinutesPerWeek;
 
-    if (delta > 0) {
-      let room =
-        maxPlanned === undefined
-          ? delta
-          : Math.max(0, maxPlanned - p.plannedWeeklyMinutes);
-      const add = floorToQuantum(Math.min(delta, room));
-      if (add <= 0) continue;
-      p.plannedWeeklyMinutes += add;
-      p.effectiveMinutes += add;
-      if (maxPlanned !== undefined) {
-        p.plannedWeeklyMinutes = Math.min(p.plannedWeeklyMinutes, maxPlanned);
-        p.effectiveMinutes = Math.min(p.effectiveMinutes, maxPlanned);
+      if (delta > 0) {
+        let room =
+          maxPlanned === undefined
+            ? delta
+            : Math.max(0, maxPlanned - p.plannedWeeklyMinutes);
+        const add = floorToQuantum(Math.min(delta, room));
+        if (add <= 0) continue;
+        p.plannedWeeklyMinutes += add;
+        p.effectiveMinutes += add;
+        if (maxPlanned !== undefined) {
+          p.plannedWeeklyMinutes = Math.min(p.plannedWeeklyMinutes, maxPlanned);
+          p.effectiveMinutes = Math.min(p.effectiveMinutes, maxPlanned);
+        }
+      } else {
+        const loss = -delta;
+        const canTrimFromPlanned = Math.max(0, p.plannedWeeklyMinutes - minPlanned);
+        const sub = floorToQuantum(Math.min(loss, canTrimFromPlanned));
+        if (sub <= 0) continue;
+        p.plannedWeeklyMinutes -= sub;
+        p.effectiveMinutes = Math.max(0, p.effectiveMinutes - sub);
+        p.plannedWeeklyMinutes = Math.max(minPlanned, p.plannedWeeklyMinutes);
+        if (maxPlanned !== undefined) {
+          p.plannedWeeklyMinutes = Math.min(p.plannedWeeklyMinutes, maxPlanned);
+        }
+        p.effectiveMinutes = Math.min(p.effectiveMinutes, p.plannedWeeklyMinutes);
       }
-    } else {
-      const loss = -delta;
-      const canTrimFromPlanned = Math.max(0, p.plannedWeeklyMinutes - minPlanned);
-      const sub = floorToQuantum(Math.min(loss, canTrimFromPlanned));
-      if (sub <= 0) continue;
-      p.plannedWeeklyMinutes -= sub;
-      p.effectiveMinutes = Math.max(0, p.effectiveMinutes - sub);
-      p.plannedWeeklyMinutes = Math.max(minPlanned, p.plannedWeeklyMinutes);
-      if (maxPlanned !== undefined) {
-        p.plannedWeeklyMinutes = Math.min(p.plannedWeeklyMinutes, maxPlanned);
-      }
-      p.effectiveMinutes = Math.min(p.effectiveMinutes, p.plannedWeeklyMinutes);
     }
   }
+  clampPreparedGoalsToAllocationShareWeekCeiling(prepared, weekCapacityMinutes);
 }
 
 /**
@@ -1383,7 +1567,10 @@ function spreadEvenGoalBuffersInSnapshotGaps(
       if (slackMs < QUANTUM * MS_PER_MIN) continue;
       // Skip gaps where goals only occupy a small pocket (e.g. inverted-calendar
       // windows inside a full-day free snapshot) — spreading across the whole
-      // snapshot would violate those bounds.
+      // snapshot would violate those bounds. (We also must not reflow sparse
+      // pockets after placement: nice-weather / ideal-clock / hard-window blocks
+      // are positioned within sub-ranges of G; shifting them for aesthetics
+      // breaks those constraints.)
       if (slackMs > span * 0.7) continue;
       const k = runs.length;
       const rawPad = slackMs / (k + 1);
@@ -1495,12 +1682,19 @@ function minMinutesPerBlockFloor(goal: WeeklyGoal): number {
 }
 
 /**
- * Cap on auto-generated blocks per calendar day (pins excluded). `frequencyPerWeek`
- * already enforces at most one auto block per day — no extra cap.
+ * Cap on auto-generated blocks per calendar day (pins excluded).
+ *
+ * Goals with **`frequencyPerWeek`** default to **one** auto block per calendar day
+ * (distinct “session days”); set **`maxAutoBlocksPerDay`** to 2+ to allow another
+ * auto block the same day when demand and `maxMinutesPerDay` headroom still allow
+ * (e.g. morning + afternoon on the same weekday).
  */
-function maxAutoBlocksPerCalendarDay(goal: WeeklyGoal, norm: NormalisedGoalTime): number {
-  if (norm.frequencyPerWeek !== undefined) return Number.POSITIVE_INFINITY;
+export function maxAutoBlocksPerCalendarDay(goal: WeeklyGoal, norm: NormalisedGoalTime): number {
   const explicit = goal.maxAutoBlocksPerDay;
+  if (norm.frequencyPerWeek !== undefined) {
+    if (explicit !== undefined && explicit >= 1) return Math.min(24, explicit);
+    return 1;
+  }
   if (explicit !== undefined && explicit >= 1) return Math.min(24, explicit);
   if (minMinutesPerBlockFloor(goal) > 0) return 2;
   return Number.POSITIVE_INFINITY;
@@ -1630,6 +1824,64 @@ function placementWindowsForDay(
     gaps = intersectWithAvailability(gaps, [idealWin], dayStartMs, dayEndMs);
   }
   return gaps;
+}
+
+/**
+ * Minutes from `allocationNowMs` onward where this goal may receive Pass‑3 auto
+ * placement (same pipeline as `placementWindowsForDay` in `allocateGoal`).
+ */
+const QUANTUM_MS = QUANTUM * MS_PER_MIN;
+
+/**
+ * Stable cohort key for invert-calendar rows: intervals snapped to the planner
+ * quantum so near-duplicate external intervals (ms drift) still share one future
+ * pocket budget.
+ */
+function invertCalendarAvailabilityCohortKey(
+  win: readonly Interval[],
+  scheduleInNiceWeather: boolean
+): string {
+  const snapped = [...win]
+    .map((iv) => ({
+      startMs: Math.floor(iv.startMs / QUANTUM_MS) * QUANTUM_MS,
+      endMs: Math.ceil(iv.endMs / QUANTUM_MS) * QUANTUM_MS
+    }))
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  return JSON.stringify(snapped) + "|nw:" + (scheduleInNiceWeather ? "1" : "0");
+}
+
+function futurePass3PlaceableMinutesFromNowForGoal(
+  goal: WeeklyGoal,
+  days: readonly WeekDayBuckets[],
+  tz: string,
+  availabilityWindows: readonly Interval[] | undefined,
+  niceWeatherWindows: readonly Interval[] | undefined,
+  allocationNowMs: number
+): number {
+  const allowedDays =
+    goal.daysOfWeek && goal.daysOfWeek.length > 0
+      ? goal.daysOfWeek.map((d) => DAY_INDEX[d])
+      : goal.dayOfWeek
+        ? [DAY_INDEX[goal.dayOfWeek]]
+        : [0, 1, 2, 3, 4, 5, 6];
+  let sum = 0;
+  for (const dayIdx of allowedDays) {
+    const day = days[dayIdx];
+    if (!day) continue;
+    const candidateGaps = placementWindowsForDay(
+      day.gaps,
+      day.startMs,
+      day.endMs,
+      availabilityWindows,
+      niceWeatherWindows,
+      goal,
+      tz
+    );
+    for (const g of candidateGaps) {
+      sum += intervalMinutesFromNow(g, allocationNowMs);
+    }
+  }
+  return Math.max(0, Math.floor(sum / QUANTUM) * QUANTUM);
 }
 
 /**
@@ -2147,9 +2399,6 @@ function allocateGoal(
         remainingMinutes < QUANTUM
       )
         continue;
-      // When `frequencyPerWeek` is set, treat it as distinct session days — at most
-      // one auto block per day (pins already consumed placement above via `continue`).
-      if (norm.frequencyPerWeek !== undefined && dayGoalBlocks.length > 0) continue;
 
       // Pass‑0 "non-adjacent spread" (low priority): defer placing next to an existing
       // same-goal day when a non-adjacent empty day still exists. Capped per week,
@@ -2783,6 +3032,11 @@ function filterGapsAvoidSandwichingPeerWithUnmetDemand(
       if (peerId === selfGoalId) continue;
       const rem = demandFor.get(peerId) ?? 0;
       if (rem < QUANTUM) continue;
+      // Reshuffle-friendly peers (House Work, nice-to-have, etc.) are allowed to move;
+      // reserving sandwich interiors against them while they still have demand creates
+      // deadlocks between two flexible rows on large calendars (runtime: unmet with
+      // huge weekCapacityFromNowMinutes and no invert windows).
+      if (respectsPeerContinuationPocketsWhenChoosingGaps(pg.goal)) continue;
       const peerPieces = dayBlocks.filter((b) => b.goalId === peerId);
       if (peerPieces.length === 0) continue;
       const merged = mergeAdjacentSameGoalRunsOnDay(peerPieces, slackMs);

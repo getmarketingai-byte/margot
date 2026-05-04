@@ -1960,7 +1960,9 @@ function ConstraintBody({
             />
           </label>
           <p className="text-[11px] text-ink-400">
-            Pins don’t count. Leave empty to use the planner default (2 when min block size is set).
+            Pins don’t count. Leave empty for the planner default: 2 when min block size is set; for
+            goals with sessions/week, default is 1 per day—raise this to 2 if you want morning and
+            afternoon auto blocks on the same day (subject to daily cap and demand).
           </p>
         </div>
       );

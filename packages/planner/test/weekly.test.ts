@@ -8,6 +8,7 @@ import {
   computeAllocationRemainderFractions,
   computePass2AllocMinutesFromShareOfWeek,
   computeDayCalendarDrainScores,
+  maxAutoBlocksPerCalendarDay,
   maxNonAdjacentPlacementDaysOnCalendar,
   loggedMinutesForGoal,
   proposedFutureMinutesForGoal
@@ -779,6 +780,73 @@ describe("allocateWeek", () => {
     }
   });
 
+  /**
+   * Sparse snapshot: `spreadEvenGoalBuffersInSnapshotGaps` skips when
+   * `slackMs > span * 0.7` so blocks stay packed at the gap start (like
+   * finish-early). Post-placement “centering” was tried but breaks nice-weather,
+   * ideal-clock, and inverted-window placement that targets sub-ranges of G.
+   */
+  it("in even mode, skips buffer spread when goals fill under ~30% of a snapshot gap (large trailing slack)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const tuesdayStart = weekStartMs + DAY_MS;
+    const busy: BusyEvent[] = [
+      {
+        id: "b1",
+        startMs: tuesdayStart,
+        endMs: tuesdayStart + 12 * HOUR_MS,
+        busy: true
+      },
+      {
+        id: "b2",
+        startMs: tuesdayStart + 18 * HOUR_MS,
+        endMs: tuesdayStart + DAY_MS,
+        busy: true
+      }
+    ];
+    const result = allocateWeek({
+      plan: {
+        id: "even-sparse-snapshot",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "solo",
+            title: "Solo",
+            daysOfWeek: ["tuesday"],
+            maxMinutesPerWeek: 60,
+            priority: 3,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy,
+      settings: buildSettings({
+        allocator: { starvationMode: "proportional", allocationMode: "even" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+
+    const windowStart = tuesdayStart + 12 * HOUR_MS;
+    const windowEnd = tuesdayStart + 18 * HOUR_MS;
+    const tuesdayBlocks = result.blocks
+      .filter(
+        (b) =>
+          !b.segment &&
+          b.goalId === "solo" &&
+          b.startMs >= windowStart &&
+          b.endMs <= windowEnd
+      )
+      .sort((a, b) => a.startMs - b.startMs);
+
+    expect(tuesdayBlocks.length).toBe(1);
+    const tailMin = (windowEnd - tuesdayBlocks[0]!.endMs) / 60_000;
+    expect(tailMin).toBeGreaterThan(4 * 60 - 15);
+    expect((tuesdayBlocks[0]!.startMs - windowStart) / 60_000).toBeLessThanOrEqual(15);
+    expect(result.metrics.perGoal.solo!.unplacedMinutes).toBe(0);
+  });
+
   it("finish-early packing stacks goal blocks at the start of the free window with slack at the end", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const tuesdayStart = weekStartMs + DAY_MS;
@@ -1096,6 +1164,28 @@ describe("allocateWeek", () => {
       expect(c).toBeLessThanOrEqual(1);
     }
     expect(result.metrics.perGoal["chunky"]!.scheduledMinutes).toBeGreaterThan(0);
+  });
+
+  it("maxAutoBlocksPerCalendarDay: frequency goals default to 1/day unless maxAutoBlocksPerDay is set", () => {
+    const withFreq = goal({
+      id: "f",
+      title: "F",
+      frequencyPerWeek: 3,
+      minMinutesPerWeek: 180,
+      priority: 3
+    });
+    expect(maxAutoBlocksPerCalendarDay(withFreq, normaliseGoalTime(withFreq))).toBe(1);
+    const withCap = goal({
+      id: "f2",
+      title: "F2",
+      frequencyPerWeek: 3,
+      maxAutoBlocksPerDay: 2,
+      minMinutesPerWeek: 180,
+      priority: 3
+    });
+    expect(maxAutoBlocksPerCalendarDay(withCap, normaliseGoalTime(withCap))).toBe(2);
+    const noFreq = goal({ id: "n", title: "N", minMinutesPerWeek: 60, priority: 3 });
+    expect(maxAutoBlocksPerCalendarDay(noFreq, normaliseGoalTime(noFreq))).toBe(Number.POSITIVE_INFINITY);
   });
 
   it("minMinutesPerDay-only goals join Pass 2 remainder above derived weekly floor", () => {
@@ -1745,6 +1835,133 @@ describe("allocateWeek", () => {
     const gymBlock = result.blocks.find((b) => b.goalId === ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID);
     expect(gymBlock).toBeDefined();
     expect(Math.floor((gymBlock!.endMs - gymBlock!.startMs) / 60_000)).toBe(45);
+  });
+
+  it("splits future demand between goals that share identical invert-calendar windows", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = weekStartMs + DAY_MS + 9 * HOUR_MS + 30 * 60 * 1000; // Tue 09:30 — only Tue 10–12 remains in pocket
+    const sharedWindows = [
+      { startMs: weekStartMs + DAY_MS + 10 * HOUR_MS, endMs: weekStartMs + DAY_MS + 12 * HOUR_MS }
+    ];
+    const result = allocateWeek({
+      plan: {
+        id: "shared-pocket",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "a",
+            title: "A",
+            minMinutesPerWeek: 200,
+            allocationSharePercent: 50,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "b",
+            title: "B",
+            minMinutesPerWeek: 200,
+            allocationSharePercent: 50,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      goalAvailabilityWindows: {
+        a: sharedWindows,
+        b: sharedWindows
+      },
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      nowMs
+    });
+    const unmetA = result.metrics.perGoal.a!.unplacedMinutes;
+    const unmetB = result.metrics.perGoal.b!.unplacedMinutes;
+    const placedA = result.blocks.filter((b) => b.goalId === "a").reduce((s, b) => s + (b.endMs - b.startMs) / 60_000, 0);
+    const placedB = result.blocks.filter((b) => b.goalId === "b").reduce((s, b) => s + (b.endMs - b.startMs) / 60_000, 0);
+    expect(placedA + placedB).toBeLessThanOrEqual(120);
+    expect(unmetA + unmetB).toBe(0);
+  });
+
+  it("treats invert windows that differ by sub-quantum ms as one shared cohort", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = weekStartMs + DAY_MS + 9 * HOUR_MS + 30 * 60 * 1000;
+    const t10 = weekStartMs + DAY_MS + 10 * HOUR_MS;
+    const t12 = weekStartMs + DAY_MS + 12 * HOUR_MS;
+    const result = allocateWeek({
+      plan: {
+        id: "shared-pocket-drift",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "a",
+            title: "A",
+            minMinutesPerWeek: 200,
+            allocationSharePercent: 50,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "b",
+            title: "B",
+            minMinutesPerWeek: 200,
+            allocationSharePercent: 50,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      goalAvailabilityWindows: {
+        a: [{ startMs: t10, endMs: t12 }],
+        b: [{ startMs: t10 + 30_000, endMs: t12 }]
+      },
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      nowMs
+    });
+    expect(result.metrics.perGoal.a!.unplacedMinutes + result.metrics.perGoal.b!.unplacedMinutes).toBe(0);
+    const placed =
+      result.blocks.filter((b) => b.goalId === "a" || b.goalId === "b").reduce((s, b) => s + (b.endMs - b.startMs) / 60_000, 0);
+    expect(placed).toBeLessThanOrEqual(120);
+  });
+
+  it("caps demand from now when raw week slack exists but placement windows are entirely in the past", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = weekStartMs + 5 * DAY_MS + 18 * HOUR_MS; // Sat 18:00 UTC — Mon morning window is past
+    const result = allocateWeek({
+      plan: {
+        id: "phantom-demand",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goals: [
+          {
+            id: "morning-only",
+            title: "Morning only",
+            minMinutesPerWeek: 400,
+            allocationSharePercent: 100,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ]
+      },
+      busy: [],
+      goalAvailabilityWindows: {
+        "morning-only": [
+          { startMs: weekStartMs + 9 * HOUR_MS, endMs: weekStartMs + 11 * HOUR_MS } // Mon 09–11 UTC only
+        ]
+      },
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      nowMs
+    });
+    expect(result.blocks.filter((b) => b.goalId === "morning-only").length).toBe(0);
+    expect(result.metrics.perGoal["morning-only"]!.unplacedMinutes).toBe(0);
   });
 
   it("restricts a goal to inverted-calendar availability windows", () => {

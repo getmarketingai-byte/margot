@@ -1,13 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { allocateWeek } from "../src/weekly";
-import type { WeeklyPlan, UserSettings } from "@calendar-automations/schema";
-import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION } from "@calendar-automations/schema";
+import { QUANTUM } from "../src/weekly-grid";
+import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
+import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION, weeklyGoalSchema } from "@calendar-automations/schema";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 function buildSettings(overrides: Partial<UserSettings> = {}): UserSettings {
   return { ...DEFAULT_USER_SETTINGS, schemaVersion: SETTINGS_SCHEMA_VERSION, ...overrides };
+}
+
+function goalWithAllocationShare(id: string, pct: number): WeeklyGoal {
+  return weeklyGoalSchema.parse({
+    id,
+    title: "Share row",
+    priority: 3,
+    allocationSharePercent: pct,
+    energyMode: "neutral",
+    ppfHorizon: "unspecified"
+  });
 }
 
 const plan: WeeklyPlan = {
@@ -116,6 +128,38 @@ describe("allocateWeek catchUpFloors", () => {
     });
     expect(boosted.metrics.perGoal.goalA!.targetMinutes).toBeLessThanOrEqual(240);
     expect(boosted.metrics.perGoal.goalA!.scheduledMinutes).toBeLessThanOrEqual(240);
+  });
+
+  it("does not let catch-up raise allocationSharePercent above pct × weekCapacity", () => {
+    const gid = "pct-cap-catchup";
+    const pctPlan: WeeklyPlan = {
+      id: "plan-pct-cap",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goals: [goalWithAllocationShare(gid, 50)],
+      overrides: []
+    };
+    const base = allocateWeek({
+      plan: pctPlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS
+    });
+    const T = base.metrics.utilisation.weekCapacityMinutes;
+    const shareCap = Math.round((0.5 * T) / QUANTUM) * QUANTUM;
+    expect(base.metrics.perGoal[gid]!.targetMinutes).toBeLessThanOrEqual(shareCap);
+
+    const bumped = allocateWeek({
+      plan: pctPlan,
+      busy: [],
+      settings: buildSettings(),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      catchUpFloors: { [gid]: 5000 }
+    });
+    expect(bumped.metrics.perGoal[gid]!.targetMinutes).toBeLessThanOrEqual(shareCap);
+    expect(bumped.metrics.perGoal[gid]!.targetMinutes).toBe(base.metrics.perGoal[gid]!.targetMinutes);
   });
 
   it("does not affect goals that are not listed in catchUpFloors", () => {
