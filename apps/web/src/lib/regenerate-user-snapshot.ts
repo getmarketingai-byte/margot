@@ -96,6 +96,8 @@ function systemBlockKind(block: SystemBlock): GeneratedEvent["kind"] {
       return "timemap";
     case "inverted-timemap":
       return "timemap";
+    case "stacked-timemap":
+      return "timemap";
   }
 }
 
@@ -177,11 +179,10 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
     })
   );
 
-  let mergedGoalBlocks = mergeOrphanGoalOverrideBlocks(
-    allocationSlices.flatMap((a) => a.blocks),
-    plan,
-    mergeWindows
-  );
+  let mergedGoalBlocks = allocationSlices.flatMap((a) => a.blocks);
+  if (settings.allocator.goalWindowMode !== "stacked") {
+    mergedGoalBlocks = mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows);
+  }
 
   let proposedBlocksRaw = filterInvertedTimemapFromProposedBlocks(
     mergedGoalBlocks,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateWeek } from "../src/weekly";
+import { allocateWeek, buildGoalDragKey } from "../src/weekly";
 import { computeStackedFeasibleWindowsForWeek } from "../src/goal-feasible-windows";
 import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
 import {
@@ -68,6 +68,62 @@ describe("stacked feasible windows", () => {
     const goalBlocks = result.blocks.filter((b) => !b.segment && b.goalId === "solo");
     expect(goalBlocks).toHaveLength(0);
     expect(result.metrics.perGoal["solo"]!.unplacedMinutes).toBeGreaterThan(0);
+  });
+
+  it("stacked mode ignores WeeklyPlan goal overrides; linear mode still applies them", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const anchor = "2026-04-27";
+    const dragKey = buildGoalDragKey("solo", anchor, 0);
+    const soloPlan: WeeklyPlan = {
+      id: "plan-stack-ov",
+      weekStart: anchor,
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "solo",
+          title: "Solo",
+          minMinutesPerWeek: 120,
+          priority: 5
+        })
+      ],
+      overrides: [
+        {
+          kind: "goal",
+          key: dragKey,
+          startMs: weekStartMs + 10 * HOUR_MS,
+          endMs: weekStartMs + 11 * HOUR_MS,
+          source: "drag",
+          setAt: 1
+        }
+      ],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const stacked = allocateWeek({
+      plan: soloPlan,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: anchor
+    });
+    expect(stacked.blocks.filter((b) => !b.segment && b.goalId === "solo")).toHaveLength(0);
+
+    const linear = allocateWeek({
+      plan: soloPlan,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "linear" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: anchor
+    });
+    expect(linear.blocks.some((b) => !b.segment && b.goalId === "solo")).toBe(true);
   });
 
   it("two unconstrained goals each receive the full-week feasible union (no cross-goal shrink)", () => {
@@ -189,6 +245,87 @@ describe("stacked feasible windows", () => {
     expect(env.length).toBe(1);
     expect(env[0]!.startMs).toBe(winStart);
     expect(env[0]!.endMs).toBe(winEnd);
+  });
+
+  it("placementIdealClockBefore-only clips stacked envelope to midnight–before on that day", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+
+    const planStack: WeeklyPlan = {
+      id: "ideal-before-only",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "morning-cap",
+          title: "Morning cap",
+          targetMinutes: 60,
+          dayOfWeek: "monday",
+          placementIdealClockBefore: { hour: 14, minute: 0 },
+          priority: 5
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: planStack,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    const env = result.stackedFeasibleByGoalId!["morning-cap"]!;
+    expect(env.length).toBe(1);
+    expect(env[0]!.startMs).toBe(weekStartMs);
+    expect(env[0]!.endMs).toBe(weekStartMs + 14 * HOUR_MS);
+  });
+
+  it("placementIdealClockAfter-only clips stacked envelope from after through end of day", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const tuesdayStart = weekStartMs + DAY_MS;
+
+    const planStack: WeeklyPlan = {
+      id: "ideal-after-only",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "evening",
+          title: "Evening",
+          targetMinutes: 60,
+          dayOfWeek: "tuesday",
+          placementIdealClockAfter: { hour: 18, minute: 0 },
+          priority: 5
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: planStack,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    const env = result.stackedFeasibleByGoalId!["evening"]!;
+    expect(env.length).toBe(1);
+    expect(env[0]!.startMs).toBe(tuesdayStart + 18 * HOUR_MS);
+    expect(env[0]!.endMs).toBe(tuesdayStart + DAY_MS);
   });
 
   it("computeStackedFeasibleWindowsForWeek matches allocateWeek stacked output for prepared goals", () => {

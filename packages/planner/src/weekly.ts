@@ -601,6 +601,15 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   const batteryOn = batteryContext !== undefined;
 
+  const stackedMode = settings.allocator.goalWindowMode === "stacked";
+  /** Stacked timemap preview ignores linear-mode goal overrides (drag / day-sheet pins). */
+  const placementGoalOverrides = stackedMode
+    ? new Map<string, { startMs: number; endMs: number }>()
+    : goalOverrides;
+  const placementGoalOverrideSources = stackedMode
+    ? new Map<string, "drag" | "actual">()
+    : goalOverrideSources;
+
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
     goalsForAllocation,
     weekCapacityMinutes,
@@ -617,7 +626,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   applyCatchUpDemandAdjustments(prepared, input.catchUpFloors, weekCapacityMinutes);
 
-  const groupPlacement = initGoalGroupPlacementContext(plan, busy, goalOverrides, days);
+  const groupPlacement = initGoalGroupPlacementContext(plan, busy, placementGoalOverrides, days);
 
   // Logged day-sheet minutes should reduce remaining weekly demand for the same
   // goal. If those minutes are also represented as source="actual" pins, the
@@ -633,8 +642,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       p.goal.id,
       weekStartMs,
       weekEndMs,
-      goalOverrides,
-      goalOverrideSources
+      placementGoalOverrides,
+      placementGoalOverrideSources
     );
     const unpinnedLoggedMinutes = Math.max(0, weeklyLoggedMinutes - weeklyPinnedActualMinutes);
     p.effectiveMinutes = Math.max(0, p.effectiveMinutes - unpinnedLoggedMinutes);
@@ -804,7 +813,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     prepared.map((p) => [p.goal.id, p.effectiveMinutes] as const)
   );
 
-  const stackedMode = settings.allocator.goalWindowMode === "stacked";
   const stackedFeasibleByGoalId = stackedMode
     ? computeStackedFeasibleWindowsForWeek({
         goals: prepared.map((p) => p.goal),
@@ -845,8 +853,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       weekStartMs,
       weekEndMs,
       weekAnchorDate,
-      goalOverrides,
-      goalOverrideSources,
+      placementGoalOverrides,
+      placementGoalOverrideSources,
       allocationNowMs,
       sleepIntervals,
       prepared,
@@ -898,9 +906,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   for (const b of blocks) {
     if (!b.dragKey || b.segment) continue;
-    if (goalOverrides.has(b.dragKey)) {
+    if (placementGoalOverrides.has(b.dragKey)) {
       b.dragOverrideSaved = true;
-      b.overrideSource = goalOverrideSources.get(b.dragKey) ?? "drag";
+      b.overrideSource = placementGoalOverrideSources.get(b.dragKey) ?? "drag";
     }
   }
 
@@ -924,8 +932,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     busy,
     weekStartMs,
     weekEndMs,
-    goalOverrides,
-    goalOverrideSources,
+    placementGoalOverrides,
+    placementGoalOverrideSources,
     weekCapacityMinutes,
     weekCapacityFromNowMinutes,
     {
@@ -2043,7 +2051,8 @@ function allocateGoal(
   },
   groupPlacement?: GoalGroupPlacementContext,
   /**
-   * When true (stacked goal-window mode), only apply drag/override pins — no greedy auto blocks.
+   * When true (stacked goal-window mode), Pass 3 skips greedy auto blocks. Callers pass empty
+   * override maps so linear-mode pins are ignored; this flag remains as a guardrail.
    */
   pinsOnlyPlacement?: boolean
 ): void {

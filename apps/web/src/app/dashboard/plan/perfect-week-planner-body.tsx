@@ -226,6 +226,7 @@ interface PerfectWeekPlannerBodyProps {
   systemBlocksForCalendar: Parameters<typeof RangeToggleCalendar>[0]["system"];
   proposedForCalendar: Parameters<typeof RangeToggleCalendar>[0]["proposed"];
   schedulingGoals: Parameters<typeof RangeToggleCalendar>[0]["schedulingGoals"];
+  ribbonLaneOrderingGoals: Parameters<typeof RangeToggleCalendar>[0]["ribbonLaneOrderingGoals"];
   frameworkSystem: Parameters<typeof RangeToggleCalendar>[0]["frameworkSystem"];
   wheelAreas?: Parameters<typeof RangeToggleCalendar>[0]["wheelAreas"];
   goalGroups?: readonly GoalGroup[];
@@ -317,6 +318,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
     systemBlocksForCalendar,
     proposedForCalendar,
     schedulingGoals,
+    ribbonLaneOrderingGoals,
     frameworkSystem,
     wheelAreas,
     goalGroups = [],
@@ -386,6 +388,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                 proposed={proposedForCalendar}
                 compact
                 schedulingGoals={schedulingGoals}
+                ribbonLaneOrderingGoals={ribbonLaneOrderingGoals}
                 frameworkSystem={frameworkSystem}
                 wheelAreas={wheelAreas}
                 goalGroups={goalGroups}
@@ -408,6 +411,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                   system={systemBlocksForCalendar}
                   proposed={proposedForCalendar}
                   schedulingGoals={schedulingGoals}
+                  ribbonLaneOrderingGoals={ribbonLaneOrderingGoals}
                   frameworkSystem={frameworkSystem}
                   wheelAreas={wheelAreas}
                   goalGroups={goalGroups}

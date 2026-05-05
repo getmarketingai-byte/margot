@@ -37,8 +37,9 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 ## Stacked goal-window mode (`settings.allocator.goalWindowMode === "stacked"`)
 
 - Pass 1+2 are unchanged — weekly targets and metrics basis stay the same.
-- Pass 3 **does not** emit greedy auto blocks; only **pins** (drag / goal overrides) are applied via the same validation rules as linear mode.
-- **`AllocateResult.stackedFeasibleByGoalId`** gives, per scheduling goal, the merged union of intervals where that goal could be placed (free gaps ∩ invert-calendar windows ∩ nice-weather outside windows when flagged ∩ hard ideal after/before band ∩ allowed weekdays ∩ local earliest/latest hour band, clipped at `nowMs` when set). Envelopes are **not** reduced by other goals’ placements (each goal’s region is computed independently).
+- Pass 3 **does not** emit greedy auto blocks and **does not** apply **`WeeklyPlan.overrides`** of kind **`goal`** (drag / day-sheet pins saved from linear placement). Override maps used for placement, group daily caps, “pinned actual” log pairing, and metrics are cleared for this mode so preview matches independent feasible envelopes only.
+- The dashboard skips **`mergeOrphanGoalOverrideBlocks`** when stacked so orphan overrides are not re-injected onto the Perfect Week calendar; ICS regeneration matches.
+- **`AllocateResult.stackedFeasibleByGoalId`** gives, per scheduling goal, the merged union of intervals where that goal could be placed (free gaps ∩ invert-calendar windows ∩ nice-weather outside windows when flagged ∩ paired hard ideal after+before band inside `placementWindowsForDay` ∩ **single-sided** ideal after/before cutoff on each local day ∩ allowed weekdays ∩ local earliest/latest hour band, clipped at `nowMs` when set). Envelopes are **not** reduced by other goals’ placements (each goal’s region is computed independently).
 - **`unplacedMinutes`** typically stays positive when placement demand remains and no pins/logs fill it — in stacked mode this means duration is deferred to an external scheduler (e.g. Skedpal), not that the feasible envelope is empty.
 
 ## Calendar packing (`settings.allocator.allocationMode`)

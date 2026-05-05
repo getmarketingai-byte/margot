@@ -329,9 +329,10 @@ export async function ConstraintsSection() {
         </summary>
         <p className="mt-1 text-xs text-ink-400">
           Linear mode greedy-packs concrete goal blocks into free calendar time. Stacked mode skips
-          auto blocks (pins still apply) and computes per-goal <strong>feasible time unions</strong> for
-          tools like Skedpal — weekly targets from Pass 1+2 stay the same; unplaced minutes mean duration
-          is owned outside this planner until you hook up export.
+          auto blocks and ignores saved goal overrides from linear placement (drag/day-sheet pins), then
+          computes per-goal <strong>feasible time unions</strong> for tools like Skedpal — weekly targets
+          from Pass 1+2 stay the same; unplaced minutes mean duration is owned outside this planner until
+          you hook up export.
         </p>
         <form action={updateGoalWindowMode} className="mt-3">
           <ConstraintCard label="Goal windows">
@@ -359,8 +360,8 @@ export async function ConstraintsSection() {
                 />
                 <span>
                   <strong>Stacked timemap</strong> — emit where each goal <em>may</em> run (maximum
-                  envelope from calendar gaps + goal rules); hand duration packing to your external
-                  scheduler.
+                  envelope from calendar gaps + goal rules); Perfect Week ignores linear-mode goal pins on
+                  the preview; hand duration packing to your external scheduler.
                 </span>
               </label>
               <button type="submit" className="btn-primary mt-1 w-fit text-xs">
