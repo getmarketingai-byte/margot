@@ -1,0 +1,241 @@
+import { describe, expect, it } from "vitest";
+import { allocateWeek } from "../src/weekly";
+import { computeStackedFeasibleWindowsForWeek } from "../src/goal-feasible-windows";
+import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
+import {
+  DEFAULT_USER_SETTINGS,
+  SETTINGS_SCHEMA_VERSION,
+  weeklyGoalSchema
+} from "@calendar-automations/schema";
+import type { BusyEvent } from "../src/types";
+import { collectBusyIntervals, freeGaps, mergeIntervals } from "../src/intervals";
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+function buildSettings(overrides: Partial<UserSettings> = {}): UserSettings {
+  return { ...DEFAULT_USER_SETTINGS, schemaVersion: SETTINGS_SCHEMA_VERSION, ...overrides };
+}
+
+function goal(p: Partial<WeeklyGoal> & Pick<WeeklyGoal, "id" | "title">): WeeklyGoal {
+  return weeklyGoalSchema.parse({
+    priority: 3,
+    energyMode: "neutral",
+    ppfHorizon: "unspecified",
+    ...p
+  });
+}
+
+function totalMs(intervals: readonly { startMs: number; endMs: number }[]): number {
+  return intervals.reduce((a, iv) => a + Math.max(0, iv.endMs - iv.startMs), 0);
+}
+
+describe("stacked feasible windows", () => {
+  it("allocateWeek stacked mode skips auto blocks but returns stackedFeasibleByGoalId", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const soloPlan: WeeklyPlan = {
+      id: "plan-stack",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "solo",
+          title: "Solo",
+          minMinutesPerWeek: 120,
+          priority: 5
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: soloPlan,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    expect(result.stackedFeasibleByGoalId).toBeDefined();
+    expect(totalMs(result.stackedFeasibleByGoalId!.solo ?? [])).toBe(7 * DAY_MS);
+
+    const goalBlocks = result.blocks.filter((b) => !b.segment && b.goalId === "solo");
+    expect(goalBlocks).toHaveLength(0);
+    expect(result.metrics.perGoal["solo"]!.unplacedMinutes).toBeGreaterThan(0);
+  });
+
+  it("two unconstrained goals each receive the full-week feasible union (no cross-goal shrink)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const duoPlan: WeeklyPlan = {
+      id: "plan-two",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({ id: "ga", title: "A", minMinutesPerWeek: 60 }),
+        goal({ id: "gb", title: "B", minMinutesPerWeek: 60 })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: duoPlan,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    const ta = totalMs(result.stackedFeasibleByGoalId!.ga ?? []);
+    const tb = totalMs(result.stackedFeasibleByGoalId!.gb ?? []);
+    expect(ta).toBe(7 * DAY_MS);
+    expect(tb).toBe(7 * DAY_MS);
+  });
+
+  it("scheduleInNiceWeather intersects stacked envelope with nice-weather windows", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const monday9 = weekStartMs + 9 * HOUR_MS;
+    const monday11 = weekStartMs + 11 * HOUR_MS;
+    const niceWeatherWindows = [{ startMs: monday9, endMs: monday11 }];
+
+    const outdoor = goal({
+      id: "out-walk",
+      title: "Walk",
+      minMinutesPerWeek: 45,
+      scheduleInNiceWeather: true
+    });
+
+    const soloPlan: WeeklyPlan = {
+      id: "plan-nw-stack",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [outdoor],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: soloPlan,
+      busy: [],
+      niceWeatherWindows,
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    const env = result.stackedFeasibleByGoalId!["out-walk"]!;
+    expect(env.length).toBeGreaterThan(0);
+    for (const iv of env) {
+      expect(iv.startMs).toBeGreaterThanOrEqual(monday9);
+      expect(iv.endMs).toBeLessThanOrEqual(monday11);
+    }
+    expect(totalMs(env)).toBe(monday11 - monday9);
+  });
+
+  it("hard ideal after+before clips stacked envelope to that band", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+
+    const planStack: WeeklyPlan = {
+      id: "ideal-stack",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "banded",
+          title: "Banded",
+          targetMinutes: 60,
+          dayOfWeek: "monday",
+          placementIdealClockAfter: { hour: 10, minute: 0 },
+          placementIdealClockBefore: { hour: 14, minute: 0 },
+          priority: 5
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: planStack,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    const winStart = weekStartMs + 10 * HOUR_MS;
+    const winEnd = weekStartMs + 14 * HOUR_MS;
+    const env = result.stackedFeasibleByGoalId!["banded"]!;
+    expect(env.length).toBe(1);
+    expect(env[0]!.startMs).toBe(winStart);
+    expect(env[0]!.endMs).toBe(winEnd);
+  });
+
+  it("computeStackedFeasibleWindowsForWeek matches allocateWeek stacked output for prepared goals", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const tz = "UTC";
+    const busyRaw: BusyEvent[] = [];
+    const days = [];
+    for (let d = 0; d < 7; d++) {
+      const dayStart = weekStartMs + d * DAY_MS;
+      const dayEnd = dayStart + DAY_MS;
+      const merged = mergeIntervals(collectBusyIntervals(busyRaw, dayStart, dayEnd));
+      days.push({
+        startMs: dayStart,
+        endMs: dayEnd,
+        gaps: freeGaps(dayStart, dayEnd, merged)
+      });
+    }
+    const g = goal({ id: "x", title: "X", minMinutesPerWeek: 30 });
+
+    const direct = computeStackedFeasibleWindowsForWeek({
+      goals: [g],
+      days,
+      tz,
+      weekStartMs,
+      weekEndMs
+    });
+
+    const viaAllocator = allocateWeek({
+      plan: {
+        id: "cmp",
+        weekStart: "2026-04-27",
+        timezone: tz,
+        goalGroups: [],
+        goals: [g],
+        overrides: [],
+        weeklyIntent: { hp6Focus: [] }
+      },
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    expect(direct.x).toEqual(viaAllocator.stackedFeasibleByGoalId!.x);
+  });
+});

@@ -89,6 +89,12 @@ import {
   stubWeeklyGoalFromGoalGroup
 } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
+import {
+  computeStackedFeasibleWindowsForWeek,
+  dayHardPlacementIdealWindow,
+  intersectWithAvailability,
+  placementWindowsForDay
+} from "./goal-feasible-windows";
 import { collectBusyIntervals, freeGaps, mergeIntervals } from "./intervals";
 import { physicalActivityWeeklyGoalFromGymSettings } from "./weekly-routines";
 import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
@@ -340,6 +346,11 @@ export interface AllocateInput {
 export interface AllocateResult {
   blocks: AllocatedBlock[];
   metrics: WeekMetrics;
+  /**
+   * Present when `settings.allocator.goalWindowMode === "stacked"`: per-goal union of
+   * intervals where Pass‑3 constraints allow scheduling (Skedpal envelope).
+   */
+  stackedFeasibleByGoalId?: Record<string, Interval[]>;
 }
 
 /** Internal: a goal augmented with the bounds the allocator actually uses. */
@@ -793,12 +804,28 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     prepared.map((p) => [p.goal.id, p.effectiveMinutes] as const)
   );
 
+  const stackedMode = settings.allocator.goalWindowMode === "stacked";
+  const stackedFeasibleByGoalId = stackedMode
+    ? computeStackedFeasibleWindowsForWeek({
+        goals: prepared.map((p) => p.goal),
+        days,
+        tz,
+        goalAvailabilityWindows: input.goalAvailabilityWindows,
+        niceWeatherWindows: input.niceWeatherWindows,
+        nowMs: allocationNowMs,
+        weekStartMs,
+        weekEndMs
+      })
+    : undefined;
+
   const pass3Sequential = prepared.filter(
     (p) => p.goal.specialGoalType === "gym" || p.weeklyFloorBeforeCatchUpBump > 0
   );
   const pass3RoundRobin = prepared.filter(
     (p) => p.goal.specialGoalType !== "gym" && p.weeklyFloorBeforeCatchUpBump <= 0
   );
+
+  const pinsOnlyPlacement = stackedMode;
 
   const runAllocateGoalPass3 = (p: PreparedGoal) => {
     if (p.effectiveMinutes <= 0) return;
@@ -822,9 +849,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       goalOverrideSources,
       allocationNowMs,
       sleepIntervals,
+      prepared,
       batteryContext,
       groupPlacement,
-      prepared
+      pinsOnlyPlacement
     );
   };
 
@@ -918,7 +946,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     };
   }
 
-  return { blocks, metrics };
+  return stackedFeasibleByGoalId
+    ? { blocks, metrics, stackedFeasibleByGoalId }
+    : { blocks, metrics };
 }
 
 /**
@@ -1702,63 +1732,6 @@ function dayIndexForMsInWeek(ms: number, weekStartMs: number, tz: string): numbe
 }
 
 /**
- * When both after and before local boundaries are set (and before is strictly later than after),
- * placement is restricted to free time inside that wall-clock window on this calendar day.
- * (Single-sided after/before without a pair still only filters listed ideal times — soft signal.)
- */
-function dayHardPlacementIdealWindow(
-  goal: WeeklyGoal,
-  dayStartMs: number,
-  tz: string
-): Interval | null {
-  const after = effectivePlacementIdealAfterBoundary(goal);
-  const before = effectivePlacementIdealBeforeBoundary(goal);
-  if (!after || !before) return null;
-  const startMin = after.hour * 60 + after.minute;
-  const endMin = before.hour * 60 + before.minute;
-  if (endMin <= startMin) return null;
-  const dk = dateKeyInTz(dayStartMs, tz);
-  const segs = dk.split("-");
-  const ys = Number(segs[0]);
-  const mo = Number(segs[1]);
-  const da = Number(segs[2]);
-  if (!Number.isFinite(ys) || !Number.isFinite(mo) || !Number.isFinite(da)) return null;
-  const dayMid = localMidnightMs(ys, mo, da, tz);
-  return {
-    startMs: dayMid + startMin * MS_PER_MIN,
-    endMs: dayMid + endMin * MS_PER_MIN
-  };
-}
-
-/** Intersects free gaps with optional invert-calendar windows, then nice-weather outside windows. */
-function placementWindowsForDay(
-  dayGaps: readonly Interval[],
-  dayStartMs: number,
-  dayEndMs: number,
-  availabilityWindows: readonly Interval[] | undefined,
-  niceWeatherWindows: readonly Interval[] | undefined,
-  goal: WeeklyGoal,
-  tz: string
-): Interval[] {
-  let gaps: Interval[] = dayGaps as Interval[];
-  if (availabilityWindows && availabilityWindows.length > 0) {
-    gaps = intersectWithAvailability(gaps, availabilityWindows, dayStartMs, dayEndMs);
-  }
-  if (
-    goal.scheduleInNiceWeather === true &&
-    niceWeatherWindows &&
-    niceWeatherWindows.length > 0
-  ) {
-    gaps = intersectWithAvailability(gaps, niceWeatherWindows, dayStartMs, dayEndMs);
-  }
-  const idealWin = dayHardPlacementIdealWindow(goal, dayStartMs, tz);
-  if (idealWin) {
-    gaps = intersectWithAvailability(gaps, [idealWin], dayStartMs, dayEndMs);
-  }
-  return gaps;
-}
-
-/**
  * Minutes from `allocationNowMs` onward where this goal may receive Pass‑3 auto
  * placement (same pipeline as `placementWindowsForDay` in `allocateGoal`).
  */
@@ -2061,17 +2034,22 @@ function allocateGoal(
   goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
   nowMs: number | undefined,
   sleepIntervals: readonly Interval[] | undefined,
+  /** Full Pass‑3 cohort (mutating `effectiveMinutes`) for anti–peer-sandwich gap filtering. */
+  pass3PreparedCohort: readonly PreparedGoal[],
   battery?: {
     goalsById: ReadonlyMap<string, WeeklyGoal>;
     dayDrainScores: readonly number[];
     personalSystem: PersonalSystem;
   },
   groupPlacement?: GoalGroupPlacementContext,
-  /** Full Pass‑3 cohort (mutating `effectiveMinutes`) for anti–peer-sandwich gap filtering. */
-  pass3PreparedCohort: readonly PreparedGoal[]
+  /**
+   * When true (stacked goal-window mode), only apply drag/override pins — no greedy auto blocks.
+   */
+  pinsOnlyPlacement?: boolean
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
+  const pinsOnly = pinsOnlyPlacement ?? false;
   try {
     if (remainingMinutes <= 0) return;
 
@@ -2364,6 +2342,8 @@ function allocateGoal(
         }
       }
 
+      if (pinsOnly) continue;
+
       // Pass 0 establishes an even per-day budget; pass 1+ spill `remainingMinutes`
       // into any day that still has gap + headroom. Skipping days that already have a block prevented spill entirely (large hatched “available” bands
       // stayed empty while weekly targets stayed unfilled).
@@ -2533,6 +2513,7 @@ function allocateGoal(
     (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV ?? "";
   if (
     nodeEnv !== "production" &&
+    !pinsOnly &&
     remainingMinutes >= QUANTUM &&
     needsExtraPasses &&
     remainingMinutes <= 8 * 60
@@ -2730,27 +2711,6 @@ function compareGoalsWithNiceWeatherFirst(a: WeeklyGoal, b: WeeklyGoal): number 
   const aNw = a.scheduleInNiceWeather === true ? 0 : 1;
   const bNw = b.scheduleInNiceWeather === true ? 0 : 1;
   return aNw - bNw;
-}
-
-function intersectWithAvailability(
-  gaps: readonly Interval[],
-  availabilityWindows: readonly Interval[],
-  dayStartMs: number,
-  dayEndMs: number
-): Interval[] {
-  const dayWindows = availabilityWindows.filter(
-    (w) => w.endMs > dayStartMs && w.startMs < dayEndMs
-  );
-  if (dayWindows.length === 0) return [];
-  const out: Interval[] = [];
-  for (const gap of gaps) {
-    for (const window of dayWindows) {
-      const startMs = Math.max(gap.startMs, window.startMs);
-      const endMs = Math.min(gap.endMs, window.endMs);
-      if (endMs > startMs) out.push({ startMs, endMs });
-    }
-  }
-  return out;
 }
 
 const BATTERY_PLACEMENT_WEIGHTS = {

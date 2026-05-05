@@ -22,6 +22,16 @@ describe("UserSettings schema", () => {
     expect(parsed.allocator.starvationMode).toBe("proportional");
     expect(parsed.allocator.allocationMode).toBe("even");
     expect(parsed.allocator.catchUpMode).toBe("automated");
+    expect(parsed.allocator.goalWindowMode).toBe("linear");
+  });
+
+  it("accepts stacked goalWindowMode", () => {
+    const parsed = userSettingsSchema.parse({
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      allocator: { goalWindowMode: "stacked" }
+    });
+    expect(parsed.allocator.goalWindowMode).toBe("stacked");
+    expect(parsed.allocator.allocationMode).toBe("even");
   });
 
   it("accepts finish-early allocationMode", () => {
@@ -41,6 +51,7 @@ describe("UserSettings schema", () => {
     expect(migrated.allocator.starvationMode).toBe("strict");
     expect(migrated.allocator.allocationMode).toBe("even");
     expect(migrated.allocator.catchUpMode).toBe("automated");
+    expect(migrated.allocator.goalWindowMode).toBe("linear");
   });
 
   it("DEFAULT_USER_SETTINGS round-trips", () => {

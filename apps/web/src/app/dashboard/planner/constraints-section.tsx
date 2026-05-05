@@ -26,6 +26,23 @@ async function updateAllocator(formData: FormData): Promise<void> {
   afterConstraintsSave(userId);
 }
 
+async function updateGoalWindowMode(formData: FormData): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const raw = String(formData.get("goalWindowMode") ?? "linear");
+  const goalWindowMode = (
+    raw === "stacked" ? "stacked" : "linear"
+  ) as UserSettings["allocator"]["goalWindowMode"];
+  await saveSettings(userId, {
+    ...settings,
+    allocator: { ...settings.allocator, goalWindowMode }
+  });
+  afterConstraintsSave(userId);
+}
+
 async function updateAllocationMode(formData: FormData): Promise<void> {
   "use server";
   const session = await authOrPreview();
@@ -126,6 +143,12 @@ function allocationModeDisclosureSummary(settings: UserSettings): string {
   return settings.allocator.allocationMode === "finish-early"
     ? "Finish early (tail gap)"
     : "Even gaps between blocks";
+}
+
+function goalWindowModeDisclosureSummary(settings: UserSettings): string {
+  return settings.allocator.goalWindowMode === "stacked"
+    ? "Stacked envelopes (external scheduler)"
+    : "Linear blocks (in-app)";
 }
 
 function starvationDisclosureSummary(settings: UserSettings): string {
@@ -287,6 +310,57 @@ export async function ConstraintsSection() {
                 <span>
                   <strong>Manual</strong> — floors only from values you apply on the week review.
                   Stored adjustments are ignored by the allocator while automated mode is on.
+                </span>
+              </label>
+              <button type="submit" className="btn-primary mt-1 w-fit text-xs">
+                Save
+              </button>
+            </div>
+          </ConstraintCard>
+        </form>
+      </details>
+
+      <details className="card">
+        <summary className="flex cursor-pointer list-none flex-col gap-0.5 py-0.5 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-baseline sm:gap-2">
+          <span className="text-sm font-semibold">Perfect Week placement style</span>
+          <span className="text-xs font-normal text-ink-500 dark:text-ink-400">
+            {goalWindowModeDisclosureSummary(settings)}
+          </span>
+        </summary>
+        <p className="mt-1 text-xs text-ink-400">
+          Linear mode greedy-packs concrete goal blocks into free calendar time. Stacked mode skips
+          auto blocks (pins still apply) and computes per-goal <strong>feasible time unions</strong> for
+          tools like Skedpal — weekly targets from Pass 1+2 stay the same; unplaced minutes mean duration
+          is owned outside this planner until you hook up export.
+        </p>
+        <form action={updateGoalWindowMode} className="mt-3">
+          <ConstraintCard label="Goal windows">
+            <div className="flex flex-col gap-2 text-sm">
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="goalWindowMode"
+                  value="linear"
+                  defaultChecked={settings.allocator.goalWindowMode !== "stacked"}
+                  className="mt-1"
+                />
+                <span>
+                  <strong>Linear (default)</strong> — place scheduled blocks each week inside your
+                  constraints.
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="goalWindowMode"
+                  value="stacked"
+                  defaultChecked={settings.allocator.goalWindowMode === "stacked"}
+                  className="mt-1"
+                />
+                <span>
+                  <strong>Stacked timemap</strong> — emit where each goal <em>may</em> run (maximum
+                  envelope from calendar gaps + goal rules); hand duration packing to your external
+                  scheduler.
                 </span>
               </label>
               <button type="submit" className="btn-primary mt-1 w-fit text-xs">

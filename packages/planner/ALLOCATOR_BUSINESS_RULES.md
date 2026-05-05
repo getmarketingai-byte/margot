@@ -34,6 +34,13 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 - **Nice-weather bias (`niceWeatherWindows` non-empty):** goals with **`scheduleInNiceWeather`** iterate days **descending** by future minutes in `niceWeather ∩ free gaps`, so placements anchor on forecast-nice days. **Unconstrained** goals iterate **ascending** by the same overlap, filling days with little or no nice slack before occupying shared sunny pockets—so constrained goals stay inside their outdoor windows whenever another day can take the spill. At the **same commitment / floor / gym tier**, `scheduleInNiceWeather` rows are ordered **ahead of** unconstrained peers (including demand-based round‑robin sort so they do not lose the week to generic greedy passes).
 - Drag overrides and `source: "actual"` pins are honoured per existing pin rules (including relaxed overlap for actuals vs calendar busy, but not vs sleep).
 
+## Stacked goal-window mode (`settings.allocator.goalWindowMode === "stacked"`)
+
+- Pass 1+2 are unchanged — weekly targets and metrics basis stay the same.
+- Pass 3 **does not** emit greedy auto blocks; only **pins** (drag / goal overrides) are applied via the same validation rules as linear mode.
+- **`AllocateResult.stackedFeasibleByGoalId`** gives, per scheduling goal, the merged union of intervals where that goal could be placed (free gaps ∩ invert-calendar windows ∩ nice-weather outside windows when flagged ∩ hard ideal after/before band ∩ allowed weekdays ∩ local earliest/latest hour band, clipped at `nowMs` when set). Envelopes are **not** reduced by other goals’ placements (each goal’s region is computed independently).
+- **`unplacedMinutes`** typically stays positive when placement demand remains and no pins/logs fill it — in stacked mode this means duration is deferred to an external scheduler (e.g. Skedpal), not that the feasible envelope is empty.
+
 ## Calendar packing (`settings.allocator.allocationMode`)
 
 Runs **after** Pass 3 in [`spreadEvenGoalBuffersInSnapshotGaps`](src/weekly.ts) when mode is **`even`**. **`finish-early`** skips this pass (Pass 3 already packs each gap toward the **start** of that gap).
