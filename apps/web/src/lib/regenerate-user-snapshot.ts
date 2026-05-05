@@ -11,6 +11,7 @@ import {
   type AllocatedBlock
 } from "@calendar-automations/planner";
 import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
+import { effectiveWeeklyGoalWindowPlacement } from "@calendar-automations/schema";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
 import { getCachedPlanWeekAllocationInputs } from "@/lib/cached-plan-week-allocation-inputs";
@@ -181,7 +182,16 @@ export async function runRegenerateForUser(userId: string): Promise<{ eventCount
 
   let mergedGoalBlocks = allocationSlices.flatMap((a) => a.blocks);
   if (settings.allocator.goalWindowMode !== "stacked") {
-    mergedGoalBlocks = mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows);
+    mergedGoalBlocks = mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows, {
+      shouldMergeOrphanGoal:
+        settings.allocator.goalWindowMode === "hybrid"
+          ? (goalId) => {
+              const g = plan.goals.find((x) => x.id === goalId);
+              if (!g) return true;
+              return effectiveWeeklyGoalWindowPlacement(g, "hybrid") === "linear";
+            }
+          : undefined
+    });
   }
 
   let proposedBlocksRaw = filterInvertedTimemapFromProposedBlocks(

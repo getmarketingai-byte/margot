@@ -2,6 +2,36 @@
 
 Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the product contract; keep it in sync when changing allocation behaviour.
 
+## Vocabulary — goal window modes (`settings.allocator.goalWindowMode`)
+
+Use **only** these terms in UI copy, docs, comments, and schema values tied to allocation:
+
+| Term | Where | Meaning |
+|------|--------|---------|
+| **`linear`** | Global `goalWindowMode` | Every goal gets **linear-role** Pass 3 (greedy auto blocks, full pin/override behaviour, orphan merge on preview). |
+| **`stacked`** | Global `goalWindowMode` | Every goal gets **stacked-role** Pass 3 (pins-only auto, feasible ribbons, overrides cleared for placement, no orphan merge). |
+| **`hybrid`** | Global `goalWindowMode` | Each goal resolves to **linear-role** or **stacked-role** via `WeeklyGoal.goalWindowPlacement` (omit ⇒ **`stacked`**). |
+| **`linear-role`** | Under **`hybrid`** or global **`linear`** | Same Pass 3 + merge rules as global **`linear`** for that goal. |
+| **`stacked-role`** | Under **`hybrid`** or global **`stacked`** | Same Pass 3 + ribbons + merge rules as global **`stacked`** for that goal. |
+| **`goalWindowPlacement`** | `WeeklyGoal`, hybrid only | **`linear`** \| **`stacked`**. Omit ⇒ **`stacked`**. Ignored when global mode is **`linear`** / **`stacked`**. |
+| **`stackedRibbonVsLinearPeers`** | `WeeklyGoal`, hybrid + stacked-role only | **`non_blocking`** \| **`blocking`**. Omit ⇒ **`non_blocking`**. Ignored global **`stacked`** / **`linear`**. |
+| **`non_blocking`** (ribbons) | Stacked-role in **hybrid** | Feasible ribbon from gap snapshot **before** the linear cohort mutates gaps; may overlap linear blocks in preview. |
+| **`blocking`** (ribbons) | Stacked-role in **hybrid** | Feasible ribbon recomputed **after** the linear cohort from remaining gaps. |
+| **`stackedFeasibleByGoalId`** | `AllocateResult` | Per-goal intervals driving stacked-timemap ribbons (identifier name is historical). |
+
+### Hybrid Pass 3 sequencing
+
+When **`goalWindowMode === "hybrid"`**:
+
+1. **Non-blocking stacked feasibility:** snapshot gaps → [`computeStackedFeasibleWindowsForWeek`](src/goal-feasible-windows.ts) for stacked-role goals with **`non_blocking`** → merge into `stackedFeasibleByGoalId`.
+2. **Linear cohort:** greedy Pass 3 for **linear-role** goals only (sequential gym/floor tier then round-robin waves).
+3. **Blocking stacked feasibility:** current **`days`** gaps → same helper for stacked-role **`blocking`** goals → merge into `stackedFeasibleByGoalId`.
+4. **Stacked cohort:** pins-only Pass 3 for **stacked-role** goals.
+
+Global **`linear`** / **`stacked`**: unchanged single-phase Pass 3 order.
+
+Under **hybrid**, preview / ICS merge runs **`mergeOrphanGoalOverrideBlocks`** only for **linear-role** goals (stacked-role orphans stay omitted).
+
 ## Time horizons
 
 | Concept | Meaning |
@@ -35,6 +65,8 @@ Canonical implementation: [`src/weekly.ts`](src/weekly.ts). This document is the
 - Drag overrides and `source: "actual"` pins are honoured per existing pin rules (including relaxed overlap for actuals vs calendar busy, but not vs sleep).
 
 ## Stacked goal-window mode (`settings.allocator.goalWindowMode === "stacked"`)
+
+Same **`stacked-role`** behaviour applies to **every** goal globally; there are no linear peers in Pass 3, so **`WeeklyGoal.stackedRibbonVsLinearPeers`** is ignored (`effectiveStackedRibbonVsLinearPeers` treats non-hybrid stacked as **`non_blocking`** for naming consistency only).
 
 - Pass 1+2 are unchanged — weekly targets and metrics basis stay the same.
 - Pass 3 **does not** emit greedy auto blocks and **does not** apply **`WeeklyPlan.overrides`** of kind **`goal`** (drag / day-sheet pins saved from linear placement). Override maps used for placement, group daily caps, “pinned actual” log pairing, and metrics are cleared for this mode so preview matches independent feasible envelopes only.

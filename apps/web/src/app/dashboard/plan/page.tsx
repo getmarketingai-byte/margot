@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
+import { filterSchedulingGoals, effectiveWeeklyGoalWindowPlacement, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
 import {
   allocateWeek,
   buildStableUid,
@@ -208,7 +208,8 @@ export default async function PlanPage() {
   });
 
   let stackedTimemapPreviewBlocks: SystemBlock[] =
-    settings.allocator.goalWindowMode === "stacked"
+    settings.allocator.goalWindowMode === "stacked" ||
+    settings.allocator.goalWindowMode === "hybrid"
       ? allocationSlices.flatMap((alloc, idx) => {
           const slice = weekSlices[idx]!;
           const map = alloc.stackedFeasibleByGoalId;
@@ -240,10 +241,20 @@ export default async function PlanPage() {
       scheduleHorizon.horizonEndMs
     );
   }
+  const goalWindowMode = settings.allocator.goalWindowMode;
   const proposedMerged =
-    settings.allocator.goalWindowMode === "stacked"
+    goalWindowMode === "stacked"
       ? mergedGoalBlocks
-      : mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows);
+      : mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows, {
+          shouldMergeOrphanGoal:
+            goalWindowMode === "hybrid"
+              ? (goalId) => {
+                  const g = plan.goals.find((x) => x.id === goalId);
+                  if (!g) return true;
+                  return effectiveWeeklyGoalWindowPlacement(g, "hybrid") === "linear";
+                }
+              : undefined
+        });
   let proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
     proposedMerged,
     plan,
@@ -445,6 +456,7 @@ export default async function PlanPage() {
         planClientDeletedGoals={plan.deletedGoals}
         goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
         goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
+        allocatorGoalWindowMode={settings.allocator.goalWindowMode}
       />
     </div>
   );

@@ -598,10 +598,11 @@ export const allocatorSettingsSchema = z.object({
    */
   allocationMode: z.enum(["even", "finish-early"]).default("even"),
   /**
-   * Whether Perfect Week emits concrete greedy blocks (`linear`) or per-goal
-   * feasible time unions for external schedulers (`stacked`). Hybrid is phase 2.
+   * Whether Perfect Week emits concrete greedy blocks (`linear`), per-goal
+   * feasible ribbons (`stacked`), or per-goal **linear | stacked** via
+   * `WeeklyGoal.goalWindowPlacement` (`hybrid`).
    */
-  goalWindowMode: z.enum(["linear", "stacked"]).default("linear")
+  goalWindowMode: z.enum(["linear", "stacked", "hybrid"]).default("linear")
 });
 export type AllocatorSettings = z.infer<typeof allocatorSettingsSchema>;
 

@@ -34,6 +34,14 @@ describe("UserSettings schema", () => {
     expect(parsed.allocator.allocationMode).toBe("even");
   });
 
+  it("accepts hybrid goalWindowMode", () => {
+    const parsed = userSettingsSchema.parse({
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      allocator: { goalWindowMode: "hybrid" }
+    });
+    expect(parsed.allocator.goalWindowMode).toBe("hybrid");
+  });
+
   it("accepts finish-early allocationMode", () => {
     const parsed = userSettingsSchema.parse({
       schemaVersion: SETTINGS_SCHEMA_VERSION,

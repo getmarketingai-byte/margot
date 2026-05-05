@@ -38,8 +38,13 @@ function blockAlreadyShowsOverride(
 export function mergeOrphanGoalOverrideBlocks(
   blocks: readonly AllocatedBlock[],
   plan: Pick<WeeklyPlan, "goals" | "overrides">,
-  windows: readonly { weekStartMs: number; weekEndMs: number }[]
+  windows: readonly { weekStartMs: number; weekEndMs: number }[],
+  options?: {
+    /** When false, skip merging this goal’s orphan overrides (hybrid stacked-role). */
+    shouldMergeOrphanGoal?: (goalId: string) => boolean;
+  }
 ): AllocatedBlock[] {
+  const shouldMergeOrphanGoal = options?.shouldMergeOrphanGoal ?? (() => true);
   const keysPresent = new Set<string>();
   for (const b of blocks) {
     if (!b.segment && b.dragKey) keysPresent.add(b.dragKey);
@@ -66,6 +71,7 @@ export function mergeOrphanGoalOverrideBlocks(
     if (!parsed) continue;
     const goal = goalById.get(parsed.goalId);
     if (!goal) continue;
+    if (!shouldMergeOrphanGoal(goal.id)) continue;
     if (blockAlreadyShowsOverride(blocks, goal.id, o.startMs, o.endMs)) continue;
 
     extras.push({

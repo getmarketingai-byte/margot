@@ -1,7 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import type { GoalGroup, GymSettings, WeeklyGoal } from "@calendar-automations/schema";
+import type {
+  AllocatorGoalWindowMode,
+  GoalGroup,
+  GymSettings,
+  WeeklyGoal
+} from "@calendar-automations/schema";
 import { useMemo } from "react";
 import { PlanCalendarViewProvider, usePlanCalendarView } from "./plan-calendar-view-context";
 import type { GoalGroupRailBundle, PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";
@@ -237,6 +242,7 @@ interface PerfectWeekPlannerBodyProps {
   planClientDeletedGoals: Parameters<typeof PlanClient>[0]["initialDeletedGoals"];
   goalIdsWithDaySheetHistory: readonly string[];
   goalGroupTitles: Record<string, string>;
+  allocatorGoalWindowMode: AllocatorGoalWindowMode;
 }
 
 export default function PerfectWeekPlannerBody(props: PerfectWeekPlannerBodyProps) {
@@ -327,7 +333,8 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
     gymTemplate,
     planClientDeletedGoals,
     goalIdsWithDaySheetHistory,
-    goalGroupTitles
+    goalGroupTitles,
+    allocatorGoalWindowMode
   } = props;
 
   const weekStartMsView = isoWeekStartsForRolling[0] ?? calendarWeekStartsMs[0]!;
@@ -365,6 +372,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
               goalGroups={goalGroups}
               goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
               rollingAsOfMs={nowMs}
+              allocatorGoalWindowMode={allocatorGoalWindowMode}
             />
             <NotScheduledForActiveSlices
               isoWeekStartsMs={isoWeekStartsForRolling}

@@ -264,9 +264,57 @@ export const weeklyGoalSchema = z.object({
    * IDs of [`GoalGroup`](goalGroupSchema) on the same [`WeeklyPlan`]. A goal may
    * belong to several groups; aggregate constraints intersect (tightest wins).
    */
-  groupIds: z.array(z.string().min(1)).max(16).optional()
+  groupIds: z.array(z.string().min(1)).max(16).optional(),
+  /**
+   * Only when `UserSettings.allocator.goalWindowMode === "hybrid"`: Pass 3 treats
+   * this goal as **linear-role** (greedy auto blocks + pins) or **stacked-role**
+   * (pins-only + feasible ribbons). Omit ⇒ **`stacked`** (Skedpal-first).
+   * Ignored when global mode is `linear` or `stacked`.
+   *
+   * @see [`ALLOCATOR_BUSINESS_RULES.md`](../../planner/ALLOCATOR_BUSINESS_RULES.md) — vocabulary + hybrid Pass 3 order.
+   */
+  goalWindowPlacement: z.enum(["linear", "stacked"]).optional(),
+  /**
+   * Only when hybrid **and** this goal is **stacked-role**: whether stacked-timemap
+   * ribbons ignore linear peers (`non_blocking`) or shrink after linear cohort
+   * (`blocking`). Omit ⇒ `non_blocking`. Ignored outside hybrid stacked-role goals.
+   *
+   * @see [`ALLOCATOR_BUSINESS_RULES.md`](../../planner/ALLOCATOR_BUSINESS_RULES.md)
+   */
+  stackedRibbonVsLinearPeers: z.enum(["non_blocking", "blocking"]).optional()
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
+
+/** `UserSettings.allocator.goalWindowMode` — exported for planner/UI without importing full settings. */
+export type AllocatorGoalWindowMode = "linear" | "stacked" | "hybrid";
+
+/**
+ * Effective per-goal Pass 3 placement class. When global mode is `hybrid`, uses
+ * {@link WeeklyGoal.goalWindowPlacement} (omit ⇒ `stacked`).
+ */
+export function effectiveWeeklyGoalWindowPlacement(
+  goal: Pick<WeeklyGoal, "goalWindowPlacement">,
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): "linear" | "stacked" {
+  if (allocatorGoalWindowMode === "linear") return "linear";
+  if (allocatorGoalWindowMode === "stacked") return "stacked";
+  return goal.goalWindowPlacement ?? "stacked";
+}
+
+/**
+ * Hybrid + stacked-role only: whether ribbons ignore linear peers (`non_blocking`)
+ * or shrink after greedy cohort (`blocking`). Otherwise returns `non_blocking` (ignored).
+ */
+export function effectiveStackedRibbonVsLinearPeers(
+  goal: Pick<WeeklyGoal, "goalWindowPlacement" | "stackedRibbonVsLinearPeers">,
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): "non_blocking" | "blocking" {
+  const placement = effectiveWeeklyGoalWindowPlacement(goal, allocatorGoalWindowMode);
+  if (allocatorGoalWindowMode !== "hybrid" || placement !== "stacked") {
+    return "non_blocking";
+  }
+  return goal.stackedRibbonVsLinearPeers ?? "non_blocking";
+}
 
 export function normalisePlacementIdealClockBoundary(
   b: { hour: unknown; minute: unknown } | undefined
