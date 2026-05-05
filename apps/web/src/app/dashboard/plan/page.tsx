@@ -212,7 +212,8 @@ export default async function PlanPage() {
     settings.allocator.goalWindowMode === "hybrid"
       ? allocationSlices.flatMap((alloc, idx) => {
           const slice = weekSlices[idx]!;
-          const map = alloc.stackedFeasibleByGoalId;
+          const map =
+            alloc.stackedFeasibleRibbonPreviewByGoalId ?? alloc.stackedFeasibleByGoalId;
           if (!map) return [];
           const goalById = new Map(schedulingGoals.map((g) => [g.id, g] as const));
           const out: SystemBlock[] = [];

@@ -75,10 +75,9 @@ export function dayHardPlacementIdealWindow(
 }
 
 /**
- * When **only one** of ideal after / before is set, Pass 3 treats it as a soft nudge for listed
- * ideal clock rows — but stacked envelopes should still respect an explicit **upper** (“before”)
- * or **lower** (“after”) wall-clock bound on this calendar day so Skedpal sees the same cutoff as
- * the user configured.
+ * When **only one** of ideal after / before is set, stacked envelopes intersect this band.
+ * Pass 3 uses the same geometry via {@link placementWindowsForDay} (hard clip); listed
+ * ideal clock rows remain placement **nudges** inside that band when present.
  *
  * Returns null when both sides are set (paired band is applied inside {@link placementWindowsForDay})
  * or when neither side is set.
@@ -136,7 +135,7 @@ export function clipIntervalsToPlacementIdealSingleSidedBands(
   return intersectWithAvailability(intervals as Interval[], [band], dayStartMs, dayEndMs);
 }
 
-/** Intersects free gaps with optional invert-calendar windows, then nice-weather outside windows. */
+/** Intersects free gaps with invert/nice-weather layers, paired hard ideal windows, then single-sided ideal after/before bands (aligned with stacked feasibility). */
 export function placementWindowsForDay(
   dayGaps: readonly Interval[],
   dayStartMs: number,
@@ -160,6 +159,10 @@ export function placementWindowsForDay(
   const idealWin = dayHardPlacementIdealWindow(goal, dayStartMs, tz);
   if (idealWin) {
     gaps = intersectWithAvailability(gaps, [idealWin], dayStartMs, dayEndMs);
+  }
+  const singleSidedIdeal = dayPlacementIdealSingleSidedBand(goal, dayStartMs, dayEndMs, tz);
+  if (singleSidedIdeal) {
+    gaps = intersectWithAvailability(gaps, [singleSidedIdeal], dayStartMs, dayEndMs);
   }
   return gaps;
 }

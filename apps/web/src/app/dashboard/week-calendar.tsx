@@ -5,7 +5,7 @@
  * planning surfaces can pass drag callbacks for optimistic UI.
  */
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   displayBusyEventLabel,
@@ -13,6 +13,12 @@ import {
   type BusyEvent
 } from "@calendar-automations/planner";
 import type { WeeklyGoal, FrameworkRegistryEntry } from "@calendar-automations/schema";
+import {
+  effectiveWeeklyGoalWindowPlacement,
+  hybridHasMixedLinearTimemapBlocking,
+  hybridLinearPlacementBlocksTimemaps,
+  type AllocatorGoalWindowMode
+} from "@calendar-automations/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import { overlayTagsForGoal } from "@/lib/framework-calendar-overlay-tags";
 import { systemBlockShownOnCalendarAndIcs, type SystemBlock } from "@/lib/week-blocks";
@@ -76,6 +82,15 @@ interface WeekCalendarProps {
   frameworkRegistryForOverlays?: readonly FrameworkRegistryEntry[];
   frameworkOverlayLayerState?: FrameworkOverlayLayerState;
   wheelAreaLabel?: (wheelAreaId: string) => string;
+  /**
+   * When hybrid + mixed linear timemap blocking (some Yes / some No), proposed-block z-order is per goal.
+   */
+  allocatorGoalWindowMode?: AllocatorGoalWindowMode;
+  /**
+   * Hybrid “no blocking” weeks: draw invert/stacked timemap ribbons above greedy proposed blocks so
+   * ribbons visibly sit on top. When false/omitted, proposed blocks paint above ribbons.
+   */
+  stackedTimemapRibbonsAboveProposedGoals?: boolean;
 }
 
 const PX_PER_HOUR = 30;
@@ -246,7 +261,8 @@ function TimemapRibbonHover({
   laneVisualLeftPx,
   goalTitle,
   rangeLine,
-  ribbonAria
+  ribbonAria,
+  layerZClass
 }: {
   block: Pick<PositionedBlock, "topPx" | "heightPx">;
   barColor: string;
@@ -254,6 +270,7 @@ function TimemapRibbonHover({
   goalTitle: string;
   rangeLine: string;
   ribbonAria: string;
+  layerZClass: string;
 }) {
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const [hover, setHover] = useState(false);
@@ -278,7 +295,7 @@ function TimemapRibbonHover({
           syncFractionFromEvent(e);
         }}
         onMouseLeave={() => setHover(false)}
-        className="absolute z-[29]"
+        className={`absolute ${layerZClass}`}
         style={{
           top: block.topPx,
           height: block.heightPx,
@@ -670,8 +687,37 @@ export function WeekCalendar({
   ribbonLaneOrderingGoals,
   frameworkRegistryForOverlays,
   frameworkOverlayLayerState,
-  wheelAreaLabel
+  wheelAreaLabel,
+  stackedTimemapRibbonsAboveProposedGoals = false,
+  allocatorGoalWindowMode
 }: WeekCalendarProps) {
+  const schedulingGoalsForHybrid = weeklyGoalsForFrameworkOverlays ?? [];
+  const hybridMixedLinearTimemapBlocking =
+    allocatorGoalWindowMode === "hybrid" &&
+    hybridHasMixedLinearTimemapBlocking(schedulingGoalsForHybrid, allocatorGoalWindowMode);
+
+  const ribbonsAboveProposedGoals = stackedTimemapRibbonsAboveProposedGoals === true;
+  let timemapRibbonLayerZ: string;
+  let proposedGoalLayerZDefault: string;
+  if (hybridMixedLinearTimemapBlocking) {
+    timemapRibbonLayerZ = "z-[35]";
+    proposedGoalLayerZDefault = "z-[34]";
+  } else {
+    timemapRibbonLayerZ = ribbonsAboveProposedGoals ? "z-[38]" : "z-[12]";
+    proposedGoalLayerZDefault = ribbonsAboveProposedGoals ? "z-[22]" : "z-[34]";
+  }
+
+  const proposedGoalLayerZForBlock = useCallback(
+    (goalId: string | undefined): string => {
+      if (!hybridMixedLinearTimemapBlocking || !goalId) return proposedGoalLayerZDefault;
+      const g = schedulingGoalsForHybrid.find((x) => x.id === goalId);
+      if (!g) return proposedGoalLayerZDefault;
+      if (effectiveWeeklyGoalWindowPlacement(g, "hybrid") !== "linear") return "z-[40]";
+      return hybridLinearPlacementBlocksTimemaps(g, "hybrid") ? "z-[40]" : "z-[18]";
+    },
+    [hybridMixedLinearTimemapBlocking, proposedGoalLayerZDefault, schedulingGoalsForHybrid]
+  );
+
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
   const windowStart = startHour * 60;
@@ -1002,6 +1048,7 @@ export function WeekCalendar({
                     timezone={timezone}
                     weekStartMs={weekStartMs}
                     startHour={startHour}
+                    timemapRibbonLayerZ={timemapRibbonLayerZ}
                   />
                 ))}
               {(proposedByDay.get(dayIdx) ?? []).map((p, i) => (
@@ -1012,6 +1059,7 @@ export function WeekCalendar({
                     reservedForGoalDrag={reservedForGoalDrag}
                     onDragCommit={onProposedDragCommit}
                     onDragOverridesCleared={onProposedDragOverridesCleared}
+                    proposedGoalLayerZ={proposedGoalLayerZForBlock(p.goalId)}
                   />
                 ))}
             </div>
@@ -1228,7 +1276,8 @@ function SystemBlockSlice({
   pxPerHour,
   timezone,
   weekStartMs,
-  startHour
+  startHour,
+  timemapRibbonLayerZ
 }: {
   block: PositionedBlock & {
     kind: SystemBlock["system"];
@@ -1242,6 +1291,7 @@ function SystemBlockSlice({
   timezone: string;
   weekStartMs: number;
   startHour: number;
+  timemapRibbonLayerZ: string;
 }) {
   if (block.kind === "weather") {
     return (
@@ -1294,6 +1344,7 @@ function SystemBlockSlice({
         goalTitle={goalTitle}
         rangeLine={rangeLine}
         ribbonAria={ribbonAria}
+        layerZClass={timemapRibbonLayerZ}
       />
     );
   }
@@ -1340,7 +1391,8 @@ function ProposedBlock({
   pxPerHour,
   reservedForGoalDrag,
   onDragCommit,
-  onDragOverridesCleared
+  onDragOverridesCleared,
+  proposedGoalLayerZ
 }: {
   block: PositionedBlock & {
     isSegment: boolean;
@@ -1353,6 +1405,7 @@ function ProposedBlock({
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
   onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
   onDragOverridesCleared?: (dragKeys: string[]) => void;
+  proposedGoalLayerZ: string;
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
@@ -1381,6 +1434,7 @@ function ProposedBlock({
         onDragCommit={onDragCommit}
         onDragOverridesCleared={onDragOverridesCleared}
         frameworkOverlayChips={block.frameworkOverlayChips}
+        layerZClass={proposedGoalLayerZ}
       />
     );
   }
@@ -1388,7 +1442,7 @@ function ProposedBlock({
   return (
     <div
       title={`${block.title} (proposed)${chipHint}`}
-      className={`absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
+      className={`absolute inset-x-0.5 ${proposedGoalLayerZ} overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         selectable ? "cursor-pointer" : ""
       }`}
       role={selectable ? "button" : undefined}

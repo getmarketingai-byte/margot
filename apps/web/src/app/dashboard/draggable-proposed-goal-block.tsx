@@ -88,6 +88,8 @@ interface DraggableProposedGoalBlockProps {
   onDragOverridesCleared?: (dragKeys: string[]) => void;
   /** Tiny framework chips under the goal title (Perfect Week overlays). */
   frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
+  /** Stacking vs timemap ribbons (Perfect Week hybrid layering). */
+  layerZClass?: string;
 }
 
 export function DraggableProposedGoalBlock({
@@ -103,7 +105,8 @@ export function DraggableProposedGoalBlock({
   reservedForGoalDrag,
   onDragCommit,
   frameworkOverlayChips,
-  onDragOverridesCleared
+  onDragOverridesCleared,
+  layerZClass = "z-20"
 }: DraggableProposedGoalBlockProps) {
   const router = useRouter();
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -324,7 +327,7 @@ export function DraggableProposedGoalBlock({
       role="button"
       tabIndex={0}
       aria-label={`${title}. ${isLocked ? "Locked time from your plan or day sheet — drag to adjust." : "Drag to move within the week."}`}
-      className={`group absolute inset-x-0.5 z-20 select-none overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
+      className={`group absolute inset-x-0.5 ${layerZClass} select-none overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         isLocked ? "ring-1 ring-white/50" : ""
       } ${
         isFromDaySheet

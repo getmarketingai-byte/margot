@@ -9,6 +9,7 @@ import {
 } from "@calendar-automations/schema";
 import type { BusyEvent } from "../src/types";
 import { collectBusyIntervals, freeGaps, mergeIntervals } from "../src/intervals";
+import { hourInTz } from "../src/time";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -377,6 +378,50 @@ describe("stacked feasible windows", () => {
   });
 });
 
+describe("placement ideal single-sided bands (linear Pass 3)", () => {
+  it("placementIdealClockAfter-only prevents auto blocks before that local time", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const anchor = "2026-04-27";
+    const tz = "UTC";
+    const plan: WeeklyPlan = {
+      id: "plan-after-only-linear",
+      weekStart: anchor,
+      timezone: tz,
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "cad",
+          title: "Cad",
+          minMinutesPerWeek: 120,
+          daysOfWeek: ["friday"],
+          placementIdealClockAfter: { hour: 17, minute: 0 },
+          priority: 5
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "linear" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: anchor
+    });
+
+    const blocks = result.blocks.filter((b) => !b.segment && b.goalId === "cad");
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const b of blocks) {
+      expect(hourInTz(b.startMs, tz)).toBeGreaterThanOrEqual(17);
+    }
+  });
+});
+
 describe("hybrid goal window mode", () => {
   const hybridAllocator = buildSettings({
     allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "hybrid" }
@@ -482,13 +527,19 @@ describe("hybrid goal window mode", () => {
     expect(hybridResult.blocks.some((b) => !b.segment && b.goalId === "linear-peer")).toBe(true);
   });
 
-  it("hybrid blocking stacked ribbon is not wider than non_blocking after linear cohort consumes gaps", () => {
+  it("hybrid linear blocking shrinks stacked ribbons vs all linear rows non-blocking", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const weekEndMs = weekStartMs + 7 * DAY_MS;
     const anchor = "2026-04-27";
 
-    const hybridPlan: WeeklyPlan = {
-      id: "plan-hybrid-ribbons",
+    const stackedPeer = goal({
+      id: "stacked-peer",
+      title: "Stacked",
+      minMinutesPerWeek: 30
+    });
+
+    const widePlan: WeeklyPlan = {
+      id: "plan-hybrid-ribbons-wide",
       weekStart: anchor,
       timezone: "UTC",
       goalGroups: [],
@@ -500,25 +551,34 @@ describe("hybrid goal window mode", () => {
           minMinutesPerWeek: 9 * 60,
           priority: 5
         }),
-        goal({
-          id: "non-blocker",
-          title: "NB",
-          stackedRibbonVsLinearPeers: "non_blocking",
-          minMinutesPerWeek: 30
-        }),
-        goal({
-          id: "blocker",
-          title: "BL",
-          stackedRibbonVsLinearPeers: "blocking",
-          minMinutesPerWeek: 30
-        })
+        stackedPeer
       ],
       overrides: [],
       weeklyIntent: { hp6Focus: [] }
     };
 
-    const result = allocateWeek({
-      plan: hybridPlan,
+    const narrowPlan: WeeklyPlan = {
+      id: "plan-hybrid-ribbons-narrow",
+      weekStart: anchor,
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "linear-peer",
+          title: "Linear",
+          goalWindowPlacement: "linear",
+          stackedRibbonVsLinearPeers: "blocking",
+          minMinutesPerWeek: 9 * 60,
+          priority: 5
+        }),
+        stackedPeer
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const wide = allocateWeek({
+      plan: widePlan,
       busy: [],
       settings: hybridAllocator,
       weekStartMs,
@@ -526,14 +586,85 @@ describe("hybrid goal window mode", () => {
       weekAnchorDate: anchor
     });
 
-    const tNb = totalMs(result.stackedFeasibleByGoalId!["non-blocker"] ?? []);
-    const tBl = totalMs(result.stackedFeasibleByGoalId!["blocker"] ?? []);
-    expect(tNb).toBe(7 * DAY_MS);
-    expect(tBl).toBeLessThan(tNb);
-    const placedLinearMin = result.blocks
+    const narrow = allocateWeek({
+      plan: narrowPlan,
+      busy: [],
+      settings: hybridAllocator,
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: anchor
+    });
+
+    const tWide = totalMs(wide.stackedFeasibleByGoalId!["stacked-peer"] ?? []);
+    const tNarrow = totalMs(narrow.stackedFeasibleByGoalId!["stacked-peer"] ?? []);
+    expect(tWide).toBe(7 * DAY_MS);
+    expect(tNarrow).toBeLessThan(tWide);
+    const placedLinearMin = narrow.blocks
       .filter((b) => !b.segment && b.goalId === "linear-peer")
       .reduce((a, b) => a + (b.endMs - b.startMs), 0);
     expect(placedLinearMin).toBeGreaterThan(0);
+  });
+
+  it("mixed hybrid emits stackedFeasibleRibbonPreviewByGoalId wider than post-linear ribbons (non-blocking linear does not clip preview)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const anchor = "2026-04-27";
+
+    const stackedPeer = goal({
+      id: "stacked-peer",
+      title: "Stacked",
+      minMinutesPerWeek: 120,
+      priority: 5
+    });
+
+    const mixPlan: WeeklyPlan = {
+      id: "plan-hybrid-mixed-preview",
+      weekStart: anchor,
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "blocker-linear",
+          title: "Blocker",
+          goalWindowPlacement: "linear",
+          stackedRibbonVsLinearPeers: "blocking",
+          minMinutesPerWeek: 60,
+          priority: 5
+        }),
+        goal({
+          id: "garage-linear",
+          title: "Garage",
+          goalWindowPlacement: "linear",
+          stackedRibbonVsLinearPeers: "non_blocking",
+          minMinutesPerWeek: 120,
+          priority: 5
+        }),
+        stackedPeer
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const res = allocateWeek({
+      plan: mixPlan,
+      busy: [],
+      settings: hybridAllocator,
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: anchor
+    });
+
+    expect(res.stackedFeasibleByGoalId).toBeDefined();
+    expect(res.stackedFeasibleRibbonPreviewByGoalId).toBeDefined();
+
+    const postLinearMs = totalMs(res.stackedFeasibleByGoalId!["stacked-peer"] ?? []);
+    const previewMs = totalMs(res.stackedFeasibleRibbonPreviewByGoalId!["stacked-peer"] ?? []);
+
+    expect(postLinearMs).toBeGreaterThan(0);
+    expect(previewMs).toBeGreaterThan(postLinearMs);
+
+    const garagePlaced = res.blocks.filter((b) => !b.segment && b.goalId === "garage-linear");
+    expect(garagePlaced.length).toBeGreaterThan(0);
   });
 
   it('global stacked ignores stackedRibbonVsLinearPeers "blocking" (single pre–Pass 3 feasibility pass)', () => {

@@ -7,6 +7,7 @@ import type {
   GymSettings,
   WeeklyGoal
 } from "@calendar-automations/schema";
+import { hybridAnyLinearGoalBlocksTimemaps } from "@calendar-automations/schema";
 import { useMemo } from "react";
 import { PlanCalendarViewProvider, usePlanCalendarView } from "./plan-calendar-view-context";
 import type { GoalGroupRailBundle, PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";
@@ -338,6 +339,13 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
   } = props;
 
   const weekStartMsView = isoWeekStartsForRolling[0] ?? calendarWeekStartsMs[0]!;
+  const stackedTimemapRibbonsAboveProposedGoals = useMemo(
+    () =>
+      allocatorGoalWindowMode === "hybrid" &&
+      !hybridAnyLinearGoalBlocksTimemaps(planClientGoals, allocatorGoalWindowMode),
+    [allocatorGoalWindowMode, planClientGoals]
+  );
+
   const railBundles = useGoalGroupRailBundles({
     isoWeekStartsMs: isoWeekStartsForRolling,
     timezone,
@@ -404,6 +412,8 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                 fallbackGoalGroupGaps={fallbackGaps}
                 fallbackGoalGroupMinutes={fallbackMinutes}
                 hasUserDragGoalOverrides={hasUserDragGoalOverrides}
+                stackedTimemapRibbonsAboveProposedGoals={stackedTimemapRibbonsAboveProposedGoals}
+                allocatorGoalWindowMode={allocatorGoalWindowMode}
               />
             </div>
             <details className="card lg:hidden" open>
@@ -427,6 +437,8 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                   fallbackGoalGroupGaps={fallbackGaps}
                   fallbackGoalGroupMinutes={fallbackMinutes}
                   hasUserDragGoalOverrides={hasUserDragGoalOverrides}
+                  stackedTimemapRibbonsAboveProposedGoals={stackedTimemapRibbonsAboveProposedGoals}
+                  allocatorGoalWindowMode={allocatorGoalWindowMode}
                 />
               </div>
             </details>

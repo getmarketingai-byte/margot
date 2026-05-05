@@ -338,7 +338,7 @@ export async function ConstraintsSection() {
           <a className="underline" href="/dashboard/plan">
             Perfect Week
           </a>
-          , and choose whether stacked ribbons ignore linear peers or shrink after them.
+          . On each <strong>linear-role</strong> row, answer whether that goal blocks stacked time maps for the week.
         </p>
         <form action={updateGoalWindowMode} className="mt-3">
           <ConstraintCard label="Goal windows">

@@ -14,18 +14,18 @@ Use **only** these terms in UI copy, docs, comments, and schema values tied to a
 | **`linear-role`** | Under **`hybrid`** or global **`linear`** | Same Pass 3 + merge rules as global **`linear`** for that goal. |
 | **`stacked-role`** | Under **`hybrid`** or global **`stacked`** | Same Pass 3 + ribbons + merge rules as global **`stacked`** for that goal. |
 | **`goalWindowPlacement`** | `WeeklyGoal`, hybrid only | **`linear`** \| **`stacked`**. Omit ⇒ **`stacked`**. Ignored when global mode is **`linear`** / **`stacked`**. |
-| **`stackedRibbonVsLinearPeers`** | `WeeklyGoal`, hybrid + stacked-role only | **`non_blocking`** \| **`blocking`**. Omit ⇒ **`non_blocking`**. Ignored global **`stacked`** / **`linear`**. |
-| **`non_blocking`** (ribbons) | Stacked-role in **hybrid** | Feasible ribbon from gap snapshot **before** the linear cohort mutates gaps; may overlap linear blocks in preview. |
-| **`blocking`** (ribbons) | Stacked-role in **hybrid** | Feasible ribbon recomputed **after** the linear cohort from remaining gaps. |
+| **`stackedRibbonVsLinearPeers`** | `WeeklyGoal`, hybrid + **linear-role** only | **`non_blocking`** \| **`blocking`** (meaning *No* / *Yes* to blocking others’ stacked timemap ribbons). Omit ⇒ **`non_blocking`**. Ignored when global mode is **`linear`** / **`stacked`** or on **stacked-role** rows. If **any** hybrid linear row is **`blocking`**, **all** stacked-role ribbons use **post–linear-cohort** gaps; otherwise stacked ribbons use a **pre-linear** snapshot. |
+| **`non_blocking`** | Hybrid **linear-role** setting | You chose **No**: stacked timemap ribbons stay wide (pre-linear snapshot); greedy linear preview blocks may overlap ribbon spans in data/UI. |
+| **`blocking`** | Hybrid **linear-role** setting | You chose **Yes**: after **this week’s** linear cohort runs, **every** stacked-role ribbon is recomputed from remaining gaps (this linear row consumes ribbon time first). |
 | **`stackedFeasibleByGoalId`** | `AllocateResult` | Per-goal intervals driving stacked-timemap ribbons (identifier name is historical). |
 
 ### Hybrid Pass 3 sequencing
 
 When **`goalWindowMode === "hybrid"`**:
 
-1. **Non-blocking stacked feasibility:** snapshot gaps → [`computeStackedFeasibleWindowsForWeek`](src/goal-feasible-windows.ts) for stacked-role goals with **`non_blocking`** → merge into `stackedFeasibleByGoalId`.
+1. **Pre-linear stacked feasibility:** when **no** hybrid linear-role row sets **`blocking`** (`stackedRibbonVsLinearPeers`), snapshot gaps → [`computeStackedFeasibleWindowsForWeek`](src/goal-feasible-windows.ts) for **all** stacked-role goals → merge into `stackedFeasibleByGoalId`.
 2. **Linear cohort:** greedy Pass 3 for **linear-role** goals only (sequential gym/floor tier then round-robin waves).
-3. **Blocking stacked feasibility:** current **`days`** gaps → same helper for stacked-role **`blocking`** goals → merge into `stackedFeasibleByGoalId`.
+3. **Post-linear stacked feasibility:** when **any** hybrid linear-role row sets **`blocking`**, current **`days`** gaps → same helper for **all** stacked-role goals → merge into `stackedFeasibleByGoalId` (skips step 1 for that week).
 4. **Stacked cohort:** pins-only Pass 3 for **stacked-role** goals.
 
 Global **`linear`** / **`stacked`**: unchanged single-phase Pass 3 order.
@@ -58,6 +58,7 @@ Under **hybrid**, preview / ICS merge runs **`mergeOrphanGoalOverrideBlocks`** o
 ## Pass 3: placement
 
 - Consumes `effectiveMinutes` (placement demand) into calendar blocks inside remaining gaps.
+- **Ideal after/before:** Greedy auto placement only considers gaps inside [`placementWindowsForDay`](src/goal-feasible-windows.ts), which intersects paired hard bands (**after+before**) and **single-sided** **after-only** / **before-only** local bands — the same geometry as stacked feasibility ribbons. Listed **`placementIdealClockTimes`** still **nudge** block starts inside those bands when present.
 - When `nowMs` is set, **auto** placement uses only the **future** portion of gaps; past intervals are not used for new auto blocks.
 - **Auto blocks per goal per calendar day** (default **one** when **`frequencyPerWeek`** is set — reduces context switching): the hard cap is **`maxAutoBlocksPerDay`** (default **1** for frequency goals; set **2–8** to allow a second/third auto block the **same day** when weekly demand, **`maxMinutesPerDay`**, and gaps still allow — e.g. morning + afternoon on Tuesday). Goals **without** `frequencyPerWeek` use **`maxAutoBlocksPerDay`** when set, else **two** when **`minMinutesPerBlock`** is set (chunky split), else **unbounded** per day. Pins do not count toward the cap. **`frequencyPerWeek`** is also capped by how many **allowed** weekdays still have a **future** placement window (`nowMs`-aware): effective touch ceiling is `min(frequencyPerWeek, daysRemainingWithWindow)` — e.g. 4× across the week becomes at most **3** if only Fri–Sun remain schedulable. Additional demand spills in **extra passes** when availability allows. Each pass walks the goal's allowed weekdays (see below) at most once per pass wave and can place at most **one** new block per allowed day **per pass** until the per-day cap is reached — so a **fragmented** day (many small pockets) or tight invert / nice-weather windows may require **many** passes. The spill loop uses a **scaled `maxPasses`** (derived from quantised remaining demand × `allowedDays.length`, with floor and absolute cap) so we do not stop early while gaps and headroom still exist; passes that schedule nothing still exit immediately.
 - **Stable greedy ties:** %-share vs equal-share interleaving resolves equal-quantum demand ties with **fixed** order (`nice-weather constraint`, then tighter `maxMinutesPerDay`, then **`goal.id` lexical**). Gap choice breaks equal scores by **earliest `gap.startMs`**, then **`gap.endMs`**. Ideal-clock alignment breaks ties with the **lower ideal-time index**.
@@ -66,7 +67,7 @@ Under **hybrid**, preview / ICS merge runs **`mergeOrphanGoalOverrideBlocks`** o
 
 ## Stacked goal-window mode (`settings.allocator.goalWindowMode === "stacked"`)
 
-Same **`stacked-role`** behaviour applies to **every** goal globally; there are no linear peers in Pass 3, so **`WeeklyGoal.stackedRibbonVsLinearPeers`** is ignored (`effectiveStackedRibbonVsLinearPeers` treats non-hybrid stacked as **`non_blocking`** for naming consistency only).
+Same **`stacked-role`** behaviour applies to **every** goal globally; there are no linear peers in Pass 3, so **`WeeklyGoal.stackedRibbonVsLinearPeers`** is ignored (the field applies only under **hybrid** on **linear-role** rows).
 
 - Pass 1+2 are unchanged — weekly targets and metrics basis stay the same.
 - Pass 3 **does not** emit greedy auto blocks and **does not** apply **`WeeklyPlan.overrides`** of kind **`goal`** (drag / day-sheet pins saved from linear placement). Override maps used for placement, group daily caps, “pinned actual” log pairing, and metrics are cleared for this mode so preview matches independent feasible envelopes only.

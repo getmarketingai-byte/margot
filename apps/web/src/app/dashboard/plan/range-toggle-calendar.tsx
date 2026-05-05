@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { AllocatedBlock, BusyEvent, WeekMetrics } from "@calendar-automations/planner";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
+  type AllocatorGoalWindowMode,
   type FrameworkRegistryId,
   type FrameworkSystem,
   type GoalGroup,
@@ -131,7 +132,9 @@ export function RangeToggleCalendar({
   goalGroupBundles,
   fallbackGoalGroupGaps = [],
   fallbackGoalGroupMinutes = {},
-  hasUserDragGoalOverrides = false
+  hasUserDragGoalOverrides = false,
+  stackedTimemapRibbonsAboveProposedGoals = false,
+  allocatorGoalWindowMode
 }: {
   weekStartMs: number;
   calendarWeekStartsMs?: readonly number[];
@@ -155,6 +158,10 @@ export function RangeToggleCalendar({
   fallbackGoalGroupMinutes?: Readonly<Record<string, number>>;
   /** Server: plan has at least one `goal` override with `source: "drag"`. */
   hasUserDragGoalOverrides?: boolean;
+  /** Hybrid weeks with no linear “block time maps”: draw stacked/invert ribbons above proposed blocks. */
+  stackedTimemapRibbonsAboveProposedGoals?: boolean;
+  /** Drives per–linear-goal z-order when hybrid has mixed Yes/No timemap blocking. */
+  allocatorGoalWindowMode?: AllocatorGoalWindowMode;
 }) {
   const router = useRouter();
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(750);
@@ -507,6 +514,8 @@ export function RangeToggleCalendar({
           taggableFrameworkRows.length && schedulingGoals?.length ? fwOverlayLayers : undefined
         }
         wheelAreaLabel={wheelAreas?.length ? wheelAreaLabel : undefined}
+        stackedTimemapRibbonsAboveProposedGoals={stackedTimemapRibbonsAboveProposedGoals}
+        allocatorGoalWindowMode={allocatorGoalWindowMode}
       />
       <div className="px-1">
         <button

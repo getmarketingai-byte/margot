@@ -275,9 +275,10 @@ export const weeklyGoalSchema = z.object({
    */
   goalWindowPlacement: z.enum(["linear", "stacked"]).optional(),
   /**
-   * Only when hybrid **and** this goal is **stacked-role**: whether stacked-timemap
-   * ribbons ignore linear peers (`non_blocking`) or shrink after linear cohort
-   * (`blocking`). Omit ⇒ `non_blocking`. Ignored outside hybrid stacked-role goals.
+   * Only when hybrid **and** this goal is **linear-role**: whether greedy placement here
+   * removes time from everyone’s stacked timemap ribbons (`blocking`) or leaves ribbons
+   * computed from pre-linear gaps (`non_blocking`). Omit ⇒ `non_blocking`.
+   * Ignored when global mode is `linear` / `stacked`, or when this goal is stacked-role.
    *
    * @see [`ALLOCATOR_BUSINESS_RULES.md`](../../planner/ALLOCATOR_BUSINESS_RULES.md)
    */
@@ -302,18 +303,44 @@ export function effectiveWeeklyGoalWindowPlacement(
 }
 
 /**
- * Hybrid + stacked-role only: whether ribbons ignore linear peers (`non_blocking`)
- * or shrink after greedy cohort (`blocking`). Otherwise returns `non_blocking` (ignored).
+ * Hybrid + linear-role only: true when this greedy row should shrink stacked timemap ribbons
+ * after it runs (`blocking`). Otherwise false (ignored).
  */
-export function effectiveStackedRibbonVsLinearPeers(
+export function hybridLinearPlacementBlocksTimemaps(
   goal: Pick<WeeklyGoal, "goalWindowPlacement" | "stackedRibbonVsLinearPeers">,
   allocatorGoalWindowMode: AllocatorGoalWindowMode
-): "non_blocking" | "blocking" {
-  const placement = effectiveWeeklyGoalWindowPlacement(goal, allocatorGoalWindowMode);
-  if (allocatorGoalWindowMode !== "hybrid" || placement !== "stacked") {
-    return "non_blocking";
+): boolean {
+  if (allocatorGoalWindowMode !== "hybrid") return false;
+  if (effectiveWeeklyGoalWindowPlacement(goal, allocatorGoalWindowMode) !== "linear") {
+    return false;
   }
-  return goal.stackedRibbonVsLinearPeers ?? "non_blocking";
+  return (goal.stackedRibbonVsLinearPeers ?? "non_blocking") === "blocking";
+}
+
+/** Hybrid weeks: true if any linear-role row chose to block stacked timemap ribbons (`blocking`). */
+export function hybridAnyLinearGoalBlocksTimemaps(
+  goals: readonly WeeklyGoal[],
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): boolean {
+  if (allocatorGoalWindowMode !== "hybrid") return false;
+  return goals.some((g) => hybridLinearPlacementBlocksTimemaps(g, allocatorGoalWindowMode));
+}
+
+/** Hybrid: both a linear row that blocks timemaps and one that does not — UI may split proposed z-order. */
+export function hybridHasMixedLinearTimemapBlocking(
+  goals: readonly WeeklyGoal[],
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): boolean {
+  if (allocatorGoalWindowMode !== "hybrid") return false;
+  let hasBlockingLinear = false;
+  let hasNonBlockingLinear = false;
+  for (const g of goals) {
+    if (effectiveWeeklyGoalWindowPlacement(g, allocatorGoalWindowMode) !== "linear") continue;
+    if (hybridLinearPlacementBlocksTimemaps(g, allocatorGoalWindowMode)) hasBlockingLinear = true;
+    else hasNonBlockingLinear = true;
+    if (hasBlockingLinear && hasNonBlockingLinear) return true;
+  }
+  return false;
 }
 
 export function normalisePlacementIdealClockBoundary(

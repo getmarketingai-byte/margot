@@ -1793,7 +1793,8 @@ function OptionsEditor({
                 checked={hybridPlacement === "stacked"}
                 onChange={() =>
                   update({
-                    goalWindowPlacement: "stacked"
+                    goalWindowPlacement: "stacked",
+                    stackedRibbonVsLinearPeers: undefined
                   })
                 }
               />
@@ -1806,18 +1807,17 @@ function OptionsEditor({
                 checked={hybridPlacement === "linear"}
                 onChange={() =>
                   update({
-                    goalWindowPlacement: "linear",
-                    stackedRibbonVsLinearPeers: undefined
+                    goalWindowPlacement: "linear"
                   })
                 }
               />
               Linear role
             </label>
           </div>
-          {hybridPlacement === "stacked" ? (
+          {hybridPlacement === "linear" ? (
             <div className="mt-3 border-t border-ink-200 pt-3 dark:border-ink-600">
-              <p className="mb-2 text-xs text-ink-500 dark:text-ink-400">
-                Ribbons vs linear peers (stacked-role only)
+              <p className="mb-2 text-xs text-ink-600 dark:text-ink-300">
+                Do you want this goal to block our time maps?
               </p>
               <div className="flex flex-wrap gap-3">
                 <label className="flex cursor-pointer items-center gap-2 text-xs">
@@ -1827,7 +1827,7 @@ function OptionsEditor({
                     checked={(draft.stackedRibbonVsLinearPeers ?? "non_blocking") === "non_blocking"}
                     onChange={() => update({ stackedRibbonVsLinearPeers: "non_blocking" })}
                   />
-                  Non-blocking
+                  No
                 </label>
                 <label className="flex cursor-pointer items-center gap-2 text-xs">
                   <input
@@ -1836,7 +1836,7 @@ function OptionsEditor({
                     checked={draft.stackedRibbonVsLinearPeers === "blocking"}
                     onChange={() => update({ stackedRibbonVsLinearPeers: "blocking" })}
                   />
-                  Blocking
+                  Yes
                 </label>
               </div>
             </div>

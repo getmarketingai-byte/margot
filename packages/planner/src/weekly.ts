@@ -82,7 +82,8 @@ import {
   effectiveEnergyBatteryProfile,
   effectivePlacementIdealAfterBoundary,
   effectivePlacementIdealBeforeBoundary,
-  effectiveStackedRibbonVsLinearPeers,
+  hybridLinearPlacementBlocksTimemaps,
+  hybridHasMixedLinearTimemapBlocking,
   effectiveWeeklyGoalWindowPlacement,
   filterSchedulingGoals,
   hydrateFrameworkSystemMirrors,
@@ -98,7 +99,7 @@ import {
   placementWindowsForDay,
   type WeekDayGapBuckets
 } from "./goal-feasible-windows";
-import { collectBusyIntervals, freeGaps, mergeIntervals } from "./intervals";
+import { collectBusyIntervals, freeGaps, mergeIntervals, subtractIntervalsFromUnion } from "./intervals";
 import { physicalActivityWeeklyGoalFromGymSettings } from "./weekly-routines";
 import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 import { QUANTUM } from "./weekly-grid";
@@ -354,6 +355,12 @@ export interface AllocateResult {
    * intervals where Pass‑3 constraints allow scheduling (Skedpal envelope).
    */
   stackedFeasibleByGoalId?: Record<string, Interval[]>;
+  /**
+   * Hybrid + mixed linear timemap blocking only: wider ribbon intervals for dashboard preview.
+   * Pre-linear stacked envelope minus **blocking** hybrid linear placement only (non-blocking linear
+   * rows do not clip ribbons). Placement/stacked pins still use {@link stackedFeasibleByGoalId}.
+   */
+  stackedFeasibleRibbonPreviewByGoalId?: Record<string, Interval[]>;
 }
 
 /** Internal: a goal augmented with the bounds the allocator actually uses. */
@@ -604,7 +611,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   const batteryOn = batteryContext !== undefined;
 
-  const goalWindowMode = settings.allocator.goalWindowMode;
+  /** Matches schema default; callers/tests may shallow-merge `allocator` and omit this field. */
+  const goalWindowMode = settings.allocator.goalWindowMode ?? "linear";
   const { placementGoalOverrides, placementGoalOverrideSources } =
     goalWindowMode === "stacked"
       ? {
@@ -841,23 +849,22 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       ...feasibilityOpts
     });
   } else {
+    const anyLinearBlocksTimemaps = prepared.some((p) =>
+      hybridLinearPlacementBlocksTimemaps(p.goal, goalWindowMode)
+    );
     const hasAnyStackedRole = prepared.some(
       (p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked"
     );
     stackedFeasibleByGoalId = hasAnyStackedRole ? {} : undefined;
-    if (stackedFeasibleByGoalId) {
-      const nonBlockingGoals = prepared
-        .filter(
-          (p) =>
-            effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked" &&
-            effectiveStackedRibbonVsLinearPeers(p.goal, goalWindowMode) === "non_blocking"
-        )
+    if (stackedFeasibleByGoalId && !anyLinearBlocksTimemaps) {
+      const stackedGoals = prepared
+        .filter((p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked")
         .map((p) => p.goal);
-      if (nonBlockingGoals.length > 0) {
+      if (stackedGoals.length > 0) {
         Object.assign(
           stackedFeasibleByGoalId,
           computeStackedFeasibleWindowsForWeek({
-            goals: nonBlockingGoals,
+            goals: stackedGoals,
             days: cloneWeekDayGapBuckets(days),
             ...feasibilityOpts
           })
@@ -865,6 +872,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       }
     }
   }
+
+  const hybridPreLinearGapSnapshot =
+    goalWindowMode === "hybrid" ? cloneWeekDayGapBuckets(days) : undefined;
 
   const pass3Sequential = prepared.filter(
     (p) => p.goal.specialGoalType === "gym" || p.weeklyFloorBeforeCatchUpBump > 0
@@ -951,22 +961,23 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     for (const p of linearSequential) runAllocateGoalPass3(p);
     runPass3RoundRobinWaves(linearRoundRobin);
 
-    const blockingGoals = prepared
-      .filter(
-        (p) =>
-          effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked" &&
-          effectiveStackedRibbonVsLinearPeers(p.goal, goalWindowMode) === "blocking"
-      )
-      .map((p) => p.goal);
-    if (blockingGoals.length > 0 && stackedFeasibleByGoalId) {
-      Object.assign(
-        stackedFeasibleByGoalId,
-        computeStackedFeasibleWindowsForWeek({
-          goals: blockingGoals,
-          days,
-          ...feasibilityOpts
-        })
-      );
+    const anyLinearBlocksTimemaps = prepared.some((p) =>
+      hybridLinearPlacementBlocksTimemaps(p.goal, goalWindowMode)
+    );
+    if (anyLinearBlocksTimemaps && stackedFeasibleByGoalId) {
+      const stackedGoals = prepared
+        .filter((p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked")
+        .map((p) => p.goal);
+      if (stackedGoals.length > 0) {
+        Object.assign(
+          stackedFeasibleByGoalId,
+          computeStackedFeasibleWindowsForWeek({
+            goals: stackedGoals,
+            days,
+            ...feasibilityOpts
+          })
+        );
+      }
     }
 
     const stackedSequential = pass3Sequential.filter(
@@ -998,6 +1009,43 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     sortBlocksByEnergyCurve(blocks, settings.energyOrdering);
   } else {
     blocks.sort((a, b) => a.startMs - b.startMs);
+  }
+
+  let stackedFeasibleRibbonPreviewByGoalId: Record<string, Interval[]> | undefined;
+  if (
+    goalWindowMode === "hybrid" &&
+    stackedFeasibleByGoalId &&
+    hybridPreLinearGapSnapshot &&
+    hybridHasMixedLinearTimemapBlocking(
+      prepared.map((p) => p.goal),
+      goalWindowMode
+    )
+  ) {
+    const stackedGoals = prepared
+      .filter((p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked")
+      .map((p) => p.goal);
+    if (stackedGoals.length > 0) {
+      const preLin = computeStackedFeasibleWindowsForWeek({
+        goals: stackedGoals,
+        days: hybridPreLinearGapSnapshot,
+        ...feasibilityOpts
+      });
+      const blockingChunks: Interval[] = [];
+      for (const b of blocks) {
+        if (b.segment) continue;
+        const prep = prepared.find((q) => q.goal.id === b.goalId);
+        if (!prep || !hybridLinearPlacementBlocksTimemaps(prep.goal, goalWindowMode)) continue;
+        blockingChunks.push({ startMs: b.startMs, endMs: b.endMs });
+      }
+      const blockingOccupancy = mergeIntervals(blockingChunks);
+      stackedFeasibleRibbonPreviewByGoalId = {};
+      for (const [gid, intervals] of Object.entries(preLin)) {
+        stackedFeasibleRibbonPreviewByGoalId[gid] = subtractIntervalsFromUnion(
+          intervals,
+          blockingOccupancy
+        );
+      }
+    }
   }
 
   const metrics = computeMetrics(
@@ -1033,7 +1081,14 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   }
 
   return stackedFeasibleByGoalId
-    ? { blocks, metrics, stackedFeasibleByGoalId }
+    ? {
+        blocks,
+        metrics,
+        stackedFeasibleByGoalId,
+        ...(stackedFeasibleRibbonPreviewByGoalId
+          ? { stackedFeasibleRibbonPreviewByGoalId }
+          : {})
+      }
     : { blocks, metrics };
 }
 
