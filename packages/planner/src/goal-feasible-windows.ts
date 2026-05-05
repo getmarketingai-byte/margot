@@ -6,13 +6,35 @@ import type { WeeklyGoal } from "@calendar-automations/schema";
 import type { DayOfWeek } from "@calendar-automations/schema";
 import {
   effectivePlacementIdealAfterBoundary,
-  effectivePlacementIdealBeforeBoundary
+  effectivePlacementIdealBeforeBoundary,
+  normaliseGoalTime
 } from "@calendar-automations/schema";
 import type { Interval } from "./types";
 import { mergeIntervals } from "./intervals";
+import { QUANTUM } from "./weekly-grid";
 import { dateKeyInTz, localMidnightMs } from "./time";
 
 const MS_PER_MIN = 60_000;
+
+/**
+ * Keep the earliest contiguous slice of feasibility up to a wall-time budget
+ * (same ordering as greedy Pass‑3 gap walks).
+ */
+function clipIntervalsToCumulativeDurationMs(intervals: readonly Interval[], maxMs: number): Interval[] {
+  if (maxMs <= 0 || intervals.length === 0) return [];
+  let remaining = maxMs;
+  const out: Interval[] = [];
+  const sorted = [...intervals].sort((a, b) => a.startMs - b.startMs);
+  for (const iv of sorted) {
+    if (remaining <= 0) break;
+    const dur = iv.endMs - iv.startMs;
+    if (dur <= 0) continue;
+    const take = Math.min(dur, remaining);
+    out.push({ startMs: iv.startMs, endMs: iv.startMs + take });
+    remaining -= take;
+  }
+  return mergeIntervals(out);
+}
 
 const DAY_INDEX: Record<DayOfWeek, number> = {
   monday: 0,
@@ -215,10 +237,21 @@ export function computeStackedFeasibleWindowsForWeek(opts: {
   nowMs?: number;
   weekStartMs: number;
   weekEndMs: number;
+  /** Hard ideal-window weekly ceilings from Pass‑1/2 prep (`QUANTUM`-quantised minutes); merged with `normaliseGoalTime` weekly max. */
+  hardWindowWeeklyCaps?: ReadonlyMap<string, number>;
 }): Record<string, Interval[]> {
   const out: Record<string, Interval[]> = {};
 
   for (const goal of opts.goals) {
+    const norm = normaliseGoalTime(goal);
+    let weeklyCapMin = norm.maxMinutesPerWeek;
+    const hw = opts.hardWindowWeeklyCaps?.get(goal.id);
+    if (hw !== undefined) {
+      const qc = Math.max(0, Math.floor(hw / QUANTUM) * QUANTUM);
+      weeklyCapMin = weeklyCapMin === undefined ? qc : Math.min(weeklyCapMin, qc);
+    }
+    const dailyCapMin = norm.maxMinutesPerDay;
+
     const allowedDays =
       goal.daysOfWeek && goal.daysOfWeek.length > 0
         ? goal.daysOfWeek.map((d) => DAY_INDEX[d])
@@ -258,13 +291,22 @@ export function computeStackedFeasibleWindowsForWeek(opts: {
           .filter((g) => g.endMs > g.startMs);
       }
 
+      windows = mergeIntervals(windows);
+      if (dailyCapMin !== undefined) {
+        windows = clipIntervalsToCumulativeDurationMs(windows, dailyCapMin * MS_PER_MIN);
+      }
+
       for (const w of windows) {
         const s = Math.max(w.startMs, opts.weekStartMs);
         const e = Math.min(w.endMs, opts.weekEndMs);
         if (e > s) chunks.push({ startMs: s, endMs: e });
       }
     }
-    out[goal.id] = mergeIntervals(chunks);
+    let merged = mergeIntervals(chunks);
+    if (weeklyCapMin !== undefined) {
+      merged = clipIntervalsToCumulativeDurationMs(merged, weeklyCapMin * MS_PER_MIN);
+    }
+    out[goal.id] = merged;
   }
   return out;
 }

@@ -329,6 +329,86 @@ describe("stacked feasible windows", () => {
     expect(env[0]!.endMs).toBe(tuesdayStart + DAY_MS);
   });
 
+  it("stacked envelope respects weekly max minutes (earliest-first span)", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+
+    const planStack: WeeklyPlan = {
+      id: "stacked-weekly-max",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "capped",
+          title: "Capped",
+          minMinutesPerWeek: 60,
+          maxMinutesPerWeek: 120,
+          priority: 5
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: planStack,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    const env = result.stackedFeasibleByGoalId!.capped!;
+    expect(totalMs(env)).toBe(120 * 60 * 1000);
+    expect(env.length).toBe(1);
+    expect(env[0]!.startMs).toBe(weekStartMs);
+  });
+
+  it("stacked envelope respects maxMinutesPerDay on each allowed day", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+
+    const planStack: WeeklyPlan = {
+      id: "stacked-daily-max",
+      weekStart: "2026-04-27",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [
+        goal({
+          id: "dailyCap",
+          title: "Daily cap",
+          dayOfWeek: "monday",
+          minMinutesPerWeek: 30,
+          maxMinutesPerDay: 60,
+          priority: 5
+        })
+      ],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan: planStack,
+      busy: [],
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "stacked" }
+      }),
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: "2026-04-27"
+    });
+
+    const env = result.stackedFeasibleByGoalId!.dailyCap!;
+    expect(env.length).toBe(1);
+    expect(totalMs(env)).toBe(60 * 60 * 1000);
+    expect(env[0]!.startMs).toBe(weekStartMs);
+    expect(env[0]!.endMs).toBe(weekStartMs + 60 * 60 * 1000);
+  });
+
   it("computeStackedFeasibleWindowsForWeek matches allocateWeek stacked output for prepared goals", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const weekEndMs = weekStartMs + 7 * DAY_MS;

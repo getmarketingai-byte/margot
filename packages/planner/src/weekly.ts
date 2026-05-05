@@ -835,7 +835,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     niceWeatherWindows: input.niceWeatherWindows,
     nowMs: allocationNowMs,
     weekStartMs,
-    weekEndMs
+    weekEndMs,
+    hardWindowWeeklyCaps
   } as const;
 
   let stackedFeasibleByGoalId: Record<string, Interval[]> | undefined;
