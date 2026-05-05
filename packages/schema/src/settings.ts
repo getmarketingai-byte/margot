@@ -596,7 +596,13 @@ export const allocatorSettingsSchema = z.object({
    *   "finish-early": do not insert those inter-goal buffers; blocks stay packed
    *   and leftover time in the window remains toward the end.
    */
-  allocationMode: z.enum(["even", "finish-early"]).default("even")
+  allocationMode: z.enum(["even", "finish-early"]).default("even"),
+  /**
+   * Whether Perfect Week emits concrete greedy blocks (`linear`), per-goal
+   * feasible ribbons (`stacked`), or per-goal **linear | stacked** via
+   * `WeeklyGoal.goalWindowPlacement` (`hybrid`).
+   */
+  goalWindowMode: z.enum(["linear", "stacked", "hybrid"]).default("linear")
 });
 export type AllocatorSettings = z.infer<typeof allocatorSettingsSchema>;
 

@@ -264,9 +264,84 @@ export const weeklyGoalSchema = z.object({
    * IDs of [`GoalGroup`](goalGroupSchema) on the same [`WeeklyPlan`]. A goal may
    * belong to several groups; aggregate constraints intersect (tightest wins).
    */
-  groupIds: z.array(z.string().min(1)).max(16).optional()
+  groupIds: z.array(z.string().min(1)).max(16).optional(),
+  /**
+   * Only when `UserSettings.allocator.goalWindowMode === "hybrid"`: Pass 3 treats
+   * this goal as **linear-role** (greedy auto blocks + pins) or **stacked-role**
+   * (pins-only + feasible ribbons). Omit ⇒ **`stacked`** (Skedpal-first).
+   * Ignored when global mode is `linear` or `stacked`.
+   *
+   * @see [`ALLOCATOR_BUSINESS_RULES.md`](../../planner/ALLOCATOR_BUSINESS_RULES.md) — vocabulary + hybrid Pass 3 order.
+   */
+  goalWindowPlacement: z.enum(["linear", "stacked"]).optional(),
+  /**
+   * Only when hybrid **and** this goal is **linear-role**: whether greedy placement here
+   * removes time from everyone’s stacked timemap ribbons (`blocking`) or leaves ribbons
+   * computed from pre-linear gaps (`non_blocking`). Omit ⇒ `non_blocking`.
+   * Ignored when global mode is `linear` / `stacked`, or when this goal is stacked-role.
+   *
+   * @see [`ALLOCATOR_BUSINESS_RULES.md`](../../planner/ALLOCATOR_BUSINESS_RULES.md)
+   */
+  stackedRibbonVsLinearPeers: z.enum(["non_blocking", "blocking"]).optional()
 });
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
+
+/** `UserSettings.allocator.goalWindowMode` — exported for planner/UI without importing full settings. */
+export type AllocatorGoalWindowMode = "linear" | "stacked" | "hybrid";
+
+/**
+ * Effective per-goal Pass 3 placement class. When global mode is `hybrid`, uses
+ * {@link WeeklyGoal.goalWindowPlacement} (omit ⇒ `stacked`).
+ */
+export function effectiveWeeklyGoalWindowPlacement(
+  goal: Pick<WeeklyGoal, "goalWindowPlacement">,
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): "linear" | "stacked" {
+  if (allocatorGoalWindowMode === "linear") return "linear";
+  if (allocatorGoalWindowMode === "stacked") return "stacked";
+  return goal.goalWindowPlacement ?? "stacked";
+}
+
+/**
+ * Hybrid + linear-role only: true when this greedy row should shrink stacked timemap ribbons
+ * after it runs (`blocking`). Otherwise false (ignored).
+ */
+export function hybridLinearPlacementBlocksTimemaps(
+  goal: Pick<WeeklyGoal, "goalWindowPlacement" | "stackedRibbonVsLinearPeers">,
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): boolean {
+  if (allocatorGoalWindowMode !== "hybrid") return false;
+  if (effectiveWeeklyGoalWindowPlacement(goal, allocatorGoalWindowMode) !== "linear") {
+    return false;
+  }
+  return (goal.stackedRibbonVsLinearPeers ?? "non_blocking") === "blocking";
+}
+
+/** Hybrid weeks: true if any linear-role row chose to block stacked timemap ribbons (`blocking`). */
+export function hybridAnyLinearGoalBlocksTimemaps(
+  goals: readonly WeeklyGoal[],
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): boolean {
+  if (allocatorGoalWindowMode !== "hybrid") return false;
+  return goals.some((g) => hybridLinearPlacementBlocksTimemaps(g, allocatorGoalWindowMode));
+}
+
+/** Hybrid: both a linear row that blocks timemaps and one that does not — UI may split proposed z-order. */
+export function hybridHasMixedLinearTimemapBlocking(
+  goals: readonly WeeklyGoal[],
+  allocatorGoalWindowMode: AllocatorGoalWindowMode
+): boolean {
+  if (allocatorGoalWindowMode !== "hybrid") return false;
+  let hasBlockingLinear = false;
+  let hasNonBlockingLinear = false;
+  for (const g of goals) {
+    if (effectiveWeeklyGoalWindowPlacement(g, allocatorGoalWindowMode) !== "linear") continue;
+    if (hybridLinearPlacementBlocksTimemaps(g, allocatorGoalWindowMode)) hasBlockingLinear = true;
+    else hasNonBlockingLinear = true;
+    if (hasBlockingLinear && hasNonBlockingLinear) return true;
+  }
+  return false;
+}
 
 export function normalisePlacementIdealClockBoundary(
   b: { hour: unknown; minute: unknown } | undefined

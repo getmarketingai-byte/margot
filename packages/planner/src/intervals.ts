@@ -82,3 +82,33 @@ export function collectBusyIntervals(
   out.sort((a, b) => a.startMs - b.startMs);
   return out;
 }
+
+/**
+ * Subtract merged intervals `minus` from each interval in `base`.
+ * Used for hybrid stacked-timemap **preview** when only blocking linear placement should clip ribbons.
+ */
+export function subtractIntervalsFromUnion(base: readonly Interval[], minus: readonly Interval[]): Interval[] {
+  const sub = mergeIntervals(minus);
+  if (sub.length === 0) return mergeIntervals(base);
+  const out: Interval[] = [];
+  for (const seg of base) {
+    let parts: Interval[] = [{ startMs: seg.startMs, endMs: seg.endMs }];
+    for (const m of sub) {
+      const next: Interval[] = [];
+      for (const p of parts) {
+        if (m.endMs <= p.startMs || m.startMs >= p.endMs) {
+          next.push(p);
+          continue;
+        }
+        if (m.startMs > p.startMs)
+          next.push({ startMs: p.startMs, endMs: Math.min(m.startMs, p.endMs) });
+        if (m.endMs < p.endMs)
+          next.push({ startMs: Math.max(m.endMs, p.startMs), endMs: p.endMs });
+      }
+      parts = next.filter((x) => x.endMs > x.startMs);
+      if (parts.length === 0) break;
+    }
+    out.push(...parts);
+  }
+  return mergeIntervals(out);
+}

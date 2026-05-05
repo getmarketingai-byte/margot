@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_USER_SETTINGS } from "@calendar-automations/schema";
+import { DEFAULT_USER_SETTINGS, weeklyGoalSchema } from "@calendar-automations/schema";
 import {
+  goalsInPlanOrderForRibbonLanes,
   physicalActivityWeeklyGoalFromGymSettings,
   ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID,
   schedulingGoalsWithWeeklyRoutines
@@ -159,5 +160,42 @@ describe("schedulingGoalsWithWeeklyRoutines", () => {
       gym: { ...DEFAULT_USER_SETTINGS.gym, plannerBlockEnabled: true }
     });
     expect(out.some((g) => g.id === ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID)).toBe(true);
+  });
+});
+
+describe("goalsInPlanOrderForRibbonLanes", () => {
+  it("keeps a plan gym row in hub list position (not forced to the end)", () => {
+    const gymSynth = physicalActivityWeeklyGoalFromGymSettings({
+      ...DEFAULT_USER_SETTINGS.gym,
+      plannerBlockEnabled: true
+    })!;
+    const planGym = weeklyGoalSchema.parse({
+      ...gymSynth,
+      id: "user-plan-gym",
+      title: "Strength"
+    });
+    const first = weeklyGoalSchema.parse({ id: "g1", title: "First" });
+    const last = weeklyGoalSchema.parse({ id: "g2", title: "Last" });
+    const plan = [first, planGym, last];
+    expect(schedulingGoalsWithWeeklyRoutines(plan, DEFAULT_USER_SETTINGS).map((g) => g.id)).toEqual([
+      "g1",
+      "g2",
+      "user-plan-gym"
+    ]);
+    expect(goalsInPlanOrderForRibbonLanes(plan, DEFAULT_USER_SETTINGS).map((g) => g.id)).toEqual([
+      "g1",
+      "user-plan-gym",
+      "g2"
+    ]);
+  });
+
+  it("appends synthetic physical activity after plan rows when present", () => {
+    const plan = [
+      weeklyGoalSchema.parse({ id: "only", title: "Only" })
+    ];
+    const ribbon = goalsInPlanOrderForRibbonLanes(plan, {
+      gym: { ...DEFAULT_USER_SETTINGS.gym, plannerBlockEnabled: true }
+    });
+    expect(ribbon.map((g) => g.id)).toEqual(["only", ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID]);
   });
 });

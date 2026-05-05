@@ -26,6 +26,23 @@ async function updateAllocator(formData: FormData): Promise<void> {
   afterConstraintsSave(userId);
 }
 
+async function updateGoalWindowMode(formData: FormData): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const raw = String(formData.get("goalWindowMode") ?? "linear");
+  const goalWindowMode = (
+    raw === "stacked" ? "stacked" : raw === "hybrid" ? "hybrid" : "linear"
+  ) as UserSettings["allocator"]["goalWindowMode"];
+  await saveSettings(userId, {
+    ...settings,
+    allocator: { ...settings.allocator, goalWindowMode }
+  });
+  afterConstraintsSave(userId);
+}
+
 async function updateAllocationMode(formData: FormData): Promise<void> {
   "use server";
   const session = await authOrPreview();
@@ -126,6 +143,13 @@ function allocationModeDisclosureSummary(settings: UserSettings): string {
   return settings.allocator.allocationMode === "finish-early"
     ? "Finish early (tail gap)"
     : "Even gaps between blocks";
+}
+
+function goalWindowModeDisclosureSummary(settings: UserSettings): string {
+  const m = settings.allocator.goalWindowMode;
+  if (m === "stacked") return "Stacked envelopes (external scheduler)";
+  if (m === "hybrid") return "Hybrid — per goal on Perfect Week";
+  return "Linear blocks (in-app)";
 }
 
 function starvationDisclosureSummary(settings: UserSettings): string {
@@ -287,6 +311,79 @@ export async function ConstraintsSection() {
                 <span>
                   <strong>Manual</strong> — floors only from values you apply on the week review.
                   Stored adjustments are ignored by the allocator while automated mode is on.
+                </span>
+              </label>
+              <button type="submit" className="btn-primary mt-1 w-fit text-xs">
+                Save
+              </button>
+            </div>
+          </ConstraintCard>
+        </form>
+      </details>
+
+      <details className="card">
+        <summary className="flex cursor-pointer list-none flex-col gap-0.5 py-0.5 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-baseline sm:gap-2">
+          <span className="text-sm font-semibold">Perfect Week placement style</span>
+          <span className="text-xs font-normal text-ink-500 dark:text-ink-400">
+            {goalWindowModeDisclosureSummary(settings)}
+          </span>
+        </summary>
+        <p className="mt-1 text-xs text-ink-400">
+          Linear mode greedy-packs concrete goal blocks into free calendar time. Stacked mode skips
+          auto blocks and ignores saved goal overrides from linear placement (drag/day-sheet pins), then
+          computes per-goal <strong>feasible time unions</strong> for tools like Skedpal — weekly targets
+          from Pass 1+2 stay the same; unplaced minutes mean duration is owned outside this planner until
+          you hook up export. <strong>Hybrid</strong> defaults each Perfect Week goal to stacked (same as
+          Skedpal-first); opt specific rows into linear greedy packing on{" "}
+          <a className="underline" href="/dashboard/plan">
+            Perfect Week
+          </a>
+          . On each <strong>linear-role</strong> row, answer whether that goal blocks stacked time maps for the week.
+        </p>
+        <form action={updateGoalWindowMode} className="mt-3">
+          <ConstraintCard label="Goal windows">
+            <div className="flex flex-col gap-2 text-sm">
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="goalWindowMode"
+                  value="linear"
+                  defaultChecked={
+                    settings.allocator.goalWindowMode !== "stacked" &&
+                    settings.allocator.goalWindowMode !== "hybrid"
+                  }
+                  className="mt-1"
+                />
+                <span>
+                  <strong>Linear (default)</strong> — place scheduled blocks each week inside your
+                  constraints.
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="goalWindowMode"
+                  value="stacked"
+                  defaultChecked={settings.allocator.goalWindowMode === "stacked"}
+                  className="mt-1"
+                />
+                <span>
+                  <strong>Stacked timemap</strong> — emit where each goal <em>may</em> run (maximum
+                  envelope from calendar gaps + goal rules); Perfect Week ignores linear-mode goal pins on
+                  the preview; hand duration packing to your external scheduler.
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="goalWindowMode"
+                  value="hybrid"
+                  defaultChecked={settings.allocator.goalWindowMode === "hybrid"}
+                  className="mt-1"
+                />
+                <span>
+                  <strong>Hybrid</strong> — mix linear and stacked per goal on Perfect Week (default per
+                  goal: stacked). Set placement and ribbon behaviour on each expanded goal row.
                 </span>
               </label>
               <button type="submit" className="btn-primary mt-1 w-fit text-xs">

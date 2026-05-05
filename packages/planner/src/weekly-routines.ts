@@ -105,6 +105,24 @@ export function schedulingGoalsWithWeeklyRoutines(
 }
 
 /**
+ * Goal order for calendar timemap ribbons and show/hide toggles: follows the Perfect Week hub list
+ * (`filterSchedulingGoals(plan.goals)` preserves row order, including a user-placed gym row).
+ *
+ * {@link schedulingGoalsWithWeeklyRoutines} instead appends gym / synthetic physical activity at the
+ * end for allocator Pass 3 — do not use that array when horizontal alignment should match list order.
+ */
+export function goalsInPlanOrderForRibbonLanes(
+  planGoals: readonly WeeklyGoal[],
+  settings: Pick<UserSettings, "gym">
+): WeeklyGoal[] {
+  const filtered = filterSchedulingGoals([...planGoals]);
+  const hasPlanGym = filtered.some((g) => g.specialGoalType === "gym");
+  const synthetic = physicalActivityWeeklyGoalFromGymSettings(settings.gym);
+  if (synthetic && !hasPlanGym) return [...filtered, synthetic];
+  return filtered;
+}
+
+/**
  * Synthetic weekly goal when `gym.plannerBlockEnabled` is on and the plan has
  * no user-authored `specialGoalType: "gym"` row.
  */

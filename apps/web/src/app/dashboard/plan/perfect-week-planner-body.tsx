@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import type { GoalGroup, GymSettings, WeeklyGoal } from "@calendar-automations/schema";
+import type {
+  AllocatorGoalWindowMode,
+  GoalGroup,
+  GymSettings,
+  WeeklyGoal
+} from "@calendar-automations/schema";
+import { hybridAnyLinearGoalBlocksTimemaps } from "@calendar-automations/schema";
 import { useMemo } from "react";
 import { PlanCalendarViewProvider, usePlanCalendarView } from "./plan-calendar-view-context";
 import type { GoalGroupRailBundle, PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";
@@ -226,6 +232,7 @@ interface PerfectWeekPlannerBodyProps {
   systemBlocksForCalendar: Parameters<typeof RangeToggleCalendar>[0]["system"];
   proposedForCalendar: Parameters<typeof RangeToggleCalendar>[0]["proposed"];
   schedulingGoals: Parameters<typeof RangeToggleCalendar>[0]["schedulingGoals"];
+  ribbonLaneOrderingGoals: Parameters<typeof RangeToggleCalendar>[0]["ribbonLaneOrderingGoals"];
   frameworkSystem: Parameters<typeof RangeToggleCalendar>[0]["frameworkSystem"];
   wheelAreas?: Parameters<typeof RangeToggleCalendar>[0]["wheelAreas"];
   goalGroups?: readonly GoalGroup[];
@@ -236,6 +243,7 @@ interface PerfectWeekPlannerBodyProps {
   planClientDeletedGoals: Parameters<typeof PlanClient>[0]["initialDeletedGoals"];
   goalIdsWithDaySheetHistory: readonly string[];
   goalGroupTitles: Record<string, string>;
+  allocatorGoalWindowMode: AllocatorGoalWindowMode;
 }
 
 export default function PerfectWeekPlannerBody(props: PerfectWeekPlannerBodyProps) {
@@ -317,6 +325,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
     systemBlocksForCalendar,
     proposedForCalendar,
     schedulingGoals,
+    ribbonLaneOrderingGoals,
     frameworkSystem,
     wheelAreas,
     goalGroups = [],
@@ -325,10 +334,18 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
     gymTemplate,
     planClientDeletedGoals,
     goalIdsWithDaySheetHistory,
-    goalGroupTitles
+    goalGroupTitles,
+    allocatorGoalWindowMode
   } = props;
 
   const weekStartMsView = isoWeekStartsForRolling[0] ?? calendarWeekStartsMs[0]!;
+  const stackedTimemapRibbonsAboveProposedGoals = useMemo(
+    () =>
+      allocatorGoalWindowMode === "hybrid" &&
+      !hybridAnyLinearGoalBlocksTimemaps(planClientGoals, allocatorGoalWindowMode),
+    [allocatorGoalWindowMode, planClientGoals]
+  );
+
   const railBundles = useGoalGroupRailBundles({
     isoWeekStartsMs: isoWeekStartsForRolling,
     timezone,
@@ -363,6 +380,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
               goalGroups={goalGroups}
               goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
               rollingAsOfMs={nowMs}
+              allocatorGoalWindowMode={allocatorGoalWindowMode}
             />
             <NotScheduledForActiveSlices
               isoWeekStartsMs={isoWeekStartsForRolling}
@@ -386,6 +404,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                 proposed={proposedForCalendar}
                 compact
                 schedulingGoals={schedulingGoals}
+                ribbonLaneOrderingGoals={ribbonLaneOrderingGoals}
                 frameworkSystem={frameworkSystem}
                 wheelAreas={wheelAreas}
                 goalGroups={goalGroups}
@@ -393,6 +412,8 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                 fallbackGoalGroupGaps={fallbackGaps}
                 fallbackGoalGroupMinutes={fallbackMinutes}
                 hasUserDragGoalOverrides={hasUserDragGoalOverrides}
+                stackedTimemapRibbonsAboveProposedGoals={stackedTimemapRibbonsAboveProposedGoals}
+                allocatorGoalWindowMode={allocatorGoalWindowMode}
               />
             </div>
             <details className="card lg:hidden" open>
@@ -408,6 +429,7 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                   system={systemBlocksForCalendar}
                   proposed={proposedForCalendar}
                   schedulingGoals={schedulingGoals}
+                  ribbonLaneOrderingGoals={ribbonLaneOrderingGoals}
                   frameworkSystem={frameworkSystem}
                   wheelAreas={wheelAreas}
                   goalGroups={goalGroups}
@@ -415,6 +437,8 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
                   fallbackGoalGroupGaps={fallbackGaps}
                   fallbackGoalGroupMinutes={fallbackMinutes}
                   hasUserDragGoalOverrides={hasUserDragGoalOverrides}
+                  stackedTimemapRibbonsAboveProposedGoals={stackedTimemapRibbonsAboveProposedGoals}
+                  allocatorGoalWindowMode={allocatorGoalWindowMode}
                 />
               </div>
             </details>

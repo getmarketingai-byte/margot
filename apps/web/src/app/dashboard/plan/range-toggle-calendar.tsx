@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { AllocatedBlock, BusyEvent, WeekMetrics } from "@calendar-automations/planner";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
+  type AllocatorGoalWindowMode,
   type FrameworkRegistryId,
   type FrameworkSystem,
   type GoalGroup,
@@ -14,6 +15,7 @@ import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overla
 import type { SystemBlock } from "@/lib/week-blocks";
 import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { goalColorFromKey } from "@/lib/goal-colors";
+import { compareRibbonLaneKeysPriority } from "@/lib/ribbon-lane-order";
 import { WEEK_MS } from "@/lib/effective-schedule-horizon";
 import { WeekCalendar } from "../week-calendar";
 import { usePlanCalendarView } from "./plan-calendar-view-context";
@@ -121,6 +123,7 @@ export function RangeToggleCalendar({
   proposed,
   compact,
   schedulingGoals,
+  ribbonLaneOrderingGoals,
   frameworkSystem,
   wheelAreas,
   goalGroups = [],
@@ -129,7 +132,9 @@ export function RangeToggleCalendar({
   goalGroupBundles,
   fallbackGoalGroupGaps = [],
   fallbackGoalGroupMinutes = {},
-  hasUserDragGoalOverrides = false
+  hasUserDragGoalOverrides = false,
+  stackedTimemapRibbonsAboveProposedGoals = false,
+  allocatorGoalWindowMode
 }: {
   weekStartMs: number;
   calendarWeekStartsMs?: readonly number[];
@@ -141,6 +146,8 @@ export function RangeToggleCalendar({
   proposed: readonly AllocatedBlock[];
   compact?: boolean;
   schedulingGoals?: readonly WeeklyGoal[];
+  /** Plan hub order for timemap ribbons/toggles (incl. gym row position); defaults to schedulingGoals. */
+  ribbonLaneOrderingGoals?: readonly WeeklyGoal[];
   frameworkSystem?: FrameworkSystem;
   wheelAreas?: ReadonlyArray<{ id: string; label: string }>;
   goalGroups?: readonly GoalGroup[];
@@ -151,6 +158,10 @@ export function RangeToggleCalendar({
   fallbackGoalGroupMinutes?: Readonly<Record<string, number>>;
   /** Server: plan has at least one `goal` override with `source: "drag"`. */
   hasUserDragGoalOverrides?: boolean;
+  /** Hybrid weeks with no linear “block time maps”: draw stacked/invert ribbons above proposed blocks. */
+  stackedTimemapRibbonsAboveProposedGoals?: boolean;
+  /** Drives per–linear-goal z-order when hybrid has mixed Yes/No timemap blocking. */
+  allocatorGoalWindowMode?: AllocatorGoalWindowMode;
 }) {
   const router = useRouter();
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(750);
@@ -325,13 +336,21 @@ export function RangeToggleCalendar({
   const invertedGoals = useMemo(() => {
     const seen = new Map<string, string>();
     for (const s of system) {
-      if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
-      if (!seen.has(s.invertedGoalId)) seen.set(s.invertedGoalId, s.title);
+      const goalId =
+        s.system === "inverted-timemap"
+          ? s.invertedGoalId
+          : s.system === "stacked-timemap"
+            ? s.stackedGoalId
+            : undefined;
+      if (!goalId) continue;
+      if (!seen.has(goalId)) seen.set(goalId, s.title);
     }
     return [...seen.entries()]
       .map(([goalId, title]) => ({ goalId, title }))
-      .sort((a, b) => a.goalId.localeCompare(b.goalId));
-  }, [system]);
+      .sort((a, b) =>
+        compareRibbonLaneKeysPriority(`inv:${a.goalId}`, `inv:${b.goalId}`, ribbonLaneOrderingGoals ?? schedulingGoals)
+      );
+  }, [system, schedulingGoals, ribbonLaneOrderingGoals]);
 
   const setInvertedGoalAndPersist = (goalId: string, next: boolean) => {
     setInvertedVisibility((prev) => {
@@ -349,8 +368,12 @@ export function RangeToggleCalendar({
     () =>
       systemShown.filter((s) => {
         if (s.system === "weather" && !showWeather) return false;
-        if (s.system === "inverted-timemap" && s.invertedGoalId) {
-          return isInvertedGoalShown(invertedVisibility, s.invertedGoalId);
+        if (
+          (s.system === "inverted-timemap" && s.invertedGoalId) ||
+          (s.system === "stacked-timemap" && s.stackedGoalId)
+        ) {
+          const gid = s.system === "inverted-timemap" ? s.invertedGoalId! : s.stackedGoalId!;
+          return isInvertedGoalShown(invertedVisibility, gid);
         }
         return true;
       }),
@@ -365,7 +388,9 @@ export function RangeToggleCalendar({
   return (
     <div className="flex flex-col gap-2">
       <div className="px-1 text-xs text-ink-400">
-        Existing events sit behind sleep, travel, and your proposed goal blocks.
+        Existing events sit behind sleep, travel, and your proposed goal blocks. Thin coloured bars:
+        invert-calendar availability and — in stacked placement mode — feasible windows per goal (same
+        show/hide toggles).
       </div>
       <div className="flex flex-wrap items-center gap-1 px-1 text-xs">
         <button
@@ -483,11 +508,14 @@ export function RangeToggleCalendar({
         onProposedDragCommit={handleProposedDragCommit}
         onProposedDragOverridesCleared={handleProposedDragOverridesCleared}
         weeklyGoalsForFrameworkOverlays={schedulingGoals}
+        ribbonLaneOrderingGoals={ribbonLaneOrderingGoals}
         frameworkRegistryForOverlays={taggableFrameworkRows}
         frameworkOverlayLayerState={
           taggableFrameworkRows.length && schedulingGoals?.length ? fwOverlayLayers : undefined
         }
         wheelAreaLabel={wheelAreas?.length ? wheelAreaLabel : undefined}
+        stackedTimemapRibbonsAboveProposedGoals={stackedTimemapRibbonsAboveProposedGoals}
+        allocatorGoalWindowMode={allocatorGoalWindowMode}
       />
       <div className="px-1">
         <button

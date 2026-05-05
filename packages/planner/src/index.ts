@@ -7,4 +7,5 @@ export * from "./sleep";
 export * from "./weekly";
 export { QUANTUM } from "./weekly-grid";
 export * from "./weekly-routines";
+export * from "./goal-feasible-windows";
 export * from "./ics";

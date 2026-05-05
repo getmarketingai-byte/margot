@@ -82,6 +82,9 @@ import {
   effectiveEnergyBatteryProfile,
   effectivePlacementIdealAfterBoundary,
   effectivePlacementIdealBeforeBoundary,
+  hybridLinearPlacementBlocksTimemaps,
+  hybridHasMixedLinearTimemapBlocking,
+  effectiveWeeklyGoalWindowPlacement,
   filterSchedulingGoals,
   hydrateFrameworkSystemMirrors,
   isInvertedTimemapGoal,
@@ -89,7 +92,14 @@ import {
   stubWeeklyGoalFromGoalGroup
 } from "@calendar-automations/schema";
 import type { BusyEvent, Interval } from "./types";
-import { collectBusyIntervals, freeGaps, mergeIntervals } from "./intervals";
+import {
+  computeStackedFeasibleWindowsForWeek,
+  dayHardPlacementIdealWindow,
+  intersectWithAvailability,
+  placementWindowsForDay,
+  type WeekDayGapBuckets
+} from "./goal-feasible-windows";
+import { collectBusyIntervals, freeGaps, mergeIntervals, subtractIntervalsFromUnion } from "./intervals";
 import { physicalActivityWeeklyGoalFromGymSettings } from "./weekly-routines";
 import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 import { QUANTUM } from "./weekly-grid";
@@ -340,6 +350,17 @@ export interface AllocateInput {
 export interface AllocateResult {
   blocks: AllocatedBlock[];
   metrics: WeekMetrics;
+  /**
+   * Present when `settings.allocator.goalWindowMode === "stacked"`: per-goal union of
+   * intervals where Pass‑3 constraints allow scheduling (Skedpal envelope).
+   */
+  stackedFeasibleByGoalId?: Record<string, Interval[]>;
+  /**
+   * Hybrid + mixed linear timemap blocking only: wider ribbon intervals for dashboard preview.
+   * Pre-linear stacked envelope minus **blocking** hybrid linear placement only (non-blocking linear
+   * rows do not clip ribbons). Placement/stacked pins still use {@link stackedFeasibleByGoalId}.
+   */
+  stackedFeasibleRibbonPreviewByGoalId?: Record<string, Interval[]>;
 }
 
 /** Internal: a goal augmented with the bounds the allocator actually uses. */
@@ -590,6 +611,21 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   const batteryOn = batteryContext !== undefined;
 
+  /** Matches schema default; callers/tests may shallow-merge `allocator` and omit this field. */
+  const goalWindowMode = settings.allocator.goalWindowMode ?? "linear";
+  const { placementGoalOverrides, placementGoalOverrideSources } =
+    goalWindowMode === "stacked"
+      ? {
+          placementGoalOverrides: new Map<string, { startMs: number; endMs: number }>(),
+          placementGoalOverrideSources: new Map<string, "drag" | "actual">()
+        }
+      : goalWindowMode === "hybrid"
+        ? filterHybridPlacementOverrides(goalOverrides, goalOverrideSources, goalsForAllocation)
+        : {
+            placementGoalOverrides: goalOverrides,
+            placementGoalOverrideSources: goalOverrideSources
+          };
+
   const { prepared, overcommitted, notScheduled } = distributeMinutes(
     goalsForAllocation,
     weekCapacityMinutes,
@@ -606,7 +642,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   applyCatchUpDemandAdjustments(prepared, input.catchUpFloors, weekCapacityMinutes);
 
-  const groupPlacement = initGoalGroupPlacementContext(plan, busy, goalOverrides, days);
+  const groupPlacement = initGoalGroupPlacementContext(plan, busy, placementGoalOverrides, days);
 
   // Logged day-sheet minutes should reduce remaining weekly demand for the same
   // goal. If those minutes are also represented as source="actual" pins, the
@@ -622,8 +658,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       p.goal.id,
       weekStartMs,
       weekEndMs,
-      goalOverrides,
-      goalOverrideSources
+      placementGoalOverrides,
+      placementGoalOverrideSources
     );
     const unpinnedLoggedMinutes = Math.max(0, weeklyLoggedMinutes - weeklyPinnedActualMinutes);
     p.effectiveMinutes = Math.max(0, p.effectiveMinutes - unpinnedLoggedMinutes);
@@ -793,12 +829,62 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     prepared.map((p) => [p.goal.id, p.effectiveMinutes] as const)
   );
 
+  const feasibilityOpts = {
+    tz,
+    goalAvailabilityWindows: input.goalAvailabilityWindows,
+    niceWeatherWindows: input.niceWeatherWindows,
+    nowMs: allocationNowMs,
+    weekStartMs,
+    weekEndMs
+  } as const;
+
+  let stackedFeasibleByGoalId: Record<string, Interval[]> | undefined;
+
+  if (goalWindowMode === "linear") {
+    stackedFeasibleByGoalId = undefined;
+  } else if (goalWindowMode === "stacked") {
+    stackedFeasibleByGoalId = computeStackedFeasibleWindowsForWeek({
+      goals: prepared.map((p) => p.goal),
+      days,
+      ...feasibilityOpts
+    });
+  } else {
+    const anyLinearBlocksTimemaps = prepared.some((p) =>
+      hybridLinearPlacementBlocksTimemaps(p.goal, goalWindowMode)
+    );
+    const hasAnyStackedRole = prepared.some(
+      (p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked"
+    );
+    stackedFeasibleByGoalId = hasAnyStackedRole ? {} : undefined;
+    if (stackedFeasibleByGoalId && !anyLinearBlocksTimemaps) {
+      const stackedGoals = prepared
+        .filter((p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked")
+        .map((p) => p.goal);
+      if (stackedGoals.length > 0) {
+        Object.assign(
+          stackedFeasibleByGoalId,
+          computeStackedFeasibleWindowsForWeek({
+            goals: stackedGoals,
+            days: cloneWeekDayGapBuckets(days),
+            ...feasibilityOpts
+          })
+        );
+      }
+    }
+  }
+
+  const hybridPreLinearGapSnapshot =
+    goalWindowMode === "hybrid" ? cloneWeekDayGapBuckets(days) : undefined;
+
   const pass3Sequential = prepared.filter(
     (p) => p.goal.specialGoalType === "gym" || p.weeklyFloorBeforeCatchUpBump > 0
   );
   const pass3RoundRobin = prepared.filter(
     (p) => p.goal.specialGoalType !== "gym" && p.weeklyFloorBeforeCatchUpBump <= 0
   );
+
+  const pinsOnlyForPrepared = (p: PreparedGoal) =>
+    effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked";
 
   const runAllocateGoalPass3 = (p: PreparedGoal) => {
     if (p.effectiveMinutes <= 0) return;
@@ -818,61 +904,100 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       weekStartMs,
       weekEndMs,
       weekAnchorDate,
-      goalOverrides,
-      goalOverrideSources,
+      placementGoalOverrides,
+      placementGoalOverrideSources,
       allocationNowMs,
       sleepIntervals,
+      prepared,
       batteryContext,
       groupPlacement,
-      prepared
+      pinsOnlyForPrepared(p)
     );
   };
 
-  for (const p of pass3Sequential) runAllocateGoalPass3(p);
-
-  // Repeated passes over the round-robin cohort. Base order matches `prepared` Pass‑3
-  // comparator; **each wave** re-sorts so goals that already have more auto time on the
-  // calendar run first. That lets a heavy row extend contiguously before lighter peers
-  // claim a gap that would otherwise sit between two chunks after the next wave (see
-  // gym-pad contiguity + peer gap filters in `allocateGoal`).
   const RR_ROUNDS = 128;
-  const pass3RoundRobinBase = [...pass3RoundRobin].sort((a, b) =>
-    comparePreparedGoalsForPass3Placement(a, b, fw)
-  );
-  for (let r = 0; r < RR_ROUNDS; r++) {
-    const placedAutoMinByGoal = new Map<string, number>();
-    for (const b of blocks) {
-      if (b.segment) continue;
-      const gid = b.goalId;
-      placedAutoMinByGoal.set(
-        gid,
-        (placedAutoMinByGoal.get(gid) ?? 0) + Math.floor((b.endMs - b.startMs) / MS_PER_MIN)
-      );
+
+  const runPass3RoundRobinWaves = (cohort: PreparedGoal[]): void => {
+    const pass3RoundRobinBase = [...cohort].sort((a, b) =>
+      comparePreparedGoalsForPass3Placement(a, b, fw)
+    );
+    for (let r = 0; r < RR_ROUNDS; r++) {
+      const placedAutoMinByGoal = new Map<string, number>();
+      for (const b of blocks) {
+        if (b.segment) continue;
+        const gid = b.goalId;
+        placedAutoMinByGoal.set(
+          gid,
+          (placedAutoMinByGoal.get(gid) ?? 0) + Math.floor((b.endMs - b.startMs) / MS_PER_MIN)
+        );
+      }
+      const ordered = [...pass3RoundRobinBase].sort((a, b) => {
+        const pa = placedAutoMinByGoal.get(a.goal.id) ?? 0;
+        const pb = placedAutoMinByGoal.get(b.goal.id) ?? 0;
+        if (pa !== pb) return pb - pa;
+        const aDefer = respectsPeerContinuationPocketsWhenChoosingGaps(a.goal) ? 1 : 0;
+        const bDefer = respectsPeerContinuationPocketsWhenChoosingGaps(b.goal) ? 1 : 0;
+        if (aDefer !== bDefer) return aDefer - bDefer;
+        return comparePreparedGoalsForPass3Placement(a, b, fw);
+      });
+      let progressed = false;
+      for (const p of ordered) {
+        if (p.effectiveMinutes < QUANTUM) continue;
+        const before = p.effectiveMinutes;
+        runAllocateGoalPass3(p);
+        if (p.effectiveMinutes < before) progressed = true;
+      }
+      if (!progressed) break;
     }
-    const ordered = [...pass3RoundRobinBase].sort((a, b) => {
-      const pa = placedAutoMinByGoal.get(a.goal.id) ?? 0;
-      const pb = placedAutoMinByGoal.get(b.goal.id) ?? 0;
-      if (pa !== pb) return pb - pa;
-      const aDefer = respectsPeerContinuationPocketsWhenChoosingGaps(a.goal) ? 1 : 0;
-      const bDefer = respectsPeerContinuationPocketsWhenChoosingGaps(b.goal) ? 1 : 0;
-      if (aDefer !== bDefer) return aDefer - bDefer;
-      return comparePreparedGoalsForPass3Placement(a, b, fw);
-    });
-    let progressed = false;
-    for (const p of ordered) {
-      if (p.effectiveMinutes < QUANTUM) continue;
-      const before = p.effectiveMinutes;
-      runAllocateGoalPass3(p);
-      if (p.effectiveMinutes < before) progressed = true;
+  };
+
+  if (goalWindowMode === "hybrid") {
+    const linearSequential = pass3Sequential.filter(
+      (p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "linear"
+    );
+    const linearRoundRobin = pass3RoundRobin.filter(
+      (p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "linear"
+    );
+    for (const p of linearSequential) runAllocateGoalPass3(p);
+    runPass3RoundRobinWaves(linearRoundRobin);
+
+    const anyLinearBlocksTimemaps = prepared.some((p) =>
+      hybridLinearPlacementBlocksTimemaps(p.goal, goalWindowMode)
+    );
+    if (anyLinearBlocksTimemaps && stackedFeasibleByGoalId) {
+      const stackedGoals = prepared
+        .filter((p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked")
+        .map((p) => p.goal);
+      if (stackedGoals.length > 0) {
+        Object.assign(
+          stackedFeasibleByGoalId,
+          computeStackedFeasibleWindowsForWeek({
+            goals: stackedGoals,
+            days,
+            ...feasibilityOpts
+          })
+        );
+      }
     }
-    if (!progressed) break;
+
+    const stackedSequential = pass3Sequential.filter(
+      (p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked"
+    );
+    const stackedRoundRobin = pass3RoundRobin.filter(
+      (p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked"
+    );
+    for (const p of stackedSequential) runAllocateGoalPass3(p);
+    runPass3RoundRobinWaves(stackedRoundRobin);
+  } else {
+    for (const p of pass3Sequential) runAllocateGoalPass3(p);
+    runPass3RoundRobinWaves(pass3RoundRobin);
   }
 
   for (const b of blocks) {
     if (!b.dragKey || b.segment) continue;
-    if (goalOverrides.has(b.dragKey)) {
+    if (placementGoalOverrides.has(b.dragKey)) {
       b.dragOverrideSaved = true;
-      b.overrideSource = goalOverrideSources.get(b.dragKey) ?? "drag";
+      b.overrideSource = placementGoalOverrideSources.get(b.dragKey) ?? "drag";
     }
   }
 
@@ -886,6 +1011,43 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     blocks.sort((a, b) => a.startMs - b.startMs);
   }
 
+  let stackedFeasibleRibbonPreviewByGoalId: Record<string, Interval[]> | undefined;
+  if (
+    goalWindowMode === "hybrid" &&
+    stackedFeasibleByGoalId &&
+    hybridPreLinearGapSnapshot &&
+    hybridHasMixedLinearTimemapBlocking(
+      prepared.map((p) => p.goal),
+      goalWindowMode
+    )
+  ) {
+    const stackedGoals = prepared
+      .filter((p) => effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked")
+      .map((p) => p.goal);
+    if (stackedGoals.length > 0) {
+      const preLin = computeStackedFeasibleWindowsForWeek({
+        goals: stackedGoals,
+        days: hybridPreLinearGapSnapshot,
+        ...feasibilityOpts
+      });
+      const blockingChunks: Interval[] = [];
+      for (const b of blocks) {
+        if (b.segment) continue;
+        const prep = prepared.find((q) => q.goal.id === b.goalId);
+        if (!prep || !hybridLinearPlacementBlocksTimemaps(prep.goal, goalWindowMode)) continue;
+        blockingChunks.push({ startMs: b.startMs, endMs: b.endMs });
+      }
+      const blockingOccupancy = mergeIntervals(blockingChunks);
+      stackedFeasibleRibbonPreviewByGoalId = {};
+      for (const [gid, intervals] of Object.entries(preLin)) {
+        stackedFeasibleRibbonPreviewByGoalId[gid] = subtractIntervalsFromUnion(
+          intervals,
+          blockingOccupancy
+        );
+      }
+    }
+  }
+
   const metrics = computeMetrics(
     plan,
     prepared,
@@ -896,8 +1058,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     busy,
     weekStartMs,
     weekEndMs,
-    goalOverrides,
-    goalOverrideSources,
+    placementGoalOverrides,
+    placementGoalOverrideSources,
     weekCapacityMinutes,
     weekCapacityFromNowMinutes,
     {
@@ -918,7 +1080,16 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     };
   }
 
-  return { blocks, metrics };
+  return stackedFeasibleByGoalId
+    ? {
+        blocks,
+        metrics,
+        stackedFeasibleByGoalId,
+        ...(stackedFeasibleRibbonPreviewByGoalId
+          ? { stackedFeasibleRibbonPreviewByGoalId }
+          : {})
+      }
+    : { blocks, metrics };
 }
 
 /**
@@ -1322,6 +1493,40 @@ function goalIdFromGoalDragKey(key: string): string | undefined {
   return m?.[1];
 }
 
+/** Shallow clone gap intervals so feasibility snapshots do not alias mutating `days`. */
+function cloneWeekDayGapBuckets(days: readonly WeekDayGapBuckets[]): WeekDayGapBuckets[] {
+  return days.map((d) => ({
+    startMs: d.startMs,
+    endMs: d.endMs,
+    gaps: d.gaps.map((g) => ({ startMs: g.startMs, endMs: g.endMs }))
+  }));
+}
+
+function filterHybridPlacementOverrides(
+  goalOverrides: ReadonlyMap<string, { startMs: number; endMs: number }>,
+  goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
+  goalsForAllocation: readonly WeeklyGoal[]
+): {
+  placementGoalOverrides: Map<string, { startMs: number; endMs: number }>;
+  placementGoalOverrideSources: Map<string, "drag" | "actual">;
+} {
+  const stackedIds = new Set(
+    goalsForAllocation
+      .filter((g) => effectiveWeeklyGoalWindowPlacement(g, "hybrid") === "stacked")
+      .map((g) => g.id)
+  );
+  const placementGoalOverrides = new Map(goalOverrides);
+  const placementGoalOverrideSources = new Map(goalOverrideSources);
+  for (const key of [...placementGoalOverrides.keys()]) {
+    const gid = goalIdFromGoalDragKey(key);
+    if (gid !== undefined && stackedIds.has(gid)) {
+      placementGoalOverrides.delete(key);
+      placementGoalOverrideSources.delete(key);
+    }
+  }
+  return { placementGoalOverrides, placementGoalOverrideSources };
+}
+
 function goalWeeklyCeilingMinutesFromGroup(group: GoalGroup, T: number): number | undefined {
   const stub = stubWeeklyGoalFromGoalGroup(group);
   const norm = normaliseGoalTime(stub);
@@ -1702,63 +1907,6 @@ function dayIndexForMsInWeek(ms: number, weekStartMs: number, tz: string): numbe
 }
 
 /**
- * When both after and before local boundaries are set (and before is strictly later than after),
- * placement is restricted to free time inside that wall-clock window on this calendar day.
- * (Single-sided after/before without a pair still only filters listed ideal times — soft signal.)
- */
-function dayHardPlacementIdealWindow(
-  goal: WeeklyGoal,
-  dayStartMs: number,
-  tz: string
-): Interval | null {
-  const after = effectivePlacementIdealAfterBoundary(goal);
-  const before = effectivePlacementIdealBeforeBoundary(goal);
-  if (!after || !before) return null;
-  const startMin = after.hour * 60 + after.minute;
-  const endMin = before.hour * 60 + before.minute;
-  if (endMin <= startMin) return null;
-  const dk = dateKeyInTz(dayStartMs, tz);
-  const segs = dk.split("-");
-  const ys = Number(segs[0]);
-  const mo = Number(segs[1]);
-  const da = Number(segs[2]);
-  if (!Number.isFinite(ys) || !Number.isFinite(mo) || !Number.isFinite(da)) return null;
-  const dayMid = localMidnightMs(ys, mo, da, tz);
-  return {
-    startMs: dayMid + startMin * MS_PER_MIN,
-    endMs: dayMid + endMin * MS_PER_MIN
-  };
-}
-
-/** Intersects free gaps with optional invert-calendar windows, then nice-weather outside windows. */
-function placementWindowsForDay(
-  dayGaps: readonly Interval[],
-  dayStartMs: number,
-  dayEndMs: number,
-  availabilityWindows: readonly Interval[] | undefined,
-  niceWeatherWindows: readonly Interval[] | undefined,
-  goal: WeeklyGoal,
-  tz: string
-): Interval[] {
-  let gaps: Interval[] = dayGaps as Interval[];
-  if (availabilityWindows && availabilityWindows.length > 0) {
-    gaps = intersectWithAvailability(gaps, availabilityWindows, dayStartMs, dayEndMs);
-  }
-  if (
-    goal.scheduleInNiceWeather === true &&
-    niceWeatherWindows &&
-    niceWeatherWindows.length > 0
-  ) {
-    gaps = intersectWithAvailability(gaps, niceWeatherWindows, dayStartMs, dayEndMs);
-  }
-  const idealWin = dayHardPlacementIdealWindow(goal, dayStartMs, tz);
-  if (idealWin) {
-    gaps = intersectWithAvailability(gaps, [idealWin], dayStartMs, dayEndMs);
-  }
-  return gaps;
-}
-
-/**
  * Minutes from `allocationNowMs` onward where this goal may receive Pass‑3 auto
  * placement (same pipeline as `placementWindowsForDay` in `allocateGoal`).
  */
@@ -2061,17 +2209,23 @@ function allocateGoal(
   goalOverrideSources: ReadonlyMap<string, "drag" | "actual">,
   nowMs: number | undefined,
   sleepIntervals: readonly Interval[] | undefined,
+  /** Full Pass‑3 cohort (mutating `effectiveMinutes`) for anti–peer-sandwich gap filtering. */
+  pass3PreparedCohort: readonly PreparedGoal[],
   battery?: {
     goalsById: ReadonlyMap<string, WeeklyGoal>;
     dayDrainScores: readonly number[];
     personalSystem: PersonalSystem;
   },
   groupPlacement?: GoalGroupPlacementContext,
-  /** Full Pass‑3 cohort (mutating `effectiveMinutes`) for anti–peer-sandwich gap filtering. */
-  pass3PreparedCohort: readonly PreparedGoal[]
+  /**
+   * When true (stacked goal-window mode), Pass 3 skips greedy auto blocks. Callers pass empty
+   * override maps so linear-mode pins are ignored; this flag remains as a guardrail.
+   */
+  pinsOnlyPlacement?: boolean
 ): void {
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
+  const pinsOnly = pinsOnlyPlacement ?? false;
   try {
     if (remainingMinutes <= 0) return;
 
@@ -2364,6 +2518,8 @@ function allocateGoal(
         }
       }
 
+      if (pinsOnly) continue;
+
       // Pass 0 establishes an even per-day budget; pass 1+ spill `remainingMinutes`
       // into any day that still has gap + headroom. Skipping days that already have a block prevented spill entirely (large hatched “available” bands
       // stayed empty while weekly targets stayed unfilled).
@@ -2533,6 +2689,7 @@ function allocateGoal(
     (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV ?? "";
   if (
     nodeEnv !== "production" &&
+    !pinsOnly &&
     remainingMinutes >= QUANTUM &&
     needsExtraPasses &&
     remainingMinutes <= 8 * 60
@@ -2730,27 +2887,6 @@ function compareGoalsWithNiceWeatherFirst(a: WeeklyGoal, b: WeeklyGoal): number 
   const aNw = a.scheduleInNiceWeather === true ? 0 : 1;
   const bNw = b.scheduleInNiceWeather === true ? 0 : 1;
   return aNw - bNw;
-}
-
-function intersectWithAvailability(
-  gaps: readonly Interval[],
-  availabilityWindows: readonly Interval[],
-  dayStartMs: number,
-  dayEndMs: number
-): Interval[] {
-  const dayWindows = availabilityWindows.filter(
-    (w) => w.endMs > dayStartMs && w.startMs < dayEndMs
-  );
-  if (dayWindows.length === 0) return [];
-  const out: Interval[] = [];
-  for (const gap of gaps) {
-    for (const window of dayWindows) {
-      const startMs = Math.max(gap.startMs, window.startMs);
-      const endMs = Math.min(gap.endMs, window.endMs);
-      if (endMs > startMs) out.push({ startMs, endMs });
-    }
-  }
-  return out;
 }
 
 const BATTERY_PLACEMENT_WEIGHTS = {

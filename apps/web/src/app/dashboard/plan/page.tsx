@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
+import { filterSchedulingGoals, effectiveWeeklyGoalWindowPlacement, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
 import {
   allocateWeek,
   buildStableUid,
   goalOverrideSourcesFromPlan,
+  goalsInPlanOrderForRibbonLanes,
   schedulingGoalsWithWeeklyRoutines
 } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
@@ -14,7 +15,11 @@ import {
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";
 import { localMondayIso } from "@/lib/week";
-import { gymGoalTravelBlocksFromProposed, sleepIntervalsForAllocation } from "@/lib/week-blocks";
+import {
+  gymGoalTravelBlocksFromProposed,
+  sleepIntervalsForAllocation,
+  type SystemBlock
+} from "@/lib/week-blocks";
 import { computeGoalRollups } from "@/lib/review-rollup";
 import { filterInvertedTimemapFromProposedBlocks } from "@/lib/proposed-calendar-filter";
 import { mergeOrphanGoalOverrideBlocks } from "@/lib/merge-orphan-goal-override-blocks";
@@ -116,6 +121,7 @@ export default async function PlanPage() {
     billing
   });
   const schedulingGoals = schedulingGoalsWithWeeklyRoutines(plan.goals, settings);
+  const ribbonLaneOrderingGoals = goalsInPlanOrderForRibbonLanes(plan.goals, settings);
   const perfectWeekAuthoringGoals = filterSchedulingGoals(plan.goals);
   const resolvedCatchUpFloors = ctx.catchUpFloors;
   const {
@@ -200,8 +206,58 @@ export default async function PlanPage() {
       ...(invertedGoalId ? { invertedGoalId } : {})
     };
   });
+
+  let stackedTimemapPreviewBlocks: SystemBlock[] =
+    settings.allocator.goalWindowMode === "stacked" ||
+    settings.allocator.goalWindowMode === "hybrid"
+      ? allocationSlices.flatMap((alloc, idx) => {
+          const slice = weekSlices[idx]!;
+          const map =
+            alloc.stackedFeasibleRibbonPreviewByGoalId ?? alloc.stackedFeasibleByGoalId;
+          if (!map) return [];
+          const goalById = new Map(schedulingGoals.map((g) => [g.id, g] as const));
+          const out: SystemBlock[] = [];
+          for (const [goalId, intervals] of Object.entries(map)) {
+            const g = goalById.get(goalId);
+            const titleBase = g?.title ?? goalId;
+            for (const iv of intervals) {
+              out.push({
+                sourceId: `stacked-preview-${slice.weekAnchorDate}-${goalId}-${iv.startMs}-${iv.endMs}`,
+                title: `${titleBase} · stacked window`,
+                startMs: iv.startMs,
+                endMs: iv.endMs,
+                busy: true,
+                source: "internal",
+                system: "stacked-timemap",
+                stackedGoalId: goalId
+              });
+            }
+          }
+          return out;
+        })
+      : [];
+  if (scheduleHorizon.trialRollingClip) {
+    stackedTimemapPreviewBlocks = clipIntervalBlocksToHorizon(
+      stackedTimemapPreviewBlocks,
+      scheduleHorizon.horizonEndMs
+    );
+  }
+  const goalWindowMode = settings.allocator.goalWindowMode;
+  const proposedMerged =
+    goalWindowMode === "stacked"
+      ? mergedGoalBlocks
+      : mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows, {
+          shouldMergeOrphanGoal:
+            goalWindowMode === "hybrid"
+              ? (goalId) => {
+                  const g = plan.goals.find((x) => x.id === goalId);
+                  if (!g) return true;
+                  return effectiveWeeklyGoalWindowPlacement(g, "hybrid") === "linear";
+                }
+              : undefined
+        });
   let proposedForCalendar = filterInvertedTimemapFromProposedBlocks(
-    mergeOrphanGoalOverrideBlocks(mergedGoalBlocks, plan, mergeWindows),
+    proposedMerged,
     plan,
     settings.calendars.sources
   );
@@ -221,6 +277,7 @@ export default async function PlanPage() {
     ...weekSlices.flatMap((s) => s.systemBlocks),
     ...weatherPreviewBlocks,
     ...invertedTimemapPreviewBlocks,
+    ...stackedTimemapPreviewBlocks,
     ...gymGoalTravelOverlay
   ];
 
@@ -390,6 +447,7 @@ export default async function PlanPage() {
         systemBlocksForCalendar={systemBlocksForCalendar}
         proposedForCalendar={proposedForCalendar}
         schedulingGoals={schedulingGoals}
+        ribbonLaneOrderingGoals={ribbonLaneOrderingGoals}
         frameworkSystem={settings.frameworkSystem}
         wheelAreas={settings.wheel.areas.map((a) => ({ id: a.id, label: a.label }))}
         goalGroups={plan.goalGroups ?? []}
@@ -399,6 +457,7 @@ export default async function PlanPage() {
         planClientDeletedGoals={plan.deletedGoals}
         goalIdsWithDaySheetHistory={goalIdsWithDaySheetHistory}
         goalGroupTitles={Object.fromEntries((plan.goalGroups ?? []).map((g) => [g.id, g.title]))}
+        allocatorGoalWindowMode={settings.allocator.goalWindowMode}
       />
     </div>
   );

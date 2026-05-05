@@ -9,7 +9,13 @@ import {
   useTransition,
   type FormEvent
 } from "react";
-import type { GoalGroup, GymSettings, TrashedGoalEntry, WeeklyGoal } from "@calendar-automations/schema";
+import type {
+  AllocatorGoalWindowMode,
+  GoalGroup,
+  GymSettings,
+  TrashedGoalEntry,
+  WeeklyGoal
+} from "@calendar-automations/schema";
 import {
   isInvertedTimemapGoal,
   normalisePlacementIdealClockBoundary,
@@ -113,6 +119,8 @@ interface PlanClientProps {
    * warning beyond this week&apos;s `loggedMinutes` tally.
    */
   goalIdsWithDaySheetHistory?: readonly string[];
+  /** Global allocator placement mode — drives hybrid controls on goal rows. */
+  allocatorGoalWindowMode: AllocatorGoalWindowMode;
 }
 
 /** Must match {@link GOAL_TRASH_RETENTION_MS} in `@/lib/weekly-plan-trash`. */
@@ -184,7 +192,8 @@ export function PlanClient({
   goalGroupTitles,
   goalGroups = [],
   goalIdsWithDaySheetHistory = [],
-  rollingAsOfMs
+  rollingAsOfMs,
+  allocatorGoalWindowMode
 }: PlanClientProps) {
   const { rangeMode, previewWeekIdx, rollingStatsMode } = usePlanCalendarView();
   const scheduleStaleDataRefresh = useDebouncedIdleRouterRefresh(850);
@@ -632,6 +641,7 @@ export function PlanClient({
               focusNonce={focusRequest?.nonce}
               goalGroupTitles={goalGroupTitles}
               goalGroups={goalGroups}
+              allocatorGoalWindowMode={allocatorGoalWindowMode}
             />
           );
           })}
@@ -1041,7 +1051,8 @@ function GoalRow({
   focusedGoalId,
   focusNonce,
   goalGroupTitles,
-  goalGroups = []
+  goalGroups = [],
+  allocatorGoalWindowMode
 }: {
   goal: WeeklyGoal;
   index: number;
@@ -1070,6 +1081,7 @@ function GoalRow({
   focusNonce?: number;
   goalGroupTitles?: Record<string, string>;
   goalGroups?: readonly GoalGroup[];
+  allocatorGoalWindowMode: AllocatorGoalWindowMode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editTitle, setEditTitle] = useState(goal.title);
@@ -1453,6 +1465,8 @@ function GoalRow({
               draft={draft}
               onChange={commitDraft}
               defaultAllocationSharePercent={defaultAllocationSharePercent}
+              goalId={goal.id}
+              allocatorGoalWindowMode={allocatorGoalWindowMode}
             />
           </div>
           {cohortSummaries.length > 0 ? (
@@ -1525,6 +1539,10 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.earliestHour !== undefined) draft.earliestHour = goal.earliestHour;
   if (goal.latestHour !== undefined) draft.latestHour = goal.latestHour;
   if (goal.allocationSharePercent !== undefined) draft.allocationSharePercent = goal.allocationSharePercent;
+  if (goal.goalWindowPlacement !== undefined) draft.goalWindowPlacement = goal.goalWindowPlacement;
+  if (goal.stackedRibbonVsLinearPeers !== undefined) {
+    draft.stackedRibbonVsLinearPeers = goal.stackedRibbonVsLinearPeers;
+  }
   if (goal.scheduleInNiceWeather === true) draft.scheduleInNiceWeather = true;
   if (goal.focusAffinity !== undefined) draft.focusAffinity = goal.focusAffinity;
   if (goal.energyChargeImpact !== undefined) draft.energyChargeImpact = goal.energyChargeImpact;
@@ -1618,16 +1636,20 @@ function isDaySet(d: GoalDraft): boolean {
 function OptionsEditor({
   draft,
   onChange,
-  defaultAllocationSharePercent
+  defaultAllocationSharePercent,
+  goalId,
+  allocatorGoalWindowMode
 }: {
   draft: GoalDraft;
   onChange: (draft: GoalDraft) => void;
   /** Equal slice as % of full-week time: round(100 / remainder-cohort size). */
   defaultAllocationSharePercent: number;
+  goalId: string;
+  allocatorGoalWindowMode: AllocatorGoalWindowMode;
 }) {
   const update = (changes: Partial<GoalDraft>) => onChange({ ...draft, ...changes });
 
-  // Order matters: this is the order rows appear, both as set rows and as
+  const hybridPlacement = draft.goalWindowPlacement ?? "stacked";
   // "+ Add X" buttons. Time and cadence only — framework-linked signals live on Planner.
   const constraints: ConstraintDef[] = [
     {
@@ -1758,6 +1780,69 @@ function OptionsEditor({
 
   return (
     <div className="flex flex-col gap-3">
+      {allocatorGoalWindowMode === "hybrid" ? (
+        <div className="rounded-lg border border-ink-200 bg-ink-50/50 p-3 dark:border-ink-600 dark:bg-ink-900/30">
+          <p className="mb-2 text-xs font-medium text-ink-600 dark:text-ink-300">
+            Goal window (hybrid — per row)
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <label className="flex cursor-pointer items-center gap-2 text-xs">
+              <input
+                type="radio"
+                name={`goal-window-placement-${goalId}`}
+                checked={hybridPlacement === "stacked"}
+                onChange={() =>
+                  update({
+                    goalWindowPlacement: "stacked",
+                    stackedRibbonVsLinearPeers: undefined
+                  })
+                }
+              />
+              Stacked role
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-xs">
+              <input
+                type="radio"
+                name={`goal-window-placement-${goalId}`}
+                checked={hybridPlacement === "linear"}
+                onChange={() =>
+                  update({
+                    goalWindowPlacement: "linear"
+                  })
+                }
+              />
+              Linear role
+            </label>
+          </div>
+          {hybridPlacement === "linear" ? (
+            <div className="mt-3 border-t border-ink-200 pt-3 dark:border-ink-600">
+              <p className="mb-2 text-xs text-ink-600 dark:text-ink-300">
+                Do you want this goal to block our time maps?
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <label className="flex cursor-pointer items-center gap-2 text-xs">
+                  <input
+                    type="radio"
+                    name={`stacked-ribbon-vs-linear-${goalId}`}
+                    checked={(draft.stackedRibbonVsLinearPeers ?? "non_blocking") === "non_blocking"}
+                    onChange={() => update({ stackedRibbonVsLinearPeers: "non_blocking" })}
+                  />
+                  No
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-xs">
+                  <input
+                    type="radio"
+                    name={`stacked-ribbon-vs-linear-${goalId}`}
+                    checked={draft.stackedRibbonVsLinearPeers === "blocking"}
+                    onChange={() => update({ stackedRibbonVsLinearPeers: "blocking" })}
+                  />
+                  Yes
+                </label>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {setConstraints.length === 0 ? (
         <p className="text-xs text-ink-400">
           No constraints set — this goal gets an equal share of free time. Add a constraint below

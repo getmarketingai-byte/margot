@@ -5,18 +5,27 @@
  * planning surfaces can pass drag callbacks for optimistic UI.
  */
 
-import { useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   displayBusyEventLabel,
   type AllocatedBlock,
   type BusyEvent
 } from "@calendar-automations/planner";
 import type { WeeklyGoal, FrameworkRegistryEntry } from "@calendar-automations/schema";
+import {
+  effectiveWeeklyGoalWindowPlacement,
+  hybridHasMixedLinearTimemapBlocking,
+  hybridLinearPlacementBlocksTimemaps,
+  type AllocatorGoalWindowMode
+} from "@calendar-automations/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import { overlayTagsForGoal } from "@/lib/framework-calendar-overlay-tags";
 import { systemBlockShownOnCalendarAndIcs, type SystemBlock } from "@/lib/week-blocks";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
+import { compareRibbonLaneKeysPriority, ribbonLaneKey } from "@/lib/ribbon-lane-order";
+import { localMidnightMs } from "@/lib/week";
 import { DraggableProposedGoalBlock } from "./draggable-proposed-goal-block";
 import { DraggableSystemBlock } from "./draggable-system-block";
 
@@ -64,14 +73,261 @@ interface WeekCalendarProps {
   onProposedDragOverridesCleared?: (dragKeys: string[]) => void;
   /** Goals used to render framework abbreviation chips on proposed blocks. */
   weeklyGoalsForFrameworkOverlays?: readonly WeeklyGoal[];
+  /**
+   * When set, invert/stacked ribbon lanes and legend use this ordering (Perfect Week hub list order,
+   * including gym placement). Defaults to `weeklyGoalsForFrameworkOverlays`.
+   */
+  ribbonLaneOrderingGoals?: readonly WeeklyGoal[];
   /** Registry rows (`frameworkSystem.frameworks`). */
   frameworkRegistryForOverlays?: readonly FrameworkRegistryEntry[];
   frameworkOverlayLayerState?: FrameworkOverlayLayerState;
   wheelAreaLabel?: (wheelAreaId: string) => string;
+  /**
+   * When hybrid + mixed linear timemap blocking (some Yes / some No), proposed-block z-order is per goal.
+   */
+  allocatorGoalWindowMode?: AllocatorGoalWindowMode;
+  /**
+   * Hybrid “no blocking” weeks: draw invert/stacked timemap ribbons above greedy proposed blocks so
+   * ribbons visibly sit on top. When false/omitted, proposed blocks paint above ribbons.
+   */
+  stackedTimemapRibbonsAboveProposedGoals?: boolean;
 }
 
 const PX_PER_HOUR = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Thin vertical timemap ribbons (invert-calendar + stacked feasible). */
+const TIME_MAP_RIBBON_WIDTH_PX = 5;
+/** Horizontal gap between adjacent ribbon lanes in the same day column. */
+const TIME_MAP_RIBBON_GAP_PX = 2;
+/** One lane column width; hover target must match this so adjacent goals do not steal pointer events. */
+const TIME_MAP_RIBBON_LANE_PITCH_PX = TIME_MAP_RIBBON_WIDTH_PX + TIME_MAP_RIBBON_GAP_PX;
+/** Past the weather “outside” pill (`left-1.5` ≈ 6px + ribbon width + 2px gap). */
+const TIME_MAP_RIBBON_BASE_LEFT_PX = 6 + TIME_MAP_RIBBON_WIDTH_PX + 2;
+
+/** Reverse grid geometry from `position()` for timemap ribbon tooltips. */
+function timemapRibbonSliceEpochMs(
+  weekStartMs: number,
+  dayIndex: number,
+  topPx: number,
+  heightPx: number,
+  startHour: number,
+  timezone: string
+): { sliceStartMs: number; sliceEndMs: number } {
+  const approxDayMs = weekStartMs + dayIndex * DAY_MS;
+  const dp = partsInTimezone(approxDayMs, timezone);
+  const midnightMs = localMidnightMs(dp.year, dp.month, dp.day, timezone);
+  const startMinOfDay = startHour * 60 + (topPx / PX_PER_HOUR) * 60;
+  const endMinOfDay = startMinOfDay + (heightPx / PX_PER_HOUR) * 60;
+  return {
+    sliceStartMs: midnightMs + Math.round(startMinOfDay) * 60_000,
+    sliceEndMs: midnightMs + Math.round(endMinOfDay) * 60_000
+  };
+}
+
+function timemapRibbonFormatRange(
+  sliceStartMs: number,
+  sliceEndMs: number,
+  timezone: string,
+  middle: " – " | " to "
+): string {
+  const fmt = new Intl.DateTimeFormat(undefined, {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  return `${fmt.format(new Date(sliceStartMs))}${middle}${fmt.format(new Date(sliceEndMs))}`;
+}
+
+function timemapRibbonAriaLabel(params: {
+  goalTitle: string;
+  sliceStartMs: number;
+  sliceEndMs: number;
+  timezone: string;
+  kind: "inverted-timemap" | "stacked-timemap";
+}): string {
+  const { goalTitle, sliceStartMs, sliceEndMs, timezone, kind } = params;
+  const range = timemapRibbonFormatRange(sliceStartMs, sliceEndMs, timezone, " to ");
+  return kind === "stacked-timemap"
+    ? `${goalTitle}. Stacked feasible window ${range}.`
+    : `${goalTitle}. Calendar availability ${range}.`;
+}
+
+/** Above modal/dialog layers (e.g. draggable menus use ~100); portal escapes grid paint order. */
+const TIME_MAP_TOOLTIP_PORTAL_Z = 50_000;
+
+/** Match ribbon hue at the cursor; crosshair fallback keeps alignment readable on any background. */
+function timemapRibbonCursorCss(barColor: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="22" viewBox="0 0 18 22"><rect x="6" y="1" width="6" height="20" rx="2" fill="${barColor}"/><rect x="7.25" y="2.25" width="3.5" height="17.5" rx="1" fill="rgba(255,255,255,0.28)"/></svg>`;
+  return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}") 9 11, crosshair`;
+}
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
+function timemapRibbonTooltipAnchorPosition(
+  r: DOMRectReadOnly,
+  anchorFractionY: number,
+  viewportW: number
+): { left: number; top: number } {
+  const fy = clamp01(anchorFractionY);
+  const top = r.top + fy * r.height;
+  const pad = 10;
+  const estW = Math.min(19 * 16, viewportW - 2 * pad);
+  let left = r.right + 8;
+  if (left + estW > viewportW - pad) {
+    left = r.left - estW - 8;
+  }
+  left = Math.max(pad, Math.min(left, viewportW - pad - estW));
+  return { left, top };
+}
+
+function TimemapRibbonTooltipPortal({
+  anchorRef,
+  open,
+  anchorFractionY,
+  goalTitle,
+  rangeLine,
+  barColor
+}: {
+  anchorRef: React.RefObject<HTMLDivElement | null>;
+  open: boolean;
+  /** 0 = top of hit target, 1 = bottom; tracks pointer for vertical tooltip alignment. */
+  anchorFractionY: number;
+  goalTitle: string;
+  rangeLine: string;
+  barColor: string;
+}) {
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const fyRef = useRef(anchorFractionY);
+  fyRef.current = anchorFractionY;
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const sync = () => {
+      const el = anchorRef.current;
+      if (!el || typeof window === "undefined") return;
+      const r = el.getBoundingClientRect();
+      setPos(timemapRibbonTooltipAnchorPosition(r, fyRef.current, window.innerWidth));
+    };
+    sync();
+    window.addEventListener("scroll", sync, true);
+    window.addEventListener("resize", sync);
+    return () => {
+      window.removeEventListener("scroll", sync, true);
+      window.removeEventListener("resize", sync);
+    };
+  }, [open, anchorRef]);
+
+  useLayoutEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    const el = anchorRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos(timemapRibbonTooltipAnchorPosition(r, anchorFractionY, window.innerWidth));
+  }, [open, anchorFractionY]);
+
+  if (!open || pos === null || typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      role="tooltip"
+      className="pointer-events-none fixed min-w-[11rem] max-w-[min(19rem,calc(100vw-2.5rem))] -translate-y-1/2 rounded-md bg-white px-2 py-1.5 text-left text-[11px] leading-snug ring-1 ring-ink-200/90 shadow-xl dark:bg-ink-900 dark:ring-ink-600/90"
+      style={{
+        left: pos.left,
+        top: pos.top,
+        zIndex: TIME_MAP_TOOLTIP_PORTAL_Z,
+        boxShadow: `inset 4px 0 0 0 ${barColor}, 0 12px 28px rgb(0 0 0 / 0.18)`,
+        color: barColor
+      }}
+    >
+      <div className="pl-1 font-semibold leading-tight">{goalTitle}</div>
+      <div className="mt-0.5 pl-1 tabular-nums leading-snug">{rangeLine}</div>
+    </div>,
+    document.body
+  );
+}
+
+function TimemapRibbonHover({
+  block,
+  barColor,
+  laneVisualLeftPx,
+  goalTitle,
+  rangeLine,
+  ribbonAria,
+  layerZClass
+}: {
+  block: Pick<PositionedBlock, "topPx" | "heightPx">;
+  barColor: string;
+  laneVisualLeftPx: number;
+  goalTitle: string;
+  rangeLine: string;
+  ribbonAria: string;
+  layerZClass: string;
+}) {
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const [hover, setHover] = useState(false);
+  const [anchorFractionY, setAnchorFractionY] = useState(0.5);
+
+  const syncFractionFromEvent = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const h = rect.height || 1;
+    setAnchorFractionY(clamp01((e.clientY - rect.top) / h));
+  };
+
+  return (
+    <>
+      <div
+        ref={anchorRef}
+        aria-label={ribbonAria}
+        onMouseEnter={(e) => {
+          setHover(true);
+          syncFractionFromEvent(e);
+        }}
+        onMouseMove={(e) => {
+          syncFractionFromEvent(e);
+        }}
+        onMouseLeave={() => setHover(false)}
+        className={`absolute ${layerZClass}`}
+        style={{
+          top: block.topPx,
+          height: block.heightPx,
+          left: laneVisualLeftPx,
+          width: TIME_MAP_RIBBON_LANE_PITCH_PX,
+          cursor: timemapRibbonCursorCss(barColor)
+        }}
+      >
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-0 left-0 h-full rounded-full border shadow-[0_0_0_1px_rgba(255,255,255,0.35)] dark:shadow-[0_0_0_1px_rgba(15,23,42,0.55)]"
+          style={{
+            width: TIME_MAP_RIBBON_WIDTH_PX,
+            borderColor: barColor,
+            backgroundColor: barColor,
+            opacity: 0.88,
+            backgroundImage:
+              "repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 2px, rgba(255,255,255,0.06) 2px 4px)"
+          }}
+        />
+      </div>
+      <TimemapRibbonTooltipPortal
+        anchorRef={anchorRef}
+        open={hover}
+        anchorFractionY={anchorFractionY}
+        goalTitle={goalTitle}
+        rangeLine={rangeLine}
+        barColor={barColor}
+      />
+    </>
+  );
+}
 
 function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd && bStart < aEnd;
@@ -428,10 +684,40 @@ export function WeekCalendar({
   onProposedDragCommit,
   onProposedDragOverridesCleared,
   weeklyGoalsForFrameworkOverlays,
+  ribbonLaneOrderingGoals,
   frameworkRegistryForOverlays,
   frameworkOverlayLayerState,
-  wheelAreaLabel
+  wheelAreaLabel,
+  stackedTimemapRibbonsAboveProposedGoals = false,
+  allocatorGoalWindowMode
 }: WeekCalendarProps) {
+  const schedulingGoalsForHybrid = weeklyGoalsForFrameworkOverlays ?? [];
+  const hybridMixedLinearTimemapBlocking =
+    allocatorGoalWindowMode === "hybrid" &&
+    hybridHasMixedLinearTimemapBlocking(schedulingGoalsForHybrid, allocatorGoalWindowMode);
+
+  const ribbonsAboveProposedGoals = stackedTimemapRibbonsAboveProposedGoals === true;
+  let timemapRibbonLayerZ: string;
+  let proposedGoalLayerZDefault: string;
+  if (hybridMixedLinearTimemapBlocking) {
+    timemapRibbonLayerZ = "z-[35]";
+    proposedGoalLayerZDefault = "z-[34]";
+  } else {
+    timemapRibbonLayerZ = ribbonsAboveProposedGoals ? "z-[38]" : "z-[12]";
+    proposedGoalLayerZDefault = ribbonsAboveProposedGoals ? "z-[22]" : "z-[34]";
+  }
+
+  const proposedGoalLayerZForBlock = useCallback(
+    (goalId: string | undefined): string => {
+      if (!hybridMixedLinearTimemapBlocking || !goalId) return proposedGoalLayerZDefault;
+      const g = schedulingGoalsForHybrid.find((x) => x.id === goalId);
+      if (!g) return proposedGoalLayerZDefault;
+      if (effectiveWeeklyGoalWindowPlacement(g, "hybrid") !== "linear") return "z-[40]";
+      return hybridLinearPlacementBlocksTimemaps(g, "hybrid") ? "z-[40]" : "z-[18]";
+    },
+    [hybridMixedLinearTimemapBlocking, proposedGoalLayerZDefault, schedulingGoalsForHybrid]
+  );
+
   const totalHours = endHour - startHour;
   const gridHeight = totalHours * PX_PER_HOUR;
   const windowStart = startHour * 60;
@@ -535,14 +821,11 @@ export function WeekCalendar({
       }
     }
 
-    const invertedGoalIdsSorted = [
-      ...new Set(
-        system
-          .filter((b) => b.system === "inverted-timemap" && b.invertedGoalId)
-          .map((b) => b.invertedGoalId!)
-      )
-    ].sort();
-    const invertedBarOffsetByGoalId = new Map(invertedGoalIdsSorted.map((id, i) => [id, i]));
+    const ribbonOrderGoals = ribbonLaneOrderingGoals ?? weeklyGoalsForFrameworkOverlays;
+    const ribbonLaneKeysSorted = [
+      ...new Set(system.map(ribbonLaneKey).filter((k): k is string => k != null))
+    ].sort((a, b) => compareRibbonLaneKeysPriority(a, b, ribbonOrderGoals));
+    const invertedBarOffsetByLaneKey = new Map(ribbonLaneKeysSorted.map((k, i) => [k, i]));
 
     const systemPositions: Array<
       PositionedBlock & {
@@ -567,9 +850,16 @@ export function WeekCalendar({
         endHour,
         b.title
       );
-      const invertedGoalId = b.system === "inverted-timemap" ? b.invertedGoalId : undefined;
+      const ribbonGoalId =
+        b.system === "inverted-timemap"
+          ? b.invertedGoalId
+          : b.system === "stacked-timemap"
+            ? b.stackedGoalId
+            : undefined;
+      const invertedGoalId = ribbonGoalId;
+      const laneKey = ribbonLaneKey(b);
       const invertedBarOffsetIndex =
-        invertedGoalId != null ? invertedBarOffsetByGoalId.get(invertedGoalId) : undefined;
+        laneKey != null ? invertedBarOffsetByLaneKey.get(laneKey) : undefined;
       for (const s of slices) {
         systemPositions.push({
           ...s,
@@ -636,12 +926,20 @@ export function WeekCalendar({
     const invertedLegendInner: { goalId: string; title: string }[] = [];
     const invertedLegendSeen = new Set<string>();
     for (const s of system) {
-      if (s.system !== "inverted-timemap" || !s.invertedGoalId) continue;
-      if (invertedLegendSeen.has(s.invertedGoalId)) continue;
-      invertedLegendSeen.add(s.invertedGoalId);
-      invertedLegendInner.push({ goalId: s.invertedGoalId, title: s.title });
+      const gid =
+        s.system === "inverted-timemap"
+          ? s.invertedGoalId
+          : s.system === "stacked-timemap"
+            ? s.stackedGoalId
+            : undefined;
+      if (!gid) continue;
+      if (invertedLegendSeen.has(gid)) continue;
+      invertedLegendSeen.add(gid);
+      invertedLegendInner.push({ goalId: gid, title: s.title });
     }
-    invertedLegendInner.sort((a, b) => a.goalId.localeCompare(b.goalId));
+    invertedLegendInner.sort((a, b) =>
+      compareRibbonLaneKeysPriority(`inv:${a.goalId}`, `inv:${b.goalId}`, ribbonOrderGoals)
+    );
 
     return {
       busyByDay: groupPositionsByDay(busyPositions),
@@ -666,7 +964,9 @@ export function WeekCalendar({
     timezone,
     startHour,
     endHour,
-    overlayChipsByGoalId
+    overlayChipsByGoalId,
+    weeklyGoalsForFrameworkOverlays,
+    ribbonLaneOrderingGoals
   ]);
 
   return (
@@ -741,7 +1041,15 @@ export function WeekCalendar({
                   <DaySheetLoggedBlock key={`d${p.sourceId}-${dayIdx}-${i}`} block={p} goalId={p.goalId} />
                 ))}
               {(systemByDay.get(dayIdx) ?? []).map((p, i) => (
-                  <SystemBlockSlice key={`s${dayIdx}-${i}`} block={p} pxPerHour={PX_PER_HOUR} />
+                  <SystemBlockSlice
+                    key={`s${dayIdx}-${i}`}
+                    block={p}
+                    pxPerHour={PX_PER_HOUR}
+                    timezone={timezone}
+                    weekStartMs={weekStartMs}
+                    startHour={startHour}
+                    timemapRibbonLayerZ={timemapRibbonLayerZ}
+                  />
                 ))}
               {(proposedByDay.get(dayIdx) ?? []).map((p, i) => (
                   <ProposedBlock
@@ -751,6 +1059,7 @@ export function WeekCalendar({
                     reservedForGoalDrag={reservedForGoalDrag}
                     onDragCommit={onProposedDragCommit}
                     onDragOverridesCleared={onProposedDragOverridesCleared}
+                    proposedGoalLayerZ={proposedGoalLayerZForBlock(p.goalId)}
                   />
                 ))}
             </div>
@@ -964,7 +1273,11 @@ function DaySheetLoggedBlock({ block, goalId }: { block: PositionedBlock; goalId
  */
 function SystemBlockSlice({
   block,
-  pxPerHour
+  pxPerHour,
+  timezone,
+  weekStartMs,
+  startHour,
+  timemapRibbonLayerZ
 }: {
   block: PositionedBlock & {
     kind: SystemBlock["system"];
@@ -975,6 +1288,10 @@ function SystemBlockSlice({
     invertedBarOffsetIndex?: number;
   };
   pxPerHour: number;
+  timezone: string;
+  weekStartMs: number;
+  startHour: number;
+  timemapRibbonLayerZ: string;
 }) {
   if (block.kind === "weather") {
     return (
@@ -992,28 +1309,42 @@ function SystemBlockSlice({
       />
     );
   }
-  if (block.kind === "inverted-timemap") {
+  if (block.kind === "inverted-timemap" || block.kind === "stacked-timemap") {
     const colorKey = block.invertedGoalId ?? block.title;
     const barColor = goalColorFromKey(colorKey);
-    const offset = (block.invertedBarOffsetIndex ?? 0) * 7;
-    /** Past the weather “outside” pill (`left-1.5` + 5px width + 2px gap). */
-    const leftPx = 6 + 5 + 2 + offset * 7;
+    const laneIndex = block.invertedBarOffsetIndex ?? 0;
+    const laneVisualLeftPx =
+      TIME_MAP_RIBBON_BASE_LEFT_PX +
+      laneIndex * TIME_MAP_RIBBON_LANE_PITCH_PX;
+    const goalTitle =
+      block.kind === "stacked-timemap"
+        ? block.title.replace(/\s*·\s*stacked window\s*$/i, "").trim()
+        : block.title;
+    const { sliceStartMs, sliceEndMs } = timemapRibbonSliceEpochMs(
+      weekStartMs,
+      block.dayIndex,
+      block.topPx,
+      block.heightPx,
+      startHour,
+      timezone
+    );
+    const rangeLine = timemapRibbonFormatRange(sliceStartMs, sliceEndMs, timezone, " – ");
+    const ribbonAria = timemapRibbonAriaLabel({
+      goalTitle,
+      sliceStartMs,
+      sliceEndMs,
+      timezone,
+      kind: block.kind
+    });
     return (
-      <div
-        title={block.title}
-        aria-label={`Calendar availability: ${block.title}`}
-        className="pointer-events-none absolute z-[29] rounded-full border shadow-[0_0_0_1px_rgba(255,255,255,0.35)] dark:shadow-[0_0_0_1px_rgba(15,23,42,0.55)]"
-        style={{
-          top: block.topPx,
-          height: block.heightPx,
-          width: 5,
-          left: leftPx,
-          borderColor: barColor,
-          backgroundColor: barColor,
-          opacity: 0.88,
-          backgroundImage:
-            "repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 2px, rgba(255,255,255,0.06) 2px 4px)"
-        }}
+      <TimemapRibbonHover
+        block={block}
+        barColor={barColor}
+        laneVisualLeftPx={laneVisualLeftPx}
+        goalTitle={goalTitle}
+        rangeLine={rangeLine}
+        ribbonAria={ribbonAria}
+        layerZClass={timemapRibbonLayerZ}
       />
     );
   }
@@ -1060,7 +1391,8 @@ function ProposedBlock({
   pxPerHour,
   reservedForGoalDrag,
   onDragCommit,
-  onDragOverridesCleared
+  onDragOverridesCleared,
+  proposedGoalLayerZ
 }: {
   block: PositionedBlock & {
     isSegment: boolean;
@@ -1073,6 +1405,7 @@ function ProposedBlock({
   reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
   onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
   onDragOverridesCleared?: (dragKeys: string[]) => void;
+  proposedGoalLayerZ: string;
 }) {
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
@@ -1101,6 +1434,7 @@ function ProposedBlock({
         onDragCommit={onDragCommit}
         onDragOverridesCleared={onDragOverridesCleared}
         frameworkOverlayChips={block.frameworkOverlayChips}
+        layerZClass={proposedGoalLayerZ}
       />
     );
   }
@@ -1108,7 +1442,7 @@ function ProposedBlock({
   return (
     <div
       title={`${block.title} (proposed)${chipHint}`}
-      className={`absolute inset-x-0.5 overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
+      className={`absolute inset-x-0.5 ${proposedGoalLayerZ} overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         selectable ? "cursor-pointer" : ""
       }`}
       role={selectable ? "button" : undefined}

@@ -145,12 +145,17 @@ function nightCoversLoggedActualSleep(
 
 export interface SystemBlock extends BusyEvent {
   /** Distinguishes which subsystem produced the block (for UI styling). */
-  system: "sleep" | "travel" | "routine" | "weather" | "inverted-timemap";
+  system: "sleep" | "travel" | "routine" | "weather" | "inverted-timemap" | "stacked-timemap";
   /**
    * When `system` is `inverted-timemap`, the planner goal id backing this
    * invert-free-busy calendar (used for colour + per-source toggles).
    */
   invertedGoalId?: string;
+  /**
+   * When `system` is `stacked-timemap`, the scheduling goal id for this feasible-window ribbon
+   * (Perfect Week stacked mode — same calendar UI as inverted ribbons).
+   */
+  stackedGoalId?: string;
   /**
    * Optional UI hint:
    *   - "split" / "underMinimum"  — sleep
