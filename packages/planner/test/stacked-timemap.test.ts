@@ -607,6 +607,74 @@ describe("hybrid goal window mode", () => {
     expect(hybridResult.blocks.some((b) => !b.segment && b.goalId === "linear-peer")).toBe(true);
   });
 
+  it("hybrid stacked allocationSharePercent sizes timemap target without shrinking linear peer Pass-2 share", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const weekEndMs = weekStartMs + 7 * DAY_MS;
+    const anchor = "2026-04-27";
+
+    const linearPeer = goal({
+      id: "linear-peer",
+      title: "Linear",
+      goalWindowPlacement: "linear",
+      priority: 5
+    });
+
+    const stackedPct = goal({
+      id: "stacked-pct",
+      title: "Stacked pct",
+      goalWindowPlacement: "stacked",
+      allocationSharePercent: 50,
+      priority: 5
+    });
+
+    const soloPlan: WeeklyPlan = {
+      id: "solo-linear",
+      weekStart: anchor,
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [linearPeer],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const pairPlan: WeeklyPlan = {
+      id: "pair-hybrid-pct",
+      weekStart: anchor,
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [linearPeer, stackedPct],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const solo = allocateWeek({
+      plan: soloPlan,
+      busy: [],
+      settings: hybridAllocator,
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: anchor
+    });
+
+    const pair = allocateWeek({
+      plan: pairPlan,
+      busy: [],
+      settings: hybridAllocator,
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate: anchor
+    });
+
+    expect(pair.metrics.perGoal["linear-peer"]!.targetMinutes).toBe(
+      solo.metrics.perGoal["linear-peer"]!.targetMinutes
+    );
+
+    const quantiseMin = (m: number) => Math.max(0, Math.round(m / 15) * 15);
+    expect(pair.metrics.perGoal["stacked-pct"]!.targetMinutes).toBe(
+      quantiseMin(0.5 * solo.metrics.perGoal["linear-peer"]!.targetMinutes)
+    );
+  });
+
   it("hybrid linear blocking shrinks stacked ribbons vs all linear rows non-blocking", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const weekEndMs = weekStartMs + 7 * DAY_MS;

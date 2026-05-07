@@ -1885,6 +1885,59 @@ describe("allocateWeek", () => {
     expect(unmetA + unmetB).toBe(0);
   });
 
+  it("hybrid: linear-role goal is not diluted by stacked-role peers in invert-calendar cohort split", () => {
+    const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const nowMs = weekStartMs + DAY_MS + 9 * HOUR_MS + 30 * 60 * 1000; // Tue 09:30 — Tue 10–12 pocket (120m)
+    const sharedWindows = [
+      { startMs: weekStartMs + DAY_MS + 10 * HOUR_MS, endMs: weekStartMs + DAY_MS + 12 * HOUR_MS }
+    ];
+    const hybrid = allocateWeek({
+      plan: {
+        id: "hybrid-shared-pocket",
+        weekStart: "2026-04-27",
+        timezone: "UTC",
+        goalGroups: [],
+        goals: [
+          {
+            id: "lin",
+            title: "Linear",
+            goalWindowPlacement: "linear",
+            minMinutesPerWeek: 200,
+            allocationSharePercent: 50,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          },
+          {
+            id: "stk",
+            title: "Stacked",
+            minMinutesPerWeek: 200,
+            allocationSharePercent: 50,
+            energyMode: "neutral",
+            ppfHorizon: "unspecified"
+          }
+        ],
+        overrides: [],
+        weeklyIntent: { hp6Focus: [] }
+      },
+      busy: [],
+      goalAvailabilityWindows: {
+        lin: sharedWindows,
+        stk: sharedWindows
+      },
+      settings: buildSettings({
+        allocator: { ...DEFAULT_USER_SETTINGS.allocator, goalWindowMode: "hybrid" }
+      }),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      nowMs
+    });
+    const placedLin = hybrid.blocks
+      .filter((b) => !b.segment && b.goalId === "lin")
+      .reduce((s, b) => s + (b.endMs - b.startMs) / 60_000, 0);
+    // Without excluding stacked from the cohort, greedy demand would split ~60/60; linear should claim the full pocket.
+    expect(placedLin).toBe(120);
+  });
+
   it("treats invert windows that differ by sub-quantum ms as one shared cohort", () => {
     const weekStartMs = Date.UTC(2026, 3, 27, 0, 0, 0);
     const nowMs = weekStartMs + DAY_MS + 9 * HOUR_MS + 30 * 60 * 1000;

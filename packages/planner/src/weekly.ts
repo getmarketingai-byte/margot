@@ -666,7 +666,19 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   }
 
   if (allocationNowMs !== undefined) {
-    const schedulable = prepared.filter((p) => p.effectiveMinutes > 0);
+    const schedulable = prepared.filter((p) => {
+      if (p.effectiveMinutes <= 0) return false;
+      // Hybrid: from‑now capacity budgets greedy linear placement; stacked‑role rows
+      // do not consume those gaps with Pass‑3 auto blocks — exclude them here so they
+      // do not dilute linear peers (same rationale as invert‑calendar cohort split).
+      if (
+        goalWindowMode === "hybrid" &&
+        effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked"
+      ) {
+        return false;
+      }
+      return true;
+    });
     const totalDemand = schedulable.reduce((acc, p) => acc + p.effectiveMinutes, 0);
     if (schedulable.length > 0 && totalDemand > weekCapacityFromNowMinutes) {
       const allUnconstrainedEqual = schedulable.every((p) =>
@@ -762,6 +774,15 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     const groups = new Map<string, PreparedGoal[]>();
     for (const p of prepared) {
       if (p.effectiveMinutes <= 0) continue;
+      // Hybrid: invert-calendar cohort splitting proportions greedy Pass‑3 demand across
+      // goals that share one physical pocket. Stacked-role rows do not consume that pocket
+      // with greedy blocks (pins-only wave); keep them out so linear peers are not diluted.
+      if (
+        goalWindowMode === "hybrid" &&
+        effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "stacked"
+      ) {
+        continue;
+      }
       const win = av[p.goal.id];
       if (!win || win.length === 0) continue;
       const key = invertCalendarAvailabilityCohortKey(win, p.goal.scheduleInNiceWeather === true);
@@ -1099,8 +1120,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
  *   - Pass 1 reserves every goal's `minMinutesPerWeek` as a floor.
  *   - Pass 2 distributes the remaining free time after floors: `%` goals target
  *     `(pct/100) * T` where `T` is full-week schedulable gap time (`totalFreeMin`);
- *     the cohort never receives more than remainder `R` after Pass 1. Goals with
- *     no `%` split whatever is left after those targets (or share `R` evenly when
+ *     the cohort never receives more than remainder `R` after Pass 1. **Hybrid /
+ *     stacked window mode:** stacked-role rows with `%` skip this remainder cohort and
+ *     receive `pct × T` afterward so `%` sizes stacked timemaps without shrinking peers’ R-split.
+ *     Goals with no `%` split whatever is left after those targets (or share `R` evenly when
  *     there are no `%` rows). Goals with a positive **user** weekly floor (before any
  *     catch-up bump) do not participate unless they set `allocationSharePercent`
  *     (so "min" behaves as a floor). Catch-up-inflated floors alone still join Pass 2.
@@ -1286,8 +1309,15 @@ function distributeMinutes(
   let remainder = totalFreeMin - floorTotal;
   const remainderPass2Start = remainder;
 
+  const allocatorGoalWindowMode = allocator.goalWindowMode ?? "linear";
+
   // Pass 2: `%` rows target (pct/100)*T of full-week schedulable time T; the pool
   // for this pass is remainder R after floors. See `computePass2AllocMinutesFromShareOfWeek`.
+  //
+  // Under **hybrid** or global **stacked** window mode, **stacked-role** rows with an explicit
+  // `allocationSharePercent` opt **out** of this remainder split: `%` sizes the stacked timemap
+  // target (`pct × T`) without shrinking peers’ Pass‑2 shares. Those targets are applied after
+  // the Pass‑2 loop (still respecting weekly min/max via `maxPlannedMinutesForAllocationSharePercent`).
   //
   // Fractions / caps MUST use the same cohort as `eligible()` below.
 
@@ -1303,6 +1333,13 @@ function distributeMinutes(
       if (
         p.goal.minMinutesPerWeek !== undefined &&
         p.goal.allocationSharePercent === undefined
+      ) {
+        return false;
+      }
+      if (
+        allocatorGoalWindowMode !== "linear" &&
+        p.goal.allocationSharePercent !== undefined &&
+        effectiveWeeklyGoalWindowPlacement(p.goal, allocatorGoalWindowMode) === "stacked"
       ) {
         return false;
       }
@@ -1352,6 +1389,21 @@ function distributeMinutes(
     }
     if (consumed === 0) break;
     remainder -= consumed;
+  }
+
+  if (allocatorGoalWindowMode !== "linear") {
+    for (const p of prepared) {
+      if (p.goal.allocationSharePercent === undefined) continue;
+      if (effectiveWeeklyGoalWindowPlacement(p.goal, allocatorGoalWindowMode) !== "stacked") continue;
+      const upper = maxPlannedMinutesForAllocationSharePercent(p.goal, p.norm, T);
+      if (upper === undefined) continue;
+      const floorAtPass1 = baseEffectiveByIndex.get(p.index) ?? 0;
+      let target = quantise(Math.max(floorAtPass1, upper));
+      const maxW = p.norm.maxMinutesPerWeek;
+      if (maxW !== undefined) target = Math.min(target, maxW);
+      target = Math.max(floorAtPass1, target);
+      p.effectiveMinutes = target;
+    }
   }
 
   for (const p of prepared) {
