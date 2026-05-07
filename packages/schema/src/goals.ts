@@ -297,9 +297,12 @@ export function effectiveWeeklyGoalWindowPlacement(
   goal: Pick<WeeklyGoal, "goalWindowPlacement">,
   allocatorGoalWindowMode: AllocatorGoalWindowMode
 ): "linear" | "stacked" {
-  if (allocatorGoalWindowMode === "linear") return "linear";
+  // Runtime hardening: only "hybrid" should consult per-goal placement.
+  // Callers sometimes pass through a shallow-merged settings object where this
+  // field is missing; treat missing/unknown as schema default "linear".
   if (allocatorGoalWindowMode === "stacked") return "stacked";
-  return goal.goalWindowPlacement ?? "stacked";
+  if (allocatorGoalWindowMode === "hybrid") return goal.goalWindowPlacement ?? "stacked";
+  return "linear";
 }
 
 /**
