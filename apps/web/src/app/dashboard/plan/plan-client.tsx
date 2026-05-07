@@ -602,7 +602,7 @@ export function PlanClient({
           remainingWeekMinutes={rollingSevenDayApprox.freeAfterGoalsApproxMinutes}
           remainingFromNowMinutes={rollingSevenDayApprox.freeAfterGoalsApproxMinutes}
           hasAnyGoalGroupMembership={summaryRollingCombined.hasAnyGoalGroupMembership}
-          approxRollingNote="Approx. for the calendar’s seven-day strip: free time merges busy/system/day-sheet layers. Logged time and proposed blocks are counted only inside this window; weekly `/wk` target is from your current ISO week."
+          approxRollingNote="Approx. for the calendar’s seven-day strip: free time merges busy/system/day-sheet layers. Logged time, proposed blocks, and planner-target distribution % are all computed from this seven-day window."
         />
       )}
 

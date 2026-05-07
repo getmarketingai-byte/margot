@@ -64,8 +64,8 @@ export interface RollingSevenDayApprox {
   proposedMinutesByGoalId: Record<string, number>;
   /** Day-sheet goal logs clipped to the same seven-day strip as proposed minutes */
   loggedMinutesByGoalIdInWindow: Record<string, number>;
-  /** Allocator weekly targets from current ISO slice */
+  /** Planner targets weighted by overlap of each touched ISO week with the seven-day strip. */
   effectiveTargetBaselineByGoalId: Record<string, number>;
-  /** Same slice as `effectiveTargetBaselineByGoalId` — demand after log / from-now scaling, pre–Pass 3. */
+  /** Same weighted cohort as `effectiveTargetBaselineByGoalId` — demand after log / from-now scaling, pre–Pass 3. */
   weeklyDemandBeforePass3BaselineByGoalId: Record<string, number>;
 }

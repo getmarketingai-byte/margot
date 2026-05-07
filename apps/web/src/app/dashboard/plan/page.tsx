@@ -396,6 +396,30 @@ export default async function PlanPage() {
     rollWinStart,
     rollWinEnd
   );
+  const effectiveTargetBaselineByGoalId: Record<string, number> = {};
+  const weeklyDemandBeforePass3BaselineByGoalId: Record<string, number> = {};
+  for (const [idx, sliceMeta] of weekSlices.entries()) {
+    const overlapStart = Math.max(rollWinStart, sliceMeta.weekStartMs);
+    const overlapEnd = Math.min(rollWinEnd, sliceMeta.weekEndMs);
+    const overlapMinutes = Math.max(0, Math.floor((overlapEnd - overlapStart) / (60 * 1000)));
+    if (overlapMinutes <= 0) continue;
+    const sliceWindowMinutes = Math.max(
+      1,
+      Math.floor((sliceMeta.weekEndMs - sliceMeta.weekStartMs) / (60 * 1000))
+    );
+    const overlapRatio = overlapMinutes / sliceWindowMinutes;
+    const stats = perfectWeekStatsBySlice[idx];
+    if (!stats) continue;
+    for (const [goalId, targetMinutes] of Object.entries(stats.effectiveTargetByGoal)) {
+      effectiveTargetBaselineByGoalId[goalId] =
+        (effectiveTargetBaselineByGoalId[goalId] ?? 0) + targetMinutes * overlapRatio;
+    }
+    for (const [goalId, demandMinutes] of Object.entries(stats.demandBeforePass3ByGoal)) {
+      weeklyDemandBeforePass3BaselineByGoalId[goalId] =
+        (weeklyDemandBeforePass3BaselineByGoalId[goalId] ?? 0) +
+        demandMinutes * overlapRatio;
+    }
+  }
   const rollingSevenDayApprox: RollingSevenDayApprox = {
     windowStartMs: rollWinStart,
     windowEndMs: rollWinEnd,
@@ -412,9 +436,8 @@ export default async function PlanPage() {
     ),
     proposedMinutesByGoalId: occupiedRollWithGoals.proposedMinutesByGoalId,
     loggedMinutesByGoalIdInWindow,
-    effectiveTargetBaselineByGoalId: perfectWeekStatsBySlice[0]?.effectiveTargetByGoal ?? {},
-    weeklyDemandBeforePass3BaselineByGoalId:
-      perfectWeekStatsBySlice[0]?.demandBeforePass3ByGoal ?? {}
+    effectiveTargetBaselineByGoalId,
+    weeklyDemandBeforePass3BaselineByGoalId
   };
 
   const allDaySheetReviews = await loadAllDailyReviewsForUser(userId);
