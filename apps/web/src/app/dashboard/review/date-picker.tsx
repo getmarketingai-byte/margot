@@ -29,37 +29,46 @@ export function ReviewDatePicker({
 }: ReviewDatePickerProps) {
   const isToday = date === todayDate;
 
+  const navLinkClass = "text-center";
+  const prevNextClass = `btn-secondary text-xs ${navLinkClass} min-w-0 flex-1 sm:flex-initial`;
+  const todayClass = `text-xs ${navLinkClass} min-w-0 flex-1 sm:flex-initial ${
+    isToday ? "btn-primary" : "btn-secondary"
+  }`;
+
   return (
-    <section className="card flex flex-wrap items-center justify-between gap-3">
-      <div>
+    <section className="card flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+      <div className="min-w-0">
         <div className="text-xs uppercase tracking-wide text-ink-400">
           Day sheet
         </div>
         <div className="text-lg font-semibold">{prettyLabel}</div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Link
-          href={`/dashboard/review?date=${prevDate}`}
-          className="btn-secondary text-xs"
-        >
-          ← Previous
-        </Link>
-        <Link
-          href={`/dashboard/review?date=${todayDate}`}
-          className={`text-xs ${isToday ? "btn-primary" : "btn-secondary"}`}
-        >
-          Today
-        </Link>
-        <Link
-          href={`/dashboard/review?date=${nextDate}`}
-          className="btn-secondary text-xs"
-        >
-          Next →
-        </Link>
+
+      <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-2">
+        <div className="flex gap-1">
+          <Link
+            href={`/dashboard/review?date=${prevDate}`}
+            className={prevNextClass}
+          >
+            ← Previous
+          </Link>
+          <Link
+            href={`/dashboard/review?date=${todayDate}`}
+            className={todayClass}
+          >
+            Today
+          </Link>
+          <Link
+            href={`/dashboard/review?date=${nextDate}`}
+            className={prevNextClass}
+          >
+            Next →
+          </Link>
+        </div>
         <form
           action="/dashboard/review"
           method="get"
-          className="flex items-center gap-2"
+          className="flex min-w-0 w-full items-center gap-2 sm:w-auto"
         >
           <label className="sr-only" htmlFor="review-date">
             Pick a date
@@ -69,9 +78,9 @@ export function ReviewDatePicker({
             type="date"
             name="date"
             defaultValue={date}
-            className="field text-xs"
+            className="field min-w-0 flex-1 text-xs"
           />
-          <button type="submit" className="btn-secondary text-xs">
+          <button type="submit" className="btn-secondary shrink-0 text-xs">
             Go
           </button>
         </form>

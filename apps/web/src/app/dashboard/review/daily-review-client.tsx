@@ -712,7 +712,7 @@ function PlannedBlockHeader({
         />
         <button
           type="button"
-          className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-200 dark:hover:text-ink-100"
+          className="rounded-full border border-ink-200 px-2 py-1 text-xs text-ink-600 hover:border-accent/40 hover:text-ink-900 sm:py-0.5 sm:text-[11px] dark:border-ink-600 dark:text-ink-200 dark:hover:text-ink-100"
           onClick={onApply}
           title="Tag every empty 15-min row in this block to this goal"
         >
@@ -721,7 +721,7 @@ function PlannedBlockHeader({
         {hasMatched ? (
           <button
             type="button"
-            className="rounded-full border border-transparent px-2 py-0.5 text-[11px] text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
+            className="rounded-full border border-transparent px-2 py-1 text-xs text-ink-400 hover:text-ink-900 sm:py-0.5 sm:text-[11px] dark:hover:text-ink-100"
             onClick={onClear}
             title="Remove rows tagged to this goal from this block's range"
           >
@@ -734,7 +734,7 @@ function PlannedBlockHeader({
 }
 
 const SLOT_ACTION_PILL_CLASS =
-  "rounded-full border border-ink-200 px-2 py-0.5 text-[11px] text-ink-500 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-300 dark:hover:text-ink-100";
+  "rounded-full border border-ink-200 px-2 py-1 text-xs text-ink-500 hover:border-accent/40 hover:text-ink-900 sm:py-0.5 sm:text-[11px] dark:border-ink-600 dark:text-ink-300 dark:hover:text-ink-100";
 
 function SlotRow({
   startMinute,
@@ -778,15 +778,17 @@ function SlotRow({
 
   return (
     <li
-      className={`grid grid-cols-[64px_minmax(0,1fr)_auto] items-start gap-2 border-b border-ink-200 py-1.5 last:border-b-0 dark:border-ink-600 ${inBlockClass} ${blockRadius}`}
+      className={`grid grid-cols-[56px_minmax(0,1fr)] grid-rows-[auto_auto] items-start gap-x-2 gap-y-1 border-b border-ink-200 py-1.5 last:border-b-0 dark:border-ink-600 sm:grid-cols-[64px_minmax(0,1fr)_auto] sm:grid-rows-none sm:gap-y-0 ${inBlockClass} ${blockRadius}`}
       style={
         railColor
           ? { borderLeftWidth: 3, borderLeftColor: railColor, paddingLeft: 8 }
           : undefined
       }
     >
-      <div className="pt-1 font-mono text-xs text-ink-400">{fmtTime(startMinute)}</div>
-      <div className="flex min-w-0 flex-col gap-1">
+      <div className="col-start-1 row-start-1 pt-1 font-mono text-xs text-ink-400">
+        {fmtTime(startMinute)}
+      </div>
+      <div className="col-start-2 row-start-1 flex min-w-0 flex-col gap-1 sm:col-start-2">
         <select
           aria-label={`Goal at ${fmtTime(startMinute)}`}
           className="field text-xs"
@@ -887,7 +889,7 @@ function SlotRow({
           }
         />
       </div>
-      <div className="flex items-center gap-2 pt-1">
+      <div className="col-start-2 row-start-2 flex flex-wrap items-center justify-between gap-2 sm:col-start-3 sm:row-start-1 sm:justify-end sm:gap-2 sm:pt-1">
         <SegmentedControl
           ariaLabel={`Energy state at ${fmtTime(startMinute)}`}
           options={ENERGY_OPTIONS}
@@ -897,7 +899,7 @@ function SlotRow({
         />
         <button
           type="button"
-          className="text-xs text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
+          className="min-h-[44px] min-w-[44px] text-xs text-ink-400 hover:text-ink-900 sm:min-h-0 sm:min-w-0 dark:hover:text-ink-100"
           onClick={() => onClear(startMinute)}
           aria-label={`Clear log at ${fmtTime(startMinute)}`}
           disabled={!slot}
@@ -1164,7 +1166,7 @@ function SegmentedControl<T extends string>({
             aria-checked={active}
             disabled={disabled}
             onClick={() => onChange(opt.key)}
-            className={`rounded-full border px-2 py-0.5 text-[11px] transition ${
+            className={`rounded-full border px-2.5 py-1 text-xs transition sm:px-2 sm:py-0.5 sm:text-[11px] ${
               active
                 ? "border-accent bg-accent text-accent-fg"
                 : "border-ink-200 text-ink-600 hover:border-accent/40 hover:text-ink-900 dark:border-ink-600 dark:text-ink-200 dark:hover:text-ink-100"
@@ -1177,7 +1179,7 @@ function SegmentedControl<T extends string>({
       {allowClear && value !== null && (
         <button
           type="button"
-          className="rounded-full border border-transparent px-2 py-0.5 text-[11px] text-ink-400 hover:text-ink-900 dark:hover:text-ink-100"
+          className="rounded-full border border-transparent px-2.5 py-1 text-xs text-ink-400 hover:text-ink-900 sm:px-2 sm:py-0.5 sm:text-[11px] dark:hover:text-ink-100"
           onClick={() => onChange(value)}
           aria-label="Clear status"
         >
