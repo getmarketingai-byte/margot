@@ -8,7 +8,7 @@ import type {
   WeeklyGoal
 } from "@calendar-automations/schema";
 import { hybridAnyLinearGoalBlocksTimemaps } from "@calendar-automations/schema";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { PlanCalendarViewProvider, usePlanCalendarView } from "./plan-calendar-view-context";
 import type { GoalGroupRailBundle, PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";
 import { PlanClient } from "./plan-client";
@@ -354,9 +354,32 @@ function PerfectWeekPlannerInner(props: PerfectWeekPlannerBodyProps) {
   });
   const fallbackGaps = railBundles[0]?.gaps ?? [];
   const fallbackMinutes = railBundles[0]?.minutes ?? {};
+  const stackedRibbonCount = useMemo(
+    () => systemBlocksForCalendar.filter((b) => b.system === "stacked-timemap").length,
+    [systemBlocksForCalendar]
+  );
+  const showStackedModeExplainer =
+    allocatorGoalWindowMode === "stacked" &&
+    proposedForCalendar.length === 0 &&
+    stackedRibbonCount > 0;
+  useEffect(() => {
+    // #region agent log
+    fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug-post-fix", hypothesisId: "H6", location: "apps/web/src/app/dashboard/plan/perfect-week-planner-body.tsx:stackedExplainer", message: "stacked output explainer visibility", data: { allocatorGoalWindowMode, proposedForCalendarCount: proposedForCalendar.length, stackedRibbonCount, showStackedModeExplainer }, timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
+  }, [allocatorGoalWindowMode, proposedForCalendar.length, showStackedModeExplainer, stackedRibbonCount]);
 
   return (
     <>
+      {showStackedModeExplainer ? (
+        <section className="card border-blue-300/40 bg-blue-50/30 dark:bg-blue-900/10">
+          <h2 className="text-sm font-semibold">Stacked mode output</h2>
+          <p className="mt-1 text-xs text-ink-600 dark:text-ink-200">
+            In stacked mode, the allocator returns feasible stacked windows (ribbons) instead of
+            auto-placed goal blocks. This view currently has {stackedRibbonCount} stacked-window
+            intervals.
+          </p>
+        </section>
+      ) : null}
       <OvercommittedForActiveSlices
         isoWeekStartsMs={isoWeekStartsForRolling}
         timezone={timezone}

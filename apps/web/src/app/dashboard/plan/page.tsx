@@ -151,6 +151,9 @@ export default async function PlanPage() {
       sleepIntervals: sleepIntervalsForAllocation(slice.systemBlocks, slice.busy)
     })
   );
+  // #region agent log
+  fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug", hypothesisId: "H1", location: "apps/web/src/app/dashboard/plan/page.tsx:allocationSlices", message: "allocation slices summary", data: { weekSlices: ctx.weekSlices.length, perSlice: allocationSlices.map((a, i) => ({ i, blocks: a.blocks.length, scheduledMinutes: a.metrics.utilisation.allocatedMinutes, weekCapacityMinutes: a.metrics.utilisation.weekCapacityMinutes, busySlice: ctx.weekSlices[i]?.busy.length ?? 0, daySheetGoalBusySlice: ctx.weekSlices[i]?.daySheetGoalBusy.length ?? 0, systemBlocksSlice: ctx.weekSlices[i]?.systemBlocks.length ?? 0 })) }, timestamp: Date.now() }) }).catch(() => {});
+  // #endregion
 
   const mergedGoalBlocks = allocationSlices.flatMap((a) => a.blocks);
 
@@ -261,6 +264,9 @@ export default async function PlanPage() {
     plan,
     settings.calendars.sources
   );
+  // #region agent log
+  fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug", hypothesisId: "H3", location: "apps/web/src/app/dashboard/plan/page.tsx:proposedPipeline", message: "proposed block pipeline counts", data: { goalWindowMode, mergedGoalBlocks: mergedGoalBlocks.length, proposedMerged: proposedMerged.length, proposedForCalendarBeforeClip: proposedForCalendar.length, hasUserDragGoalOverrides, trialRollingClip: scheduleHorizon.trialRollingClip }, timestamp: Date.now() }) }).catch(() => {});
+  // #endregion
   if (scheduleHorizon.trialRollingClip) {
     proposedForCalendar = clipIntervalBlocksToHorizon(
       proposedForCalendar,
@@ -280,6 +286,9 @@ export default async function PlanPage() {
     ...stackedTimemapPreviewBlocks,
     ...gymGoalTravelOverlay
   ];
+  // #region agent log
+  fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug", hypothesisId: "H4", location: "apps/web/src/app/dashboard/plan/page.tsx:calendarLayers", message: "calendar layer totals", data: { busyForCalendar: busyForCalendar.length, daySheetGoalBusyForCalendar: daySheetGoalBusyForCalendar.length, systemBlocksForCalendar: systemBlocksForCalendar.length, weatherPreviewBlocks: weatherPreviewBlocks.length, invertedTimemapPreviewBlocks: invertedTimemapPreviewBlocks.length, stackedTimemapPreviewBlocks: stackedTimemapPreviewBlocks.length, gymGoalTravelOverlay: gymGoalTravelOverlay.length, proposedForCalendarFinal: proposedForCalendar.length }, timestamp: Date.now() }) }).catch(() => {});
+  // #endregion
 
   const calendarWeekStartsMs = weekSlices.map((s) => s.weekStartMs);
   const previewWeekLabels = weekSlices.map((s) => {

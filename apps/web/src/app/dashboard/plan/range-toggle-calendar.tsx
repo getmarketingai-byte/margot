@@ -60,8 +60,13 @@ function loadInvertedVisibilityMap(): Record<string, boolean> {
   }
 }
 
-function isInvertedGoalShown(map: Record<string, boolean>, goalId: string): boolean {
-  return map[goalId] === true;
+function isInvertedGoalShown(
+  map: Record<string, boolean>,
+  goalId: string,
+  defaultWhenUnset: boolean = false
+): boolean {
+  const stored = map[goalId];
+  return stored === undefined ? defaultWhenUnset : stored === true;
 }
 
 function applyProposedOptimisticTimes(
@@ -334,7 +339,7 @@ export function RangeToggleCalendar({
   };
 
   const invertedGoals = useMemo(() => {
-    const seen = new Map<string, string>();
+    const seen = new Map<string, { title: string; kind: "inverted" | "stacked" }>();
     for (const s of system) {
       const goalId =
         s.system === "inverted-timemap"
@@ -343,10 +348,15 @@ export function RangeToggleCalendar({
             ? s.stackedGoalId
             : undefined;
       if (!goalId) continue;
-      if (!seen.has(goalId)) seen.set(goalId, s.title);
+      if (!seen.has(goalId)) {
+        seen.set(goalId, {
+          title: s.title,
+          kind: s.system === "stacked-timemap" ? "stacked" : "inverted"
+        });
+      }
     }
     return [...seen.entries()]
-      .map(([goalId, title]) => ({ goalId, title }))
+      .map(([goalId, entry]) => ({ goalId, title: entry.title, kind: entry.kind }))
       .sort((a, b) =>
         compareRibbonLaneKeysPriority(`inv:${a.goalId}`, `inv:${b.goalId}`, ribbonLaneOrderingGoals ?? schedulingGoals)
       );
@@ -373,12 +383,18 @@ export function RangeToggleCalendar({
           (s.system === "stacked-timemap" && s.stackedGoalId)
         ) {
           const gid = s.system === "inverted-timemap" ? s.invertedGoalId! : s.stackedGoalId!;
-          return isInvertedGoalShown(invertedVisibility, gid);
+          const defaultOn = s.system === "stacked-timemap" && allocatorGoalWindowMode === "stacked";
+          return isInvertedGoalShown(invertedVisibility, gid, defaultOn);
         }
         return true;
       }),
-    [showWeather, invertedVisibility, systemShown]
+    [showWeather, invertedVisibility, systemShown, allocatorGoalWindowMode]
   );
+  useEffect(() => {
+    // #region agent log
+    fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug-post-fix", hypothesisId: "H7", location: "apps/web/src/app/dashboard/plan/range-toggle-calendar.tsx:stackedDefault", message: "stacked ribbon default visibility snapshot", data: { allocatorGoalWindowMode, stackedRibbonCount: systemShown.filter((s) => s.system === "stacked-timemap").length, visibleStackedRibbonCount: visibleSystem.filter((s) => s.system === "stacked-timemap").length, invertedToggleKeys: Object.keys(invertedVisibility).length }, timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
+  }, [allocatorGoalWindowMode, invertedVisibility, systemShown, visibleSystem]);
 
   const rollingSpansTwoIsoWeeks = useMemo(
     () => rangeMode === "next-7-days" && dayOffsets.some((d) => d > 6),
@@ -547,8 +563,9 @@ export function RangeToggleCalendar({
         >
           {showWeather ? "Hide weather" : "Show weather"}
         </button>
-        {invertedGoals.map(({ goalId, title }) => {
-          const on = isInvertedGoalShown(invertedVisibility, goalId);
+        {invertedGoals.map(({ goalId, title, kind }) => {
+          const defaultOn = kind === "stacked" && allocatorGoalWindowMode === "stacked";
+          const on = isInvertedGoalShown(invertedVisibility, goalId, defaultOn);
           const swatch = goalColorFromKey(goalId);
           const short = title.length > 22 ? `${title.slice(0, 20).trimEnd()}…` : title;
           return (

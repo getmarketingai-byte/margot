@@ -574,6 +574,9 @@ export function baselineWeeklyMinuteTargets(input: AllocateInput): Record<string
 }
 
 export function allocateWeek(input: AllocateInput): AllocateResult {
+  // #region agent log
+  fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug", hypothesisId: "H2", location: "packages/planner/src/weekly.ts:allocateWeek:entry", message: "allocateWeek entry snapshot", data: { goals: input.plan.goals.length, overrides: input.plan.overrides?.length ?? 0, busy: input.busy.length, hasNowMs: input.nowMs !== undefined, weekStartMs: input.weekStartMs, weekEndMs: input.weekEndMs, goalWindowMode: input.settings.allocator.goalWindowMode }, timestamp: Date.now() }) }).catch(() => {});
+  // #endregion
   const sleepIntervals = input.sleepIntervals;
   const goalOverrideSources =
     input.goalOverrideSources ?? goalOverrideSourcesFromPlan(input.plan);
@@ -1104,7 +1107,7 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     };
   }
 
-  return stackedFeasibleByGoalId
+  const result = stackedFeasibleByGoalId
     ? {
         blocks,
         metrics,
@@ -1114,6 +1117,10 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
           : {})
       }
     : { blocks, metrics };
+  // #region agent log
+  fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug", hypothesisId: "H2", location: "packages/planner/src/weekly.ts:allocateWeek:exit", message: "allocateWeek output snapshot", data: { blocks: result.blocks.length, scheduledMinutes: result.metrics.utilisation.allocatedMinutes, availableMinutes: result.metrics.utilisation.availableMinutes, weekCapacityMinutes: result.metrics.utilisation.weekCapacityMinutes, overcommitted: result.metrics.overcommitted ?? null, notScheduledCount: result.metrics.notScheduled.length, hasStackedFeasible: "stackedFeasibleByGoalId" in result }, timestamp: Date.now() }) }).catch(() => {});
+  // #endregion
+  return result;
 }
 
 /**
