@@ -106,6 +106,7 @@ import { QUANTUM } from "./weekly-grid";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** Pass‑0 "non-adjacent spread" is low priority: at most this many deferrals per goal per week. */
 const PASS0_NONADJ_SPREAD_MAX_DEFERRALS_PER_WEEK = 2;
 /**
@@ -845,7 +846,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   //   5. **plan list order** (`index` — same order as goals in the weekly plan),
   //   6. larger remaining demand last as a weak tie-breaker.
   prepared.sort((a, b) => comparePreparedGoalsForPass3Placement(a, b, fw));
-
   const placementDemandBeforePass3 = new Map(
     prepared.map((p) => [p.goal.id, p.effectiveMinutes] as const)
   );
@@ -956,7 +956,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       const ordered = [...pass3RoundRobinBase].sort((a, b) => {
         const pa = placedAutoMinByGoal.get(a.goal.id) ?? 0;
         const pb = placedAutoMinByGoal.get(b.goal.id) ?? 0;
-        if (pa !== pb) return pb - pa;
+        // Fewest auto minutes placed first each wave so peers with equal Pass‑1/2 demand
+        // take turns claiming pockets; reversing starves trailing goals when leaders stay hot.
+        if (pa !== pb) return pa - pb;
         const aDefer = respectsPeerContinuationPocketsWhenChoosingGaps(a.goal) ? 1 : 0;
         const bDefer = respectsPeerContinuationPocketsWhenChoosingGaps(b.goal) ? 1 : 0;
         if (aDefer !== bDefer) return aDefer - bDefer;
@@ -2279,10 +2281,9 @@ function allocateGoal(
   const { goal, norm } = prepared;
   let remainingMinutes = prepared.effectiveMinutes;
   const pinsOnly = pinsOnlyPlacement ?? false;
+  const entryPass3DemandMinutes = remainingMinutes;
   try {
     if (remainingMinutes <= 0) return;
-
-  const entryPass3DemandMinutes = remainingMinutes;
 
   const gymTravelPadMin = gymTravelPadMinutesForGoal(goal, settings.gym);
   const gymTravelPadMs = gymTravelPadMin * MS_PER_MIN;
@@ -2616,6 +2617,10 @@ function allocateGoal(
               .map((g) => ({ startMs: Math.max(g.startMs, nowMs), endMs: g.endMs }))
               .filter((g) => g.endMs > g.startMs);
       if (futureCandidateGaps.length === 0) continue;
+      const dayMaxCandidateMinutes = futureCandidateGaps.reduce(
+        (mx, g) => Math.max(mx, intervalMinutesFull(g)),
+        0
+      );
       // Energy-suggestion pass needs to see only blocks already placed on the
       // current day so adjacency scoring doesn't reach across day boundaries.
       const placedToday = blocksByDay[dayIdx] ?? [];
@@ -2645,6 +2650,7 @@ function allocateGoal(
             personalSystem: battery.personalSystem
           }
         : undefined;
+      const sameDayMultiAutoAllowed = norm.frequencyPerWeek === undefined;
       let slot =
         gapsTouchingOwn.length > 0
           ? pickGapForGoal(
@@ -2673,11 +2679,39 @@ function allocateGoal(
           placedToday,
           gymTravelPadMin,
           batteryArg,
-          norm.frequencyPerWeek === undefined
+          sameDayMultiAutoAllowed
         );
       }
       if (!slot) continue;
-      if (minPerDay > 0 && slot.minutes < minPerDay) continue;
+      if (minPerDay > 0 && slot.minutes < minPerDay && remainingMinutes >= minPerDay) {
+        const floorEligibleGaps = gapPool.filter((g) => intervalMinutesFull(g) >= minPerDay);
+        if (floorEligibleGaps.length > 0) {
+          const floorSlot = pickGapForGoal(
+            floorEligibleGaps,
+            goal,
+            dayHeadroom,
+            energy,
+            placement,
+            frameworkInclusion,
+            tz,
+            placedToday,
+            gymTravelPadMin,
+            batteryArg,
+            sameDayMultiAutoAllowed
+          );
+          if (floorSlot && floorSlot.minutes >= minPerDay) {
+            slot = floorSlot;
+          }
+        }
+      }
+      if (minPerDay > 0 && slot.minutes < minPerDay) {
+        // Treat min/day as strict only when this day has enough contiguous space to satisfy it.
+        // If no candidate gap can reach the floor, placing a smaller chunk is better than
+        // starving weekly demand behind an unreachable per-day threshold.
+        if (dayMaxCandidateMinutes >= minPerDay && remainingMinutes >= minPerDay) {
+          continue;
+        }
+      }
       // Pass 0 caps each placement at `perDayBudget` for an even spread. Spill passes
       // must use `remainingMinutes` — otherwise `maxMinutesPerDay` / `frequencyPerWeek`
       // kept `preferEvenSplitThisPass` true forever and every round reused `perDayBudget`,
