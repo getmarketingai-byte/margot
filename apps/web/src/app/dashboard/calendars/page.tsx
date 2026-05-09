@@ -287,7 +287,7 @@ function googleCalendarsErrorMessage(issue: Extract<ListGoogleCalendarsResult, {
     case "missing_tokens":
       return `Your Google account is linked, but calendar OAuth tokens are missing or empty. Sign out and sign in again with Google (use “Continue” and accept permissions) so we can store a refresh token.`;
     case "google_api_error":
-      return `Google Calendar refused the request (expired or revoked token, missing scopes, or an API error). Sign out and sign in again with Google. If it still fails, ask your admin to confirm Google Calendar API is enabled for this OAuth client.`;
+      return `Google Calendar refused the request (expired or revoked token, missing scopes, or an API error). Deploy the latest app version if you can — it saves fresh Google tokens on every sign-in. Then sign out, sign in with Google again, and reload this page. If it still fails, confirm the Google Calendar API is enabled for this OAuth client.`;
     default: {
       const _: never = issue.code;
       return _;

@@ -4,14 +4,17 @@
  * Uses the Drizzle adapter and Google as the only provider for now. We request
  * read-only Calendar scopes plus profile/email — write scopes are NOT requested
  * because the app's primary output is iCal feeds, and "least privilege" wins
- * Google OAuth verification. The refresh token is captured into the `accounts`
- * table so background jobs can refresh access tokens between cron runs.
+ * Google OAuth verification. Tokens are stored in the `account` row.
+ *
+ * Important: Auth.js only INSERTs that row on first link. On later sign-ins it
+ * creates a new session but does not UPDATE tokens — so we persist OAuth
+ * tokens in the `signIn` event on every successful Google login (see below).
  */
 
 import NextAuth, { type Session } from "next-auth";
 import Google from "next-auth/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
 import { TRIAL_LENGTH_MS } from "./subscription";
 
@@ -91,6 +94,55 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }
   },
   events: {
+    /**
+     * DrizzleAdapter `linkAccount` runs only when the Google account is first
+     * linked. Returning users hit `handleLoginOrRegister`'s early branch, which
+     * never refreshes `access_token` / `expires_at` / `refresh_token` in Postgres.
+     * Calendar and busy-cache code read those columns — without this hook,
+     * sign-out/sign-in does not fix expired tokens.
+     */
+    async signIn({ account }) {
+      if (!db || !account || account.provider !== "google") return;
+      if (account.type !== "oauth" && account.type !== "oidc") return;
+
+      const patch: Partial<{
+        access_token: string | null;
+        refresh_token: string | null;
+        expires_at: number | null;
+        token_type: string | null;
+        scope: string | null;
+        id_token: string | null;
+      }> = {};
+
+      if (typeof account.access_token === "string" && account.access_token.length > 0) {
+        patch.access_token = account.access_token;
+      }
+      if (account.expires_at != null && Number.isFinite(account.expires_at)) {
+        patch.expires_at = Math.trunc(account.expires_at);
+      }
+      if (typeof account.refresh_token === "string" && account.refresh_token.length > 0) {
+        patch.refresh_token = account.refresh_token;
+      }
+      if (typeof account.token_type === "string") patch.token_type = account.token_type;
+      if (typeof account.scope === "string") patch.scope = account.scope;
+      if (typeof account.id_token === "string") patch.id_token = account.id_token;
+
+      if (Object.keys(patch).length === 0) return;
+
+      try {
+        await db
+          .update(schema.accounts)
+          .set(patch)
+          .where(
+            and(
+              eq(schema.accounts.provider, account.provider),
+              eq(schema.accounts.providerAccountId, account.providerAccountId)
+            )
+          );
+      } catch (err) {
+        console.error("[auth] failed to persist Google OAuth tokens on sign-in", err);
+      }
+    },
     // Seed the 7-day no-card trial when a user row is first created. Stripe
     // subscription columns remain null until/unless they upgrade via Checkout.
     async createUser({ user }) {
