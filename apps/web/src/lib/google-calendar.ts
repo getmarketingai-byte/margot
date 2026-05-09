@@ -6,7 +6,7 @@
  */
 
 import { google, type calendar_v3 } from "googleapis";
-import { eq, and } from "drizzle-orm";
+import { and, eq, type InferSelectModel } from "drizzle-orm";
 import { freeGaps, mergeIntervals, type BusyEvent, type Interval } from "@calendar-automations/planner";
 import {
   calendarBusyModeForSource,
@@ -15,60 +15,132 @@ import {
 } from "@calendar-automations/schema";
 import { db, schema } from "./db/index";
 
-interface GoogleAccount {
-  accessToken: string;
-  refreshToken?: string | null;
-  expiresAt?: number | null;
+type AccountRow = InferSelectModel<typeof schema.accounts>;
+
+export type GoogleCalendarListEntry = {
+  id: string;
+  summary: string;
+  primary?: boolean;
+  backgroundColor?: string;
+};
+
+export type ListGoogleCalendarsResult =
+  | { ok: true; calendars: GoogleCalendarListEntry[] }
+  | {
+      ok: false;
+      code: "database_error" | "missing_tokens" | "google_api_error";
+      /** For server logs / support; not shown verbatim to users */
+      detail?: string;
+    };
+
+function googleApiErrorDetail(err: unknown): string {
+  if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
+    return (err as { message: string }).message;
+  }
+  return String(err);
 }
 
-async function loadGoogleAccount(userId: string): Promise<GoogleAccount | null> {
+async function selectGoogleAccountRow(userId: string): Promise<AccountRow | null> {
   if (!db) return null;
   const rows = await db
     .select()
     .from(schema.accounts)
     .where(and(eq(schema.accounts.userId, userId), eq(schema.accounts.provider, "google")))
     .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  return {
-    accessToken: row.access_token ?? "",
-    refreshToken: row.refresh_token ?? null,
-    expiresAt: row.expires_at ?? null
-  };
+  return rows[0] ?? null;
 }
 
-function buildOauthClient(account: GoogleAccount) {
+/**
+ * google-auth-library treats an empty `access_token` differently from omitting it.
+ * With only a refresh token, omit `access_token` so the client can refresh on first use.
+ */
+function createCalendarOAuthClient(row: AccountRow) {
   const oauth = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET
   );
+  const access_token = row.access_token?.trim() || undefined;
+  const refresh_token = row.refresh_token?.trim() || undefined;
   oauth.setCredentials({
-    access_token: account.accessToken,
-    refresh_token: account.refreshToken ?? undefined,
-    expiry_date: account.expiresAt ? account.expiresAt * 1000 : undefined
+    ...(access_token ? { access_token } : {}),
+    ...(refresh_token ? { refresh_token } : {}),
+    expiry_date:
+      row.expires_at !== null && row.expires_at !== undefined ? row.expires_at * 1000 : undefined
   });
+
+  if (db) {
+    oauth.on("tokens", (tokens) => {
+      void (async () => {
+        const patch: Partial<Pick<AccountRow, "access_token" | "expires_at" | "refresh_token">> = {};
+        if (tokens.access_token) patch.access_token = tokens.access_token;
+        if (tokens.expiry_date != null) patch.expires_at = Math.floor(tokens.expiry_date / 1000);
+        if (tokens.refresh_token) patch.refresh_token = tokens.refresh_token;
+        if (Object.keys(patch).length === 0) return;
+        try {
+          await db!
+            .update(schema.accounts)
+            .set(patch)
+            .where(
+              and(
+                eq(schema.accounts.provider, row.provider),
+                eq(schema.accounts.providerAccountId, row.providerAccountId)
+              )
+            );
+        } catch (persistErr) {
+          console.error("[google-calendar] failed to persist refreshed OAuth tokens", persistErr);
+        }
+      })();
+    });
+  }
+
   return oauth;
 }
 
-export async function listGoogleCalendars(userId: string): Promise<
-  Array<{ id: string; summary: string; primary?: boolean; backgroundColor?: string }>
-> {
-  const account = await loadGoogleAccount(userId);
-  if (!account) return [];
-  const auth = buildOauthClient(account);
-  const cal = google.calendar({ version: "v3", auth });
-  const res = await cal.calendarList.list({ maxResults: 250 });
-  const items = res.data.items ?? [];
-  return items
-    .filter((c): c is calendar_v3.Schema$CalendarListEntry & { id: string; summary: string } =>
-      Boolean(c.id) && Boolean(c.summary)
-    )
-    .map((c) => ({
-      id: c.id,
-      summary: c.summary,
-      ...(c.primary ? { primary: c.primary } : {}),
-      ...(c.backgroundColor ? { backgroundColor: c.backgroundColor } : {})
-    }));
+export async function listGoogleCalendars(userId: string): Promise<ListGoogleCalendarsResult> {
+  let row: AccountRow | null;
+  try {
+    row = await selectGoogleAccountRow(userId);
+  } catch (err) {
+    console.error("[google-calendar] failed to load account row", err);
+    return {
+      ok: false,
+      code: "database_error",
+      detail: googleApiErrorDetail(err)
+    };
+  }
+
+  if (!row) return { ok: true, calendars: [] };
+
+  const access = row.access_token?.trim() ?? "";
+  const refresh = row.refresh_token?.trim() ?? "";
+  if (!access && !refresh) {
+    return { ok: false, code: "missing_tokens" };
+  }
+
+  try {
+    const auth = createCalendarOAuthClient(row);
+    const cal = google.calendar({ version: "v3", auth });
+    const res = await cal.calendarList.list({ maxResults: 250 });
+    const items = res.data.items ?? [];
+    const calendars = items
+      .filter((c): c is calendar_v3.Schema$CalendarListEntry & { id: string; summary: string } =>
+        Boolean(c.id) && Boolean(c.summary)
+      )
+      .map((c) => ({
+        id: c.id,
+        summary: c.summary,
+        ...(c.primary ? { primary: c.primary } : {}),
+        ...(c.backgroundColor ? { backgroundColor: c.backgroundColor } : {})
+      }));
+    return { ok: true, calendars };
+  } catch (err) {
+    console.error("[google-calendar] calendarList.list failed", err);
+    return {
+      ok: false,
+      code: "google_api_error",
+      detail: googleApiErrorDetail(err)
+    };
+  }
 }
 
 /**
@@ -86,9 +158,19 @@ export async function fetchGoogleBusyLive(
   windowStartMs: number,
   windowEndMs: number
 ): Promise<{ busyEvents: BusyEvent[]; goalAvailabilityWindows: Record<string, Interval[]> }> {
-  const account = await loadGoogleAccount(userId);
-  if (!account) return { busyEvents: [], goalAvailabilityWindows: {} };
-  const auth = buildOauthClient(account);
+  let row: AccountRow | null;
+  try {
+    row = await selectGoogleAccountRow(userId);
+  } catch (err) {
+    console.error("[google-calendar] fetchGoogleBusyLive: account query failed", err);
+    return { busyEvents: [], goalAvailabilityWindows: {} };
+  }
+  if (!row) return { busyEvents: [], goalAvailabilityWindows: {} };
+  const access = row.access_token?.trim() ?? "";
+  const refresh = row.refresh_token?.trim() ?? "";
+  if (!access && !refresh) return { busyEvents: [], goalAvailabilityWindows: {} };
+
+  const auth = createCalendarOAuthClient(row);
   const cal = google.calendar({ version: "v3", auth });
   const busyEvents: BusyEvent[] = [];
   const blockedByGoal: Record<string, Interval[]> = {};

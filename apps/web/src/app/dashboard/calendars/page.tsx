@@ -4,7 +4,7 @@ import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";
 import { generateFeedToken } from "@/lib/feed-token";
 import { ensureAllFeedToken, ensureCustomFeedToken } from "@/lib/feeds";
-import { listGoogleCalendars } from "@/lib/google-calendar";
+import { listGoogleCalendars, type ListGoogleCalendarsResult } from "@/lib/google-calendar";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
   calendarBusyModeForSource,
@@ -280,6 +280,20 @@ async function customIcsUrl(userId: string, customFeedId: string, title: string)
 
 const CUSTOM_FEED_LIMIT = 20;
 
+function googleCalendarsErrorMessage(issue: Extract<ListGoogleCalendarsResult, { ok: false }>): string {
+  switch (issue.code) {
+    case "database_error":
+      return `We could not load your Google calendars because reading the database failed. Confirm this deployment uses the same Postgres connection as your migrations (DATABASE_URL), then reload. If the problem persists, check server logs for the underlying error.`;
+    case "missing_tokens":
+      return `Your Google account is linked, but calendar OAuth tokens are missing or empty. Sign out and sign in again with Google (use “Continue” and accept permissions) so we can store a refresh token.`;
+    case "google_api_error":
+      return `Google Calendar refused the request (expired or revoked token, missing scopes, or an API error). Sign out and sign in again with Google. If it still fails, ask your admin to confirm Google Calendar API is enabled for this OAuth client.`;
+    default: {
+      const _: never = issue.code;
+      return _;
+    }
+  }
+}
 
 export default async function CalendarsPage() {
   const session = await authOrPreview();
@@ -287,13 +301,11 @@ export default async function CalendarsPage() {
   const settings = await loadSettings(userId);
   const goalOptions = await loadGoalOptions(userId);
   const segmentOptions = segmentOptionsForFeeds(settings);
-  let calendars: Awaited<ReturnType<typeof listGoogleCalendars>> = [];
-  let calendarsLoadError = false;
-  try {
-    calendars = await listGoogleCalendars(userId);
-  } catch (error) {
-    console.error("[calendars] failed to load Google calendars", error);
-    calendarsLoadError = true;
+  const calendarListResult = await listGoogleCalendars(userId);
+  const calendars = calendarListResult.ok ? calendarListResult.calendars : [];
+  const calendarsLoadIssue = calendarListResult.ok ? null : calendarListResult;
+  if (calendarsLoadIssue) {
+    console.error("[calendars] Google calendar list failed", calendarsLoadIssue.code, calendarsLoadIssue.detail);
   }
   const selected = new Set(
     settings.calendars.sources.filter((s) => s.provider === "google").map((s) => s.externalId)
@@ -344,12 +356,8 @@ export default async function CalendarsPage() {
             <p className="text-sm text-ink-600 dark:text-ink-200">
               Choose which Google calendars count as busy time when allocating goals.
             </p>
-            {calendarsLoadError ? (
-              <p className="card text-sm">
-                We could not load your Google calendars. You are signed in, but your Google account
-                tokens could not be read. Run DB migrations for the same production `DATABASE_URL`,
-                then sign out and sign in again.
-              </p>
+            {calendarsLoadIssue ? (
+              <p className="card text-sm">{googleCalendarsErrorMessage(calendarsLoadIssue)}</p>
             ) : calendars.length === 0 ? (
               <p className="card text-sm">
                 No calendars found. Sign in with Google with calendar.readonly scopes and reload.
