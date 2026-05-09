@@ -173,11 +173,45 @@ ALTER TABLE "calendar_snapshot" ALTER COLUMN "windowStartMs" SET NOT NULL;
 ALTER TABLE "calendar_snapshot" ALTER COLUMN "windowEndMs" SET NOT NULL;
 ALTER TABLE "calendar_snapshot" ALTER COLUMN "events" SET NOT NULL;
 
+CREATE TABLE IF NOT EXISTS "ics_custom_feed" (
+  "id" text PRIMARY KEY NOT NULL,
+  "userId" text NOT NULL,
+  "title" text NOT NULL,
+  "rules" jsonb NOT NULL,
+  "createdAt" timestamp DEFAULT now() NOT NULL,
+  "updatedAt" timestamp DEFAULT now() NOT NULL
+);
+
+ALTER TABLE "ics_custom_feed" ADD COLUMN IF NOT EXISTS "id" text;
+ALTER TABLE "ics_custom_feed" ADD COLUMN IF NOT EXISTS "userId" text;
+ALTER TABLE "ics_custom_feed" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "ics_custom_feed" ADD COLUMN IF NOT EXISTS "rules" jsonb;
+ALTER TABLE "ics_custom_feed" ADD COLUMN IF NOT EXISTS "createdAt" timestamp DEFAULT now();
+ALTER TABLE "ics_custom_feed" ADD COLUMN IF NOT EXISTS "updatedAt" timestamp DEFAULT now();
+ALTER TABLE "ics_custom_feed" ALTER COLUMN "userId" SET NOT NULL;
+ALTER TABLE "ics_custom_feed" ALTER COLUMN "title" SET NOT NULL;
+ALTER TABLE "ics_custom_feed" ALTER COLUMN "rules" SET NOT NULL;
+ALTER TABLE "ics_custom_feed" ALTER COLUMN "createdAt" SET NOT NULL;
+ALTER TABLE "ics_custom_feed" ALTER COLUMN "updatedAt" SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'ics_custom_feed_userId_user_id_fk'
+  ) THEN
+    ALTER TABLE "ics_custom_feed"
+      ADD CONSTRAINT "ics_custom_feed_userId_user_id_fk"
+      FOREIGN KEY ("userId") REFERENCES "public"."user"("id")
+      ON DELETE cascade ON UPDATE no action;
+  END IF;
+END$$;
+
 CREATE TABLE IF NOT EXISTS "feed_token" (
   "id" text PRIMARY KEY NOT NULL,
   "userId" text NOT NULL,
   "token" text NOT NULL,
   "feed" text NOT NULL,
+  "customFeedId" text,
   "name" text NOT NULL,
   "revoked" boolean DEFAULT false NOT NULL,
   "createdAt" timestamp DEFAULT now() NOT NULL
@@ -187,6 +221,7 @@ ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "id" text;
 ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "userId" text;
 ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "token" text;
 ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "feed" text;
+ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "customFeedId" text;
 ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "name" text;
 ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "revoked" boolean DEFAULT false;
 ALTER TABLE "feed_token" ADD COLUMN IF NOT EXISTS "createdAt" timestamp DEFAULT now();
@@ -198,7 +233,35 @@ ALTER TABLE "feed_token" ALTER COLUMN "revoked" SET NOT NULL;
 ALTER TABLE "feed_token" ALTER COLUMN "createdAt" SET NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "feed_token_token_unique" ON "feed_token" ("token");
-CREATE UNIQUE INDEX IF NOT EXISTS "feed_token_user_feed" ON "feed_token" ("userId", "feed");
+DROP INDEX IF EXISTS "feed_token_user_feed";
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'feed_token_feed_scope_check'
+  ) THEN
+    ALTER TABLE "feed_token"
+      ADD CONSTRAINT "feed_token_feed_scope_check" CHECK (
+        ("feed" = 'all' AND "customFeedId" IS NULL)
+        OR ("feed" = 'custom' AND "customFeedId" IS NOT NULL)
+      );
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'feed_token_customFeedId_ics_custom_feed_id_fk'
+  ) THEN
+    ALTER TABLE "feed_token"
+      ADD CONSTRAINT "feed_token_customFeedId_ics_custom_feed_id_fk"
+      FOREIGN KEY ("customFeedId") REFERENCES "public"."ics_custom_feed"("id")
+      ON DELETE cascade ON UPDATE no action;
+  END IF;
+END$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "feed_token_one_all_per_user" ON "feed_token" ("userId") WHERE "feed" = 'all';
+CREATE UNIQUE INDEX IF NOT EXISTS "feed_token_custom_feed_unique" ON "feed_token" ("customFeedId") WHERE "customFeedId" IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "job_lock" (
   "key" text PRIMARY KEY NOT NULL,
