@@ -9,6 +9,7 @@
 
 import { eq } from "drizzle-orm";
 import Link from "next/link";
+import { unstable_rethrow } from "next/navigation";
 import {
   filterSchedulingGoals,
   type AllocatedBlockSnapshot,
@@ -152,8 +153,12 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
           userId,
           settings.calendars.sources,
           weekStartMs,
-          weekEndMs
-        ).catch(() => ({ busyEvents: [], goalAvailabilityWindows: {} }));
+          weekEndMs,
+          { oauthReturnPath: "/dashboard/review" }
+        ).catch((err) => {
+          unstable_rethrow(err);
+          return { busyEvents: [], goalAvailabilityWindows: {} };
+        });
         const busy = busyFetch.busyEvents.filter(
           (e) => e.endMs > weekStartMs && e.startMs < weekEndMs
         );

@@ -9,6 +9,7 @@
 
 import { eq } from "drizzle-orm";
 import Link from "next/link";
+import { unstable_rethrow } from "next/navigation";
 import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
 import { allocateWeek, baselineWeeklyMinuteTargets, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
 import { authOrPreview } from "@/lib/auth";
@@ -102,8 +103,12 @@ export default async function WeekReviewPage() {
     userId,
     settings.calendars.sources,
     weekStartMs,
-    weekEndMs
-  ).catch(() => ({ busyEvents: [], goalAvailabilityWindows: {} }));
+    weekEndMs,
+    { oauthReturnPath: "/dashboard/week-review" }
+  ).catch((err) => {
+    unstable_rethrow(err);
+    return { busyEvents: [], goalAvailabilityWindows: {} };
+  });
   const busy = busyFetch.busyEvents.filter(
     (e) => e.endMs > weekStartMs && e.startMs < weekEndMs
   );

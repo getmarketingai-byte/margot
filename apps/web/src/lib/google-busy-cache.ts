@@ -8,6 +8,7 @@ import "server-only";
 
 import { createHash } from "crypto";
 import { after } from "next/server";
+import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import type { BusyEvent, Interval } from "@calendar-automations/planner";
 import { normaliseCalendarSource, type CalendarSource } from "@calendar-automations/schema";
@@ -16,7 +17,11 @@ import {
   scheduleInvalidateUserAllocationCache
 } from "@/lib/allocation-cache-invalidation";
 import { db, schema } from "@/lib/db";
-import { fetchGoogleBusyLive } from "@/lib/google-calendar";
+import {
+  fetchGoogleBusyLive,
+  GoogleReauthRequiredError,
+  googleReauthSignInPath
+} from "@/lib/google-calendar";
 import { googleBusyFetchWindowForPlanner } from "@/lib/google-busy-fetch-window";
 import { loadBillingState } from "@/lib/billing-state-server";
 import { loadSettings } from "@/lib/settings-store";
@@ -89,12 +94,21 @@ export async function refreshGoogleBusyCacheForUser(userId: string): Promise<voi
   const nowMs = Date.now();
   const { fetchStartMs, fetchEndMs } = googleBusyFetchWindowForPlanner(settings, nowMs, billing);
   const fp = fingerprintGoogleCalendarSources(settings.calendars.sources);
-  const live = await fetchGoogleBusyLive(
-    userId,
-    settings.calendars.sources,
-    fetchStartMs,
-    fetchEndMs
-  );
+  let live: Awaited<ReturnType<typeof fetchGoogleBusyLive>>;
+  try {
+    live = await fetchGoogleBusyLive(
+      userId,
+      settings.calendars.sources,
+      fetchStartMs,
+      fetchEndMs
+    );
+  } catch (err) {
+    if (err instanceof GoogleReauthRequiredError) {
+      console.warn("[google-busy-cache] Google reauth required; skipping cache refresh", { userId });
+      return;
+    }
+    throw err;
+  }
   await upsertGoogleBusyCacheRow({
     userId,
     sourcesFingerprint: fp,
@@ -123,12 +137,20 @@ export async function fetchGoogleBusy(
   userId: string,
   sources: readonly CalendarSource[],
   windowStartMs: number,
-  windowEndMs: number
+  windowEndMs: number,
+  options?: { oauthReturnPath?: string }
 ): Promise<{ busyEvents: BusyEvent[]; goalAvailabilityWindows: Record<string, Interval[]> }> {
+  const oauthReturnPath = options?.oauthReturnPath ?? "/dashboard";
+
   if (!db) {
     try {
-      return await fetchGoogleBusyLive(userId, sources, windowStartMs, windowEndMs);
+      return await fetchGoogleBusyLive(userId, sources, windowStartMs, windowEndMs, {
+        oauthReturnPath
+      });
     } catch (err) {
+      if (err instanceof GoogleReauthRequiredError) {
+        redirect(googleReauthSignInPath(err.returnPath));
+      }
       console.warn("[google-busy-cache] live fetch failed (no DATABASE_URL cache)", err);
       return { busyEvents: [], goalAvailabilityWindows: {} };
     }
@@ -163,7 +185,9 @@ export async function fetchGoogleBusy(
   const { fetchStartMs, fetchEndMs } = googleBusyFetchWindowForPlanner(settings, now, billing);
 
   try {
-    const live = await fetchGoogleBusyLive(userId, sources, fetchStartMs, fetchEndMs);
+    const live = await fetchGoogleBusyLive(userId, sources, fetchStartMs, fetchEndMs, {
+      oauthReturnPath
+    });
     await upsertGoogleBusyCacheRow({
       userId,
       sourcesFingerprint: fp,
@@ -174,6 +198,9 @@ export async function fetchGoogleBusy(
     scheduleInvalidateUserAllocationCache(userId);
     return live;
   } catch (err) {
+    if (err instanceof GoogleReauthRequiredError) {
+      redirect(googleReauthSignInPath(err.returnPath));
+    }
     const staleMatchesSources = row && row.sourcesFingerprint === fp;
     if (staleMatchesSources) {
       console.warn(

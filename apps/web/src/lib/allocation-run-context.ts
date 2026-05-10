@@ -6,6 +6,7 @@
 
 import "server-only";
 
+import { unstable_rethrow } from "next/navigation";
 import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
 import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
 import type { BusyEvent } from "@calendar-automations/planner";
@@ -117,8 +118,10 @@ export async function loadPlanWeekAllocationInputs(options: {
   settings: UserSettings;
   nowMs: number;
   billing: BillingState;
+  /** After Google re-consent, send the user back here (must start with `/`). */
+  oauthReturnPath?: string;
 }): Promise<PlanWeekAllocationInputs> {
-  const { userId, plan, settings, nowMs, billing } = options;
+  const { userId, plan, settings, nowMs, billing, oauthReturnPath } = options;
   const tz = settings.timezone;
   const schedulingDays = settings.calendars.schedulingWindowDays;
   const snapshotEndMs = nowMs + schedulingDays * DAY_MS;
@@ -142,8 +145,12 @@ export async function loadPlanWeekAllocationInputs(options: {
     userId,
     settings.calendars.sources,
     fetchStartMs,
-    fetchEndMs
-  ).catch(() => ({ busyEvents: [] as BusyEvent[], goalAvailabilityWindows: {} }));
+    fetchEndMs,
+    { oauthReturnPath: oauthReturnPath ?? "/dashboard/plan" }
+  ).catch((err) => {
+    unstable_rethrow(err);
+    return { busyEvents: [] as BusyEvent[], goalAvailabilityWindows: {} };
+  });
 
   const busyAll = busyFetch.busyEvents;
 
