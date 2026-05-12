@@ -233,6 +233,42 @@ describe("WeeklyGoal energy classification fields", () => {
     );
     expect(norm.minMinutesPerWeek).toBe(60);
   });
+
+  it("rejects frequencyPerWeekMin greater than frequencyPerWeekMax", () => {
+    expect(() =>
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Bad cadence",
+        frequencyPerWeekMin: 5,
+        frequencyPerWeekMax: 2
+      })
+    ).toThrow();
+  });
+
+  it("normalises cadence min/max on NormalisedGoalTime", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Range",
+        frequencyPerWeekMin: 2,
+        frequencyPerWeekMax: 5
+      })
+    );
+    expect(norm.frequencyPerWeek).toBe(5);
+    expect(norm.frequencyPerWeekMin).toBe(2);
+  });
+
+  it("normalises legacy single frequencyPerWeek", () => {
+    const norm = normaliseGoalTime(
+      weeklyGoalSchema.parse({
+        id: "g1",
+        title: "Three",
+        frequencyPerWeek: 3
+      })
+    );
+    expect(norm.frequencyPerWeek).toBe(3);
+    expect(norm.frequencyPerWeekMin).toBeUndefined();
+  });
 });
 
 describe("GoalGroup & weekly plan group refs", () => {

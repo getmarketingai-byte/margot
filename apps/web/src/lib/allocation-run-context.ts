@@ -325,6 +325,8 @@ export async function loadPlanWeekAllocationInputs(options: {
         norm.minMinutesPerWeek === undefined &&
         norm.maxMinutesPerWeek === undefined &&
         g.frequencyPerWeek === undefined &&
+        g.frequencyPerWeekMin === undefined &&
+        g.frequencyPerWeekMax === undefined &&
         g.allocationSharePercent === undefined;
       return (
         (norm.isEqualShare || onlyDailyMinimum) &&

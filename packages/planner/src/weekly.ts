@@ -396,6 +396,8 @@ function isUnconstrainedEqualShareGoal(goal: WeeklyGoal, norm: NormalisedGoalTim
     norm.minMinutesPerWeek === undefined &&
     norm.maxMinutesPerWeek === undefined &&
     goal.frequencyPerWeek === undefined &&
+    goal.frequencyPerWeekMin === undefined &&
+    goal.frequencyPerWeekMax === undefined &&
     goal.allocationSharePercent === undefined;
   return (
     (norm.isEqualShare || onlyDailyMinimum) &&
@@ -2382,21 +2384,36 @@ function allocateGoal(
     if (hasFuturePlacementWindow(dayIdx)) placementDaysRemain++;
   }
 
-  // How many days do we want this goal to occupy? frequencyPerWeek wins,
-  // else a day-pinned goal stays on its single day, else spread across all 7.
-  // When frequency is set, cap by remaining calendar days that still have a
-  // placement window (at most one auto block per day).
-  const freqSlice =
+  // How many days do we want this goal to occupy? `normaliseGoalTime` maps legacy
+  // `frequencyPerWeek` and optional `frequencyPerWeekMin` / `frequencyPerWeekMax`
+  // onto `norm.frequencyPerWeek` (ceiling) plus optional `norm.frequencyPerWeekMin`.
+  const freqCadenceMax =
     norm.frequencyPerWeek === undefined
-      ? allowedDays.length
+      ? undefined
       : Math.min(norm.frequencyPerWeek, placementDaysRemain);
 
   const maxDaysForQuantum = Math.max(1, Math.floor(remainingMinutes / QUANTUM));
-  const targetDays = Math.min(allowedDays.length, freqSlice, maxDaysForQuantum);
+  const pass0DayCapNoFreq = Math.min(allowedDays.length, maxDaysForQuantum);
+  const pass0DayCap =
+    freqCadenceMax === undefined
+      ? pass0DayCapNoFreq
+      : Math.min(allowedDays.length, freqCadenceMax, maxDaysForQuantum);
+  const budgetDays =
+    norm.frequencyPerWeek === undefined
+      ? pass0DayCap
+      : Math.min(
+          pass0DayCap,
+          Math.max(
+            norm.frequencyPerWeekMin ?? norm.frequencyPerWeek,
+            Math.min(pass0DayCap, norm.frequencyPerWeek)
+          )
+        );
+
+  const targetDays = pass0DayCap;
   if (targetDays <= 0) return;
 
-  // Per-day budget = total / targetDays, clamped by maxMinutesPerDay.
-  let perDay = Math.ceil(remainingMinutes / targetDays);
+  // Per-day budget = total / budgetDays, clamped by maxMinutesPerDay.
+  let perDay = Math.ceil(remainingMinutes / budgetDays);
   if (norm.maxMinutesPerDay !== undefined) {
     perDay = Math.min(perDay, norm.maxMinutesPerDay);
   }

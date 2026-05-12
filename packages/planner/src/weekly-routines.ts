@@ -59,7 +59,14 @@ export function physicalActivityWeeklyGoalFieldsFromGym(gym: GymSettings): Omit<
     maxMinutesPerWeek: weeklyMax,
     minMinutesPerDay: sessionMin,
     maxMinutesPerDay,
-    ...(sessionDaySpread ? { frequencyPerWeek: sessionsHi } : {}),
+    ...(sessionDaySpread
+      ? sessionsLo === sessionsHi
+        ? { frequencyPerWeek: sessionsHi }
+        : {
+            frequencyPerWeekMin: sessionsLo,
+            frequencyPerWeekMax: sessionsHi
+          }
+      : {}),
     placementIdealClockAfter,
     placementIdealClockBefore,
     energyMode: "hyperfocus",

@@ -136,6 +136,20 @@ describe("physicalActivityWeeklyGoalFromGymSettings", () => {
     })!;
     expect(gMaxOnly.frequencyPerWeek).toBeUndefined();
   });
+
+  it("sets frequency min/max when min block size is set and cadence is a band", () => {
+    const g = physicalActivityWeeklyGoalFromGymSettings({
+      ...DEFAULT_USER_SETTINGS.gym,
+      plannerBlockEnabled: true,
+      sessionsPerWeek: 3,
+      sessionsPerWeekMin: 2,
+      sessionsPerWeekMax: 5,
+      minMinutesPerBlock: 60
+    })!;
+    expect(g.frequencyPerWeekMin).toBe(2);
+    expect(g.frequencyPerWeekMax).toBe(5);
+    expect(g.frequencyPerWeek).toBeUndefined();
+  });
 });
 
 describe("schedulingGoalsWithWeeklyRoutines", () => {

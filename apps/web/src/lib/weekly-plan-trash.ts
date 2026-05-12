@@ -56,3 +56,41 @@ export async function processExpiredWeeklyPlanTrash(userId: string, plan: Weekly
   await requestUserRegenerate(userId);
   return next;
 }
+
+/**
+ * Permanently removes every goal currently in Trash: clears `deletedGoals`,
+ * strips planner goal overrides for those ids, purges day/weekly review traces,
+ * persists `weekly_plan`, revalidates, regenerates.
+ */
+export async function emptyWeeklyPlanTrashBin(userId: string, plan: WeeklyPlan): Promise<WeeklyPlan> {
+  const parsed = weeklyPlanSchema.parse(plan);
+  const deletedGoals = parsed.deletedGoals ?? [];
+  if (deletedGoals.length === 0) return parsed;
+  const purgedIds = deletedGoals.map((e) => e.goal.id);
+  const purgedSet = new Set(purgedIds);
+  const overrides = parsed.overrides.filter((o) => {
+    if (o.kind !== "goal") return true;
+    const parsedKey = parseGoalOverrideKey(o.key);
+    if (!parsedKey) return true;
+    return !purgedSet.has(parsedKey.goalId);
+  });
+  const next = weeklyPlanSchema.parse({ ...parsed, deletedGoals: [], overrides });
+  for (const gid of purgedIds) {
+    await purgeGoalIdFromUserReviews(userId, gid);
+  }
+  if (db) {
+    await db
+      .update(schema.weeklyPlans)
+      .set({
+        data: next,
+        weekStart: next.weekStart,
+        timezone: next.timezone,
+        updatedAt: new Date()
+      })
+      .where(eq(schema.weeklyPlans.id, next.id));
+  }
+  invalidateUserAllocationCache(userId);
+  revalidatePlanningRoutes({ includeReviews: true });
+  await requestUserRegenerate(userId);
+  return next;
+}

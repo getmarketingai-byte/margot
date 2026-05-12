@@ -339,10 +339,34 @@ function GroupConstraintEditors({
           schedulable time after segments ({formatMinutes(freeMinutesThisWeek)} this week).
         </p>
       </ConstraintCard>
-      <ConstraintCard label="Sessions / week" onRemove={() => onPatch({ frequencyPerWeek: undefined })}>
+      <ConstraintCard
+        label="Sessions / week"
+        onRemove={() =>
+          onPatch({
+            frequencyPerWeek: undefined,
+            frequencyPerWeekMin: undefined,
+            frequencyPerWeekMax: undefined
+          })
+        }
+      >
         <SessionsPerWeekField
-          value={group.frequencyPerWeek}
-          onChange={(frequencyPerWeek) => onPatch({ frequencyPerWeek })}
+          minValue={group.frequencyPerWeekMin ?? group.frequencyPerWeek}
+          maxValue={group.frequencyPerWeekMax ?? group.frequencyPerWeek}
+          onChange={({ min, max }) => {
+            if (min === max) {
+              onPatch({
+                frequencyPerWeek: min,
+                frequencyPerWeekMin: undefined,
+                frequencyPerWeekMax: undefined
+              });
+            } else {
+              onPatch({
+                frequencyPerWeek: undefined,
+                frequencyPerWeekMin: min,
+                frequencyPerWeekMax: max
+              });
+            }
+          }}
         />
       </ConstraintCard>
       <ConstraintCard label="Pinned weekdays" className="sm:col-span-2" onRemove={() => onPatch({ daysOfWeek: undefined })}>

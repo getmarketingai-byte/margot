@@ -41,7 +41,7 @@ import { goalColorFromKey } from "@/lib/goal-colors";
 import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
 import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
 import { planOwnedPhysicalActivitySkeleton } from "@calendar-automations/planner";
-import { addGoal, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } from "./actions";
+import { addGoal, emptyTrash, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } from "./actions";
 import {
   ConstraintCard,
   DurationField,
@@ -538,6 +538,30 @@ export function PlanClient({
     });
   };
 
+  const handleEmptyTrash = () => {
+    const n = deletedGoals.length;
+    if (n === 0) return;
+    const ok = window.confirm(
+      `Permanently delete all ${n} goal${n === 1 ? "" : "s"} in Trash? Related day-sheet entries will be removed. This cannot be undone.`
+    );
+    if (!ok) return;
+    const actionId = "trash-empty";
+    reportPerceivedInteraction("trash_empty", actionId);
+    const snapshotDeleted = deletedGoals;
+    setDeletedGoals([]);
+    startTransition(async () => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+      try {
+        await emptyTrash();
+        measureServerAck(actionId, t0);
+        scheduleStaleDataRefresh();
+      } catch (err) {
+        console.error("emptyTrash failed", err);
+        setDeletedGoals(snapshotDeleted);
+      }
+    });
+  };
+
   const handleReorder = (fromIdx: number, toIdx: number) => {
     if (fromIdx === toIdx) return;
     const actionId = `goal-reorder-${fromIdx}-${toIdx}-${crypto.randomUUID().slice(0, 6)}`;
@@ -668,34 +692,55 @@ export function PlanClient({
 
       {deletedGoals.length > 0 ? (
         <section className="card flex flex-col gap-2" aria-label="Trash">
-          <h2 className="text-sm font-semibold">Trash</h2>
-          <p className="text-xs text-ink-500 dark:text-ink-400">
-            Deleted goals stay here for 7 days. Restore to bring a goal back (day-sheet entries tied
-            to it start counting again). After 7 days they are removed permanently, including related
-            day-sheet logs.
-          </p>
-          <ul className="flex flex-col gap-2">
-            {deletedGoals.map((entry) => (
-              <li
-                key={entry.goal.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-ink-200 px-3 py-2 dark:border-ink-600"
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{entry.goal.title}</div>
-                  <div className="text-[11px] text-ink-500 dark:text-ink-400">
-                    {formatTrashPurgeCountdown(entry.deletedAtMs)}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="btn-secondary shrink-0 text-xs"
-                  onClick={() => handleRestoreFromTrash(entry.goal.id)}
-                >
-                  Restore
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <details
+              className="group min-w-0 flex-1"
+              title="Show or hide the list of trashed goals"
+            >
+              <summary className="cursor-pointer list-none text-sm font-semibold outline-none marker:content-none [&::-webkit-details-marker]:hidden focus-visible:ring-2 focus-visible:ring-accent/40">
+                Trash{" "}
+                <span className="font-normal text-ink-500 dark:text-ink-400">
+                  ({deletedGoals.length})
+                </span>
+              </summary>
+              <div className="mt-2 flex flex-col gap-2 border-t border-ink-200 pt-2 dark:border-ink-600">
+                <p className="text-xs text-ink-500 dark:text-ink-400">
+                  Deleted goals stay here for 7 days. Restore to bring a goal back (day-sheet entries
+                  tied to it start counting again). After 7 days they are removed permanently,
+                  including related day-sheet logs.
+                </p>
+                <ul className="flex flex-col gap-2">
+                  {deletedGoals.map((entry) => (
+                    <li
+                      key={entry.goal.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-ink-200 px-3 py-2 dark:border-ink-600"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{entry.goal.title}</div>
+                        <div className="text-[11px] text-ink-500 dark:text-ink-400">
+                          {formatTrashPurgeCountdown(entry.deletedAtMs)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-secondary shrink-0 text-xs"
+                        onClick={() => handleRestoreFromTrash(entry.goal.id)}
+                      >
+                        Restore
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
+            <button
+              type="button"
+              className="btn-secondary shrink-0 text-xs"
+              onClick={handleEmptyTrash}
+            >
+              Empty trash
+            </button>
+          </div>
         </section>
       ) : null}
 
@@ -1531,6 +1576,8 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
   if (goal.maxMinutesPerDay !== undefined) draft.maxMinutesPerDay = goal.maxMinutesPerDay;
   if (goal.minMinutesPerBlock !== undefined) draft.minMinutesPerBlock = goal.minMinutesPerBlock;
   if (goal.maxAutoBlocksPerDay !== undefined) draft.maxAutoBlocksPerDay = goal.maxAutoBlocksPerDay;
+  if (goal.frequencyPerWeekMin !== undefined) draft.frequencyPerWeekMin = goal.frequencyPerWeekMin;
+  if (goal.frequencyPerWeekMax !== undefined) draft.frequencyPerWeekMax = goal.frequencyPerWeekMax;
   if (goal.frequencyPerWeek !== undefined) draft.frequencyPerWeek = goal.frequencyPerWeek;
   if (goal.daysOfWeek !== undefined) draft.daysOfWeek = goal.daysOfWeek;
   if (goal.dayOfWeek !== undefined) draft.dayOfWeek = goal.dayOfWeek;
@@ -1704,9 +1751,16 @@ function OptionsEditor({
     {
       id: "frequency",
       label: "Times per week",
-      isSet: (d) => d.frequencyPerWeek !== undefined,
+      isSet: (d) =>
+        d.frequencyPerWeek !== undefined ||
+        d.frequencyPerWeekMin !== undefined ||
+        d.frequencyPerWeekMax !== undefined,
       initialise: () => ({ frequencyPerWeek: 3 }),
-      clear: () => ({ frequencyPerWeek: undefined })
+      clear: () => ({
+        frequencyPerWeek: undefined,
+        frequencyPerWeekMin: undefined,
+        frequencyPerWeekMax: undefined
+      })
     },
     {
       id: "days",
@@ -2070,8 +2124,23 @@ function ConstraintBody({
     case "frequency":
       return (
         <SessionsPerWeekField
-          value={draft.frequencyPerWeek}
-          onChange={(frequencyPerWeek) => update({ frequencyPerWeek })}
+          minValue={draft.frequencyPerWeekMin ?? draft.frequencyPerWeek}
+          maxValue={draft.frequencyPerWeekMax ?? draft.frequencyPerWeek}
+          onChange={({ min, max }) => {
+            if (min === max) {
+              update({
+                frequencyPerWeek: min,
+                frequencyPerWeekMin: undefined,
+                frequencyPerWeekMax: undefined
+              });
+            } else {
+              update({
+                frequencyPerWeek: undefined,
+                frequencyPerWeekMin: min,
+                frequencyPerWeekMax: max
+              });
+            }
+          }}
         />
       );
     case "days": {

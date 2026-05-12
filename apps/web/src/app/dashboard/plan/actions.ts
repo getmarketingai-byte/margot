@@ -31,7 +31,7 @@ import { inngest } from "@/lib/inngest";
 import { refreshPlannedSnapshotsForCurrentWeek } from "@/lib/refresh-review-planned-snapshots";
 import { requestUserRegenerate } from "@/lib/request-user-regenerate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
-import { processExpiredWeeklyPlanTrash } from "@/lib/weekly-plan-trash";
+import { emptyWeeklyPlanTrashBin, processExpiredWeeklyPlanTrash } from "@/lib/weekly-plan-trash";
 
 function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
   return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
@@ -287,6 +287,17 @@ export async function restoreGoalFromTrash(id: string): Promise<void> {
   await savePlan(userId, plan);
   afterPlanMutation(userId);
   await requestUserRegenerate(userId);
+}
+
+/** Permanently delete every goal in Trash (same effect as letting each entry expire after 7 days). */
+export async function emptyTrash(): Promise<void> {
+  const session = await authOrPreview();
+  if (!session?.user?.id) throw new Error("unauthorised");
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const plan = await loadOrCreatePlan(userId, settings.timezone);
+  if (plan.deletedGoals.length === 0) return;
+  await emptyWeeklyPlanTrashBin(userId, plan);
 }
 
 /**

@@ -116,7 +116,7 @@ export const commitmentLevel = z.enum([
 ]);
 export type CommitmentLevel = z.infer<typeof commitmentLevel>;
 
-export const weeklyGoalSchema = z.object({
+export const weeklyGoalFieldsSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   description: z.string().optional(),
@@ -148,6 +148,10 @@ export const weeklyGoalSchema = z.object({
   maxAutoBlocksPerDay: z.number().int().min(1).max(8).optional(),
   /** "Show up N days a week"; if set, the goal's weekly minutes split across N days. */
   frequencyPerWeek: z.number().int().min(1).max(14).optional(),
+  /** Minimum distinct session days per ISO week (paired with {@link frequencyPerWeekMax}). */
+  frequencyPerWeekMin: z.number().int().min(1).max(14).optional(),
+  /** Maximum distinct session days per ISO week (paired with {@link frequencyPerWeekMin}). */
+  frequencyPerWeekMax: z.number().int().min(1).max(14).optional(),
   /** When set, the goal must land on this day; otherwise the allocator floats it. */
   dayOfWeek: dayOfWeek.optional(),
   /**
@@ -284,6 +288,20 @@ export const weeklyGoalSchema = z.object({
    */
   stackedRibbonVsLinearPeers: z.enum(["non_blocking", "blocking"]).optional()
 });
+
+export const weeklyGoalSchema = weeklyGoalFieldsSchema.superRefine((g, ctx) => {
+  if (
+    g.frequencyPerWeekMin !== undefined &&
+    g.frequencyPerWeekMax !== undefined &&
+    g.frequencyPerWeekMin > g.frequencyPerWeekMax
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "frequencyPerWeekMin cannot exceed frequencyPerWeekMax",
+      path: ["frequencyPerWeekMax"]
+    });
+  }
+});
 export type WeeklyGoal = z.infer<typeof weeklyGoalSchema>;
 
 /** `UserSettings.allocator.goalWindowMode` — exported for planner/UI without importing full settings. */
@@ -399,7 +417,7 @@ export function effectivePlacementIdealBeforeBoundary(goal: {
  * **sum** of member weekly targets vs `allocationSharePercent` (× full-week `T`),
  * `maxMinutesPerWeek`, etc. Ignore at group level: energy, frameworks, anchors.
  */
-export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalSchema.pick({
+export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalFieldsSchema.pick({
   targetMinutes: true,
   minMinutesPerWeek: true,
   maxMinutesPerWeek: true,
@@ -408,6 +426,8 @@ export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalSchema.pick({
   minMinutesPerBlock: true,
   maxAutoBlocksPerDay: true,
   frequencyPerWeek: true,
+  frequencyPerWeekMin: true,
+  frequencyPerWeekMax: true,
   dayOfWeek: true,
   daysOfWeek: true,
   earliestHour: true,
@@ -518,8 +538,14 @@ export interface NormalisedGoalTime {
   minMinutesPerDay?: number;
   /** Daily cap in minutes, or undefined when no per-day cap was set. */
   maxMinutesPerDay?: number;
-  /** Number of days the goal should occupy across the week, when specified. */
+  /** Number of days the goal should occupy across the week, when specified (ceiling). */
   frequencyPerWeek?: number;
+  /**
+   * When set with {@link frequencyPerWeek}, minimum distinct session days for Pass‑0
+   * spread (defaults to the same value as the ceiling when only legacy
+   * {@link WeeklyGoal.frequencyPerWeek} is stored).
+   */
+  frequencyPerWeekMin?: number;
   /** True when the goal carries no time fields, no share %, and should equal-share. */
   isEqualShare: boolean;
   /** True when only legacy `targetMinutes` is set (no explicit min/max/day range). */
@@ -537,7 +563,8 @@ export interface NormalisedGoalTime {
  *      needs an exact weekly band.
  *   2. If `minMinutesPerDay` is set without `minMinutesPerWeek`, derive
  *      `min/wk = min/day × scheduledDays`. When cadence is not explicit
- *      (`frequencyPerWeek`, `dayOfWeek`, `daysOfWeek`), assume **7 days** so the
+ *      (`frequencyPerWeek`, `frequencyPerWeekMin` / `frequencyPerWeekMax`,
+ *      `dayOfWeek`, `daysOfWeek`), assume **7 days** so the
  *      stated daily floor participates in weekly Pass 1 + proportional starvation
  *      like other commitments. Likewise, when `maxMinutesPerDay` is set without
  *      `maxMinutesPerWeek`, derive `max/wk = max/day × scheduledDays` using the
@@ -558,10 +585,12 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
       : goal.dayOfWeek
         ? 1
         : undefined;
+  const cadenceForInference =
+    goal.frequencyPerWeekMax ?? goal.frequencyPerWeek ?? goal.frequencyPerWeekMin;
   const inferredScheduledDays =
-    goal.frequencyPerWeek !== undefined && constrainedDaysFromWeekdays !== undefined
-      ? Math.min(goal.frequencyPerWeek, constrainedDaysFromWeekdays)
-      : goal.frequencyPerWeek ?? constrainedDaysFromWeekdays;
+    cadenceForInference !== undefined && constrainedDaysFromWeekdays !== undefined
+      ? Math.min(cadenceForInference, constrainedDaysFromWeekdays)
+      : cadenceForInference ?? constrainedDaysFromWeekdays;
 
   let minMinutesPerWeek = goal.minMinutesPerWeek;
   let maxMinutesPerWeek = goal.maxMinutesPerWeek;
@@ -578,6 +607,8 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   const isEqualShare =
     !hasAnyRange &&
     goal.frequencyPerWeek === undefined &&
+    goal.frequencyPerWeekMin === undefined &&
+    goal.frequencyPerWeekMax === undefined &&
     goal.allocationSharePercent === undefined;
 
   const result: NormalisedGoalTime = {
@@ -588,7 +619,18 @@ export function normaliseGoalTime(goal: WeeklyGoal): NormalisedGoalTime {
   if (maxMinutesPerWeek !== undefined) result.maxMinutesPerWeek = maxMinutesPerWeek;
   if (goal.minMinutesPerDay !== undefined) result.minMinutesPerDay = goal.minMinutesPerDay;
   if (goal.maxMinutesPerDay !== undefined) result.maxMinutesPerDay = goal.maxMinutesPerDay;
-  if (goal.frequencyPerWeek !== undefined) result.frequencyPerWeek = goal.frequencyPerWeek;
+
+  const cadenceLo = goal.frequencyPerWeekMin ?? goal.frequencyPerWeek;
+  const cadenceHi = goal.frequencyPerWeekMax ?? goal.frequencyPerWeek;
+  if (cadenceLo !== undefined || cadenceHi !== undefined) {
+    const rawLo = cadenceLo ?? cadenceHi!;
+    const rawHi = cadenceHi ?? cadenceLo!;
+    const lo = Math.min(14, Math.max(1, Math.round(Math.min(rawLo, rawHi))));
+    const hi = Math.min(14, Math.max(1, Math.round(Math.max(rawLo, rawHi))));
+    result.frequencyPerWeek = hi;
+    if (lo < hi) result.frequencyPerWeekMin = lo;
+  }
+
   return result;
 }
 

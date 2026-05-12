@@ -194,8 +194,17 @@ export function chipsForGoal(goal: WeeklyGoal, wheelLabel?: (id: string) => stri
       label: `${goal.allocationSharePercent}% of week`
     });
   }
-  if (goal.frequencyPerWeek !== undefined) {
-    chips.push({ key: "frequency", label: `${goal.frequencyPerWeek}×/wk` });
+  {
+    const fMin = goal.frequencyPerWeekMin ?? goal.frequencyPerWeek;
+    const fMax = goal.frequencyPerWeekMax ?? goal.frequencyPerWeek;
+    if (fMin !== undefined || fMax !== undefined) {
+      const lo = Math.min(fMin ?? fMax!, fMax ?? fMin!);
+      const hi = Math.max(fMin ?? 0, fMax ?? 0);
+      chips.push({
+        key: "frequency",
+        label: lo === hi ? `${lo}×/wk` : `${lo}–${hi}×/wk`
+      });
+    }
   }
   const pinnedDays = goal.daysOfWeek?.length
     ? goal.daysOfWeek
@@ -456,8 +465,14 @@ function aggregateSchedulingPartsForGoalGroup(grp: GoalGroup): string[] {
   if (grp.allocationSharePercent !== undefined) {
     parts.push(`∑ ${grp.allocationSharePercent}% of week`);
   }
-  if (grp.frequencyPerWeek !== undefined) {
-    parts.push(`∑ ${grp.frequencyPerWeek}×/wk`);
+  {
+    const fMin = grp.frequencyPerWeekMin ?? grp.frequencyPerWeek;
+    const fMax = grp.frequencyPerWeekMax ?? grp.frequencyPerWeek;
+    if (fMin !== undefined || fMax !== undefined) {
+      const lo = Math.min(fMin ?? fMax!, fMax ?? fMin!);
+      const hi = Math.max(fMin ?? 0, fMax ?? 0);
+      parts.push(lo === hi ? `∑ ${lo}×/wk` : `∑ ${lo}–${hi}×/wk`);
+    }
   }
   const pinnedDays = grp.daysOfWeek?.length
     ? grp.daysOfWeek
