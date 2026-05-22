@@ -38,8 +38,8 @@ import { collectBusyIntervals, freeGaps } from "./intervals";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
-/** Mirrors `_sleepIsTravelConflict` in Sleep.gs — not shown as the primary conflict reason. */
-function isTravelLikeConflictTitle(title: string): boolean {
+/** Mirrors `_sleepIsTravelConflict` in Sleep.gs — planner overlap rules for drive legs. */
+export function isTravelLikeConflictTitle(title: string): boolean {
   const t = (title || "").trim();
   return (
     t.startsWith("[Drive]") ||

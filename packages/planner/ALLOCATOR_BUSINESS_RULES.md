@@ -65,7 +65,34 @@ Under **hybrid**, preview / ICS merge runs **`mergeOrphanGoalOverrideBlocks`** o
 - **Nice-weather bias (`niceWeatherWindows` non-empty):** goals with **`scheduleInNiceWeather`** iterate days **descending** by future minutes in `niceWeather ∩ free gaps`, so placements anchor on forecast-nice days. **Unconstrained** goals iterate **ascending** by the same overlap, filling days with little or no nice slack before occupying shared sunny pockets—so constrained goals stay inside their outdoor windows whenever another day can take the spill. At the **same commitment / floor / gym tier**, `scheduleInNiceWeather` rows are ordered **ahead of** unconstrained peers (including demand-based round‑robin sort so they do not lose the week to generic greedy passes).
 - Drag overrides and `source: "actual"` pins are honoured per existing pin rules (including relaxed overlap for actuals vs calendar busy, but not vs sleep).
 
+## Non-negotiable minimums (`settings.allocator.nonNegotiableMinimumsEnabled`)
+
+**Default off.** When off, allocator behaviour matches historical Pass 3 (no minimum-first cohort, no busy overlays).
+
+When **on** (and global goal window mode is not **`stacked`**):
+
+### Pass 3a — minimum-first reservations (linear-role goals only)
+
+- **Commitment shorthand:** `commitmentLevel: non_negotiable` implies both weekly and daily **authored mins** participate in reservation when those fields are set (see [`deriveNnReservationSpec`](src/non-negotiable-minimums.ts)).
+- **Granular knobs on `committed` goals:** `minMinutesPerWeekNonNegotiable` / `minMinutesPerDayNonNegotiable` mark only that floor row; same keys exist on **[`GoalGroup`](../schema/src/goals.ts)** aggregates.
+- The allocator runs **`runNnMinimumFirstPass`** before the normal hybrid/linear Pass 3 waves: cohort goals are capped to the **still-unmet** portion of flagged minimums (`reservationBudgetMinutes`) and **`allocateGoal`** consumes only that capped demand, then restores remaining `effectiveMinutes` for the ordinary Pass 3 pass.
+- **Hybrid / stacked-role goals** skip this phase entirely (pins-only envelopes stay unchanged).
+
+### Pass 3c — overlay on calendar busy (`AllocatedBlock.overBusy`)
+
+- Runs after standard Pass 3 for **linear-role** targets that still owe an explicit weekly/daily minimum and either (a) sit on **multi-day–busy** weekdays (`multiDayHeavyBusyDayIndexes`) or (b) are **below daily floor** while the largest pocket on that weekday is shorter than that shortfall.
+- Overlay blocks **`overBusy: true`** overlap merged **calendar busy excluding drive-shaped titles** [`mergedBusyIntervalsNonDriveDay`](src/non-negotiable-minimums.ts). They deliberately **omit gym drive padding** when choosing wall time (`placeBlockInGap(..., 0)`).
+- **Eligibility overlay vs minimum-first**: reservation cohort uses **derived non-negotiable** specs (`deriveNnReservationSpec`); overlays also allow plain explicit mins (`nnOverlayAuthoredEligible`) — so travel-heavy weeks still show a symbolic block when the user authored a weekly/daily min even without per-field NN flags.
+
+### Packing + metrics
+
+- The even-spread packing pass skips **`overBusy`** blocks [`spreadEvenGoalBuffersInSnapshotGaps`](src/weekly.ts): overlays do not shift padding inside genuine free gaps.
+- **`weekCapacityMinutes`** stays the pre–Pass 3 full-week gap total — overlays never consume **`day.gaps`**.
+
+Placement windows, sleep / non-negotiable segment exclusions, **`nowMs`** clipping, **`nonNegotiableMinimumsMorningFallbackHour`** (busy overlay / band fallback anchor), and **`goalAvailabilityWindows`** apply the same way as greedy Pass 3.
+
 ## Stacked goal-window mode (`settings.allocator.goalWindowMode === "stacked"`)
+
 
 Same **`stacked-role`** behaviour applies to **every** goal globally; there are no linear peers in Pass 3, so **`WeeklyGoal.stackedRibbonVsLinearPeers`** is ignored (the field applies only under **hybrid** on **linear-role** rows).
 

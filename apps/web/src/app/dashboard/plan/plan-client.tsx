@@ -1571,8 +1571,11 @@ function extractDraft(goal: WeeklyGoal): GoalDraft {
     commitmentLevel: goal.commitmentLevel ?? "committed"
   };
   if (goal.minMinutesPerWeek !== undefined) draft.minMinutesPerWeek = goal.minMinutesPerWeek;
+  if (goal.minMinutesPerWeekNonNegotiable === true)
+    draft.minMinutesPerWeekNonNegotiable = true;
   if (goal.maxMinutesPerWeek !== undefined) draft.maxMinutesPerWeek = goal.maxMinutesPerWeek;
   if (goal.minMinutesPerDay !== undefined) draft.minMinutesPerDay = goal.minMinutesPerDay;
+  if (goal.minMinutesPerDayNonNegotiable === true) draft.minMinutesPerDayNonNegotiable = true;
   if (goal.maxMinutesPerDay !== undefined) draft.maxMinutesPerDay = goal.maxMinutesPerDay;
   if (goal.minMinutesPerBlock !== undefined) draft.minMinutesPerBlock = goal.minMinutesPerBlock;
   if (goal.maxAutoBlocksPerDay !== undefined) draft.maxAutoBlocksPerDay = goal.maxAutoBlocksPerDay;
@@ -1704,14 +1707,20 @@ function OptionsEditor({
       label: "Min per week",
       isSet: (d) => d.minMinutesPerWeek !== undefined,
       initialise: () => ({ minMinutesPerWeek: 60 }),
-      clear: () => ({ minMinutesPerWeek: undefined })
+      clear: () => ({
+        minMinutesPerWeek: undefined,
+        minMinutesPerWeekNonNegotiable: undefined
+      })
     },
     {
       id: "min-day",
       label: "Min per day",
       isSet: (d) => d.minMinutesPerDay !== undefined,
       initialise: () => ({ minMinutesPerDay: 30 }),
-      clear: () => ({ minMinutesPerDay: undefined })
+      clear: () => ({
+        minMinutesPerDay: undefined,
+        minMinutesPerDayNonNegotiable: undefined
+      })
     },
     {
       id: "max-week",
@@ -2025,23 +2034,71 @@ function ConstraintBody({
   switch (id) {
     case "min-week":
       return (
-        <DurationField
-          value={draft.minMinutesPerWeek}
-          onChange={(v) => update({ minMinutesPerWeek: v })}
-          hint="Reserved before equal share."
-          sliderMinMinutes={0}
-          sliderMaxMinutes={48 * 60}
-        />
+        <div className="flex flex-col gap-2">
+          <DurationField
+            value={draft.minMinutesPerWeek}
+            onChange={(v) =>
+              update({
+                minMinutesPerWeek: v,
+                ...(v === undefined ? { minMinutesPerWeekNonNegotiable: undefined } : {})
+              })
+            }
+            hint="Reserved before equal share."
+            sliderMinMinutes={0}
+            sliderMaxMinutes={48 * 60}
+          />
+          {draft.minMinutesPerWeek !== undefined ? (
+            <label className="flex cursor-pointer items-start gap-2 text-xs text-ink-600 dark:text-ink-300">
+              <input
+                type="checkbox"
+                checked={draft.minMinutesPerWeekNonNegotiable === true}
+                onChange={(e) =>
+                  update({
+                    minMinutesPerWeekNonNegotiable: e.target.checked ? true : undefined
+                  })
+                }
+                className="mt-0.5"
+              />
+              <span title="Reserve this minimum in free time before other goals; on travel days, overlay on busy if needed.">
+                Non-negotiable (weekly floor)
+              </span>
+            </label>
+          ) : null}
+        </div>
       );
     case "min-day":
       return (
-        <DurationField
-          value={draft.minMinutesPerDay}
-          onChange={(v) => update({ minMinutesPerDay: v })}
-          hint="Daily floor on scheduled days."
-          sliderMinMinutes={0}
-          sliderMaxMinutes={24 * 60}
-        />
+        <div className="flex flex-col gap-2">
+          <DurationField
+            value={draft.minMinutesPerDay}
+            onChange={(v) =>
+              update({
+                minMinutesPerDay: v,
+                ...(v === undefined ? { minMinutesPerDayNonNegotiable: undefined } : {})
+              })
+            }
+            hint="Daily floor on scheduled days."
+            sliderMinMinutes={0}
+            sliderMaxMinutes={24 * 60}
+          />
+          {draft.minMinutesPerDay !== undefined ? (
+            <label className="flex cursor-pointer items-start gap-2 text-xs text-ink-600 dark:text-ink-300">
+              <input
+                type="checkbox"
+                checked={draft.minMinutesPerDayNonNegotiable === true}
+                onChange={(e) =>
+                  update({
+                    minMinutesPerDayNonNegotiable: e.target.checked ? true : undefined
+                  })
+                }
+                className="mt-0.5"
+              />
+              <span title="Reserve this minimum in free time before other goals; on travel days, overlay on busy if needed.">
+                Non-negotiable (daily floor)
+              </span>
+            </label>
+          ) : null}
+        </div>
       );
     case "max-week":
       return (

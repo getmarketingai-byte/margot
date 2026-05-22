@@ -128,10 +128,20 @@ export const weeklyGoalFieldsSchema = z.object({
   targetMinutes: z.number().int().positive().optional(),
   /** Reserve at least this many minutes per week (allocator Pass 1). */
   minMinutesPerWeek: z.number().int().nonnegative().optional(),
+  /**
+   * When true (with {@link minMinutesPerWeek}), that weekly floor participates in Pass 3a
+   * minimum‑first reservation and overlays when allocator non‑negotiable minimums run.
+   */
+  minMinutesPerWeekNonNegotiable: z.boolean().optional(),
   /** Cap weekly minutes at this ceiling (allocator Pass 2). */
   maxMinutesPerWeek: z.number().int().positive().optional(),
   /** Daily floor; allocator tries to land at least this much on each scheduled day. */
   minMinutesPerDay: z.number().int().nonnegative().optional(),
+  /**
+   * When true (with {@link minMinutesPerDay}), that daily floor participates in Pass 3a
+   * minimum‑first reservation and busy‑day overlays when allocator non‑negotiable minimums run.
+   */
+  minMinutesPerDayNonNegotiable: z.boolean().optional(),
   /** Daily cap; allocator never schedules more than this much on a single day. */
   maxMinutesPerDay: z.number().int().positive().optional(),
   /**
@@ -420,8 +430,10 @@ export function effectivePlacementIdealBeforeBoundary(goal: {
 export const weeklyGoalSchedulingConstraintsSchema = weeklyGoalFieldsSchema.pick({
   targetMinutes: true,
   minMinutesPerWeek: true,
+  minMinutesPerWeekNonNegotiable: true,
   maxMinutesPerWeek: true,
   minMinutesPerDay: true,
+  minMinutesPerDayNonNegotiable: true,
   maxMinutesPerDay: true,
   minMinutesPerBlock: true,
   maxAutoBlocksPerDay: true,

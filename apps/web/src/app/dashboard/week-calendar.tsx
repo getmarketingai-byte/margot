@@ -26,7 +26,11 @@ import { goalColorFromKey } from "@/lib/goal-colors";
 import { dispatchGoalFocus } from "@/lib/goal-focus";
 import { compareRibbonLaneKeysPriority, ribbonLaneKey } from "@/lib/ribbon-lane-order";
 import { localMidnightMs } from "@/lib/week";
-import { DraggableProposedGoalBlock } from "./draggable-proposed-goal-block";
+import {
+  DraggableProposedGoalBlock,
+  type GoalCalendarSlice,
+  type GoalDragReservation
+} from "./draggable-proposed-goal-block";
 import { DraggableSystemBlock } from "./draggable-system-block";
 
 interface WeekCalendarProps {
@@ -333,24 +337,24 @@ function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: nu
   return aStart < bEnd && bStart < aEnd;
 }
 
-/** Sleep, routines, calendar busy, travel, and logged day-sheet goal time. */
-function buildReservedIntervalsForGoalDrag(
+/** Sleep, routines, calendar busy, travel, and logged day-sheet goal time — tagged for drag policy. */
+function buildGoalDragReservations(
   busy: readonly BusyEvent[],
   system: readonly SystemBlock[],
   daySheetGoalBusy: readonly BusyEvent[] = []
-): { startMs: number; endMs: number }[] {
-  const out: { startMs: number; endMs: number }[] = [];
+): GoalDragReservation[] {
+  const out: GoalDragReservation[] = [];
   for (const b of busy) {
     if (b.busy === false) continue;
-    out.push({ startMs: b.startMs, endMs: b.endMs });
+    out.push({ startMs: b.startMs, endMs: b.endMs, calendarBusyLayer: true });
   }
   for (const b of daySheetGoalBusy) {
     if (b.busy === false) continue;
-    out.push({ startMs: b.startMs, endMs: b.endMs });
+    out.push({ startMs: b.startMs, endMs: b.endMs, calendarBusyLayer: false });
   }
   for (const s of system) {
     if (s.system === "sleep" || s.system === "routine" || s.system === "travel") {
-      out.push({ startMs: s.startMs, endMs: s.endMs });
+      out.push({ startMs: s.startMs, endMs: s.endMs, calendarBusyLayer: false });
     }
   }
   return out;
@@ -581,15 +585,6 @@ function goalIdFromDaySheetSourceId(sourceId: string): string | undefined {
   const m = /^daysheet-goal:([^:]+):/.exec(sourceId);
   return m?.[1];
 }
-
-type GoalCalendarSlice = {
-  dragKey: string;
-  startMs: number;
-  endMs: number;
-  dragOverrideSaved?: boolean;
-  overrideSource?: "drag" | "actual";
-  pinnedFromOverride?: boolean;
-};
 
 type ProposedPositioned = PositionedBlock & {
   isSegment: boolean;
@@ -908,7 +903,8 @@ export function WeekCalendar({
                     endMs: b.endMs,
                     dragOverrideSaved: b.dragOverrideSaved,
                     overrideSource: b.overrideSource,
-                    pinnedFromOverride: b.pinnedFromOverride
+                    pinnedFromOverride: b.pinnedFromOverride,
+                    overBusy: b.overBusy
                   }
                 ]
               : undefined,
@@ -946,7 +942,7 @@ export function WeekCalendar({
       daySheetByDay: groupPositionsByDay(daySheetPositions),
       systemByDay: groupPositionsByDay(systemPositions),
       proposedByDay: groupPositionsByDay(proposedPositions),
-      reservedForGoalDrag: buildReservedIntervalsForGoalDrag(busy, system, daySheetGoalBusy),
+      reservedForGoalDrag: buildGoalDragReservations(busy, system, daySheetGoalBusy),
       hasSleep: hasSleepInner,
       hasTravel: hasTravelInner,
       hasRoutine: hasRoutineInner,
@@ -1402,7 +1398,7 @@ function ProposedBlock({
     frameworkOverlayChips?: ReadonlyArray<{ abbr: string; title: string }>;
   };
   pxPerHour: number;
-  reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
+  reservedForGoalDrag: readonly GoalDragReservation[];
   onDragCommit?: (updates: Record<string, { startMs: number; endMs: number }>) => void;
   onDragOverridesCleared?: (dragKeys: string[]) => void;
   proposedGoalLayerZ: string;
@@ -1410,6 +1406,7 @@ function ProposedBlock({
   const goalId = block.goalId;
   const selectable = Boolean(goalId);
   const slices = block.goalSlices;
+  const isBusyOverlayVisual = slices?.some((s) => s.overBusy) ?? false;
   const draggable =
     Boolean(selectable && goalId && slices && slices.length > 0 && !block.isSegment && !goalId.startsWith("segment:"));
 
@@ -1435,6 +1432,7 @@ function ProposedBlock({
         onDragOverridesCleared={onDragOverridesCleared}
         frameworkOverlayChips={block.frameworkOverlayChips}
         layerZClass={proposedGoalLayerZ}
+        allowCalendarBusyOverlap={slices.some((s) => s.overBusy)}
       />
     );
   }
@@ -1444,7 +1442,7 @@ function ProposedBlock({
       title={`${block.title} (proposed)${chipHint}`}
       className={`absolute inset-x-0.5 ${proposedGoalLayerZ} overflow-hidden rounded px-1 py-0.5 text-[10px] font-medium text-white shadow-sm ${
         selectable ? "cursor-pointer" : ""
-      }`}
+      } ${isBusyOverlayVisual ? "ring-1 ring-dashed ring-white/80 ring-inset" : ""}`}
       role={selectable ? "button" : undefined}
       tabIndex={selectable ? 0 : undefined}
       aria-label={

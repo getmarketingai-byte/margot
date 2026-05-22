@@ -100,6 +100,23 @@ import {
   type WeekDayGapBuckets
 } from "./goal-feasible-windows";
 import { collectBusyIntervals, freeGaps, mergeIntervals, subtractIntervalsFromUnion } from "./intervals";
+import {
+  comparePreparedGoalsForMinimumFirstReservation,
+  freeGapMinutesBestOnDay,
+  intersectIntervals,
+  goalAllowedDayIndexes,
+  mergedBusyIntervalsNonDriveDay,
+  mergedGoalAchievementMinutesWeek,
+  morningFallbackInterval,
+  multiDayHeavyBusyDayIndexes,
+  nnOverlayAuthoredEligible,
+  overlayPlacementLegalWindows,
+  reservationBudgetMinutes,
+  deriveNnReservationSpec,
+  subtractSegmentBlocksFromIntervals,
+  subtractSleepFromIntervals,
+  subtractIntervalsBounded
+} from "./non-negotiable-minimums";
 import { physicalActivityWeeklyGoalFromGymSettings } from "./weekly-routines";
 import { hourInTz, dateKeyInTz, localMidnightMs } from "./time";
 import { QUANTUM } from "./weekly-grid";
@@ -180,6 +197,11 @@ export interface AllocatedBlock {
   hp6Habit?: string;
   /** True when this is a "non-negotiable" consistency segment, not a goal. */
   segment?: boolean;
+  /**
+   * When true, proposes this block over calendar busy to satisfy NN minimum obligations
+   * (Pass 3c). Does not consume free-gap capacity.
+   */
+  overBusy?: boolean;
   /**
    * Stable key for calendar drag overrides (`kind: "goal"` on WeeklyPlan.overrides).
    * Format: `goal:<weekAnchorIso>:<slotIndex>:<goalId>`.
@@ -619,6 +641,9 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
 
   /** Matches schema default; callers/tests may shallow-merge `allocator` and omit this field. */
   const goalWindowMode = settings.allocator.goalWindowMode ?? "linear";
+  const nnMinEligible =
+    settings.allocator.nonNegotiableMinimumsEnabled === true &&
+    goalWindowMode !== "stacked";
   const { placementGoalOverrides, placementGoalOverrideSources } =
     goalWindowMode === "stacked"
       ? {
@@ -942,6 +967,62 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
     );
   };
 
+  const runNnMinimumFirstPass = (): void => {
+    if (!nnMinEligible) return;
+    const cohort = prepared.filter((p) => {
+      if (pinsOnlyForPrepared(p)) return false;
+      if (p.effectiveMinutes < QUANTUM) return false;
+      if (!deriveNnReservationSpec(p.goal, p.norm).active) return false;
+      return effectiveWeeklyGoalWindowPlacement(p.goal, goalWindowMode) === "linear";
+    });
+    cohort.sort((a, b) =>
+      comparePreparedGoalsForMinimumFirstReservation(
+        {
+          goal: a.goal,
+          norm: a.norm,
+          effectiveMinutes: a.effectiveMinutes,
+          index: a.index,
+          weeklyFloorBeforeCatchUpBump: a.weeklyFloorBeforeCatchUpBump
+        },
+        {
+          goal: b.goal,
+          norm: b.norm,
+          effectiveMinutes: b.effectiveMinutes,
+          index: b.index,
+          weeklyFloorBeforeCatchUpBump: b.weeklyFloorBeforeCatchUpBump
+        },
+        fw
+      )
+    );
+    for (const p of cohort) {
+      const spec = deriveNnReservationSpec(p.goal, p.norm);
+      const rawCap = reservationBudgetMinutes({
+        prepared: {
+          goal: p.goal,
+          norm: p.norm,
+          effectiveMinutes: p.effectiveMinutes,
+          index: p.index,
+          weeklyFloorBeforeCatchUpBump: p.weeklyFloorBeforeCatchUpBump
+        },
+        busy,
+        blocks,
+        days,
+        weekStartMs,
+        weekEndMs,
+        spec
+      });
+      const cap = floorToQuantum(rawCap);
+      if (cap < QUANTUM) continue;
+      const savedEff = p.effectiveMinutes;
+      const execCap = Math.min(savedEff, cap);
+      if (execCap < QUANTUM) continue;
+      p.effectiveMinutes = execCap;
+      runAllocateGoalPass3(p);
+      const placed = execCap - p.effectiveMinutes;
+      p.effectiveMinutes = Math.max(0, savedEff - placed);
+    }
+  };
+
   const RR_ROUNDS = 128;
 
   const runPass3RoundRobinWaves = (cohort: PreparedGoal[]): void => {
@@ -979,6 +1060,8 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
       if (!progressed) break;
     }
   };
+
+  runNnMinimumFirstPass();
 
   if (goalWindowMode === "hybrid") {
     const linearSequential = pass3Sequential.filter(
@@ -1020,6 +1103,28 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
   } else {
     for (const p of pass3Sequential) runAllocateGoalPass3(p);
     runPass3RoundRobinWaves(pass3RoundRobin);
+  }
+
+  if (nnMinEligible) {
+    applyNnBusyMinimumOverlays({
+      prepared,
+      days,
+      blocks,
+      blocksByDay,
+      busy,
+      sleepIntervals,
+      weekStartMs,
+      weekEndMs,
+      weekAnchorDate,
+      tz,
+      allocationNowMs,
+      settings,
+      pinOnlyStacked: pinsOnlyForPrepared,
+      goalWindowMode,
+      heavyDays: multiDayHeavyBusyDayIndexes(busy, weekStartMs, weekEndMs, tz),
+      fallbackHour: settings.allocator.nonNegotiableMinimumsMorningFallbackHour ?? 7,
+      goalAvailabilityWindows: input.goalAvailabilityWindows
+    });
   }
 
   for (const b of blocks) {
@@ -1119,9 +1224,6 @@ export function allocateWeek(input: AllocateInput): AllocateResult {
           : {})
       }
     : { blocks, metrics };
-  // #region agent log
-  fetch("http://127.0.0.1:7257/ingest/a9e25fe2-a3a6-41a5-b2f2-fc188fac1d73", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "126be4" }, body: JSON.stringify({ sessionId: "126be4", runId: "allocator-output-debug", hypothesisId: "H2", location: "packages/planner/src/weekly.ts:allocateWeek:exit", message: "allocateWeek output snapshot", data: { blocks: result.blocks.length, scheduledMinutes: result.metrics.utilisation.scheduledMinutes, availableMinutes: result.metrics.utilisation.availableMinutes, weekCapacityMinutes: result.metrics.utilisation.weekCapacityMinutes, overcommitted: result.metrics.overcommitted ?? null, notScheduledCount: result.metrics.notScheduled.length, hasStackedFeasible: "stackedFeasibleByGoalId" in result }, timestamp: Date.now() }) }).catch(() => {});
-  // #endregion
   return result;
 }
 
@@ -1746,6 +1848,7 @@ function spreadEvenGoalBuffersInSnapshotGaps(
       const inside = blocks.filter(
         (b) =>
           !b.segment &&
+          !b.overBusy &&
           b.startMs >= G.startMs &&
           b.endMs <= G.endMs &&
           b.startMs < b.endMs
@@ -1872,7 +1975,9 @@ const GOAL_GROUP_PLACEMENT_MERGE_KEYS = [
   "daysOfWeek",
   "dayOfWeek",
   "minMinutesPerBlock",
-  "maxAutoBlocksPerDay"
+  "maxAutoBlocksPerDay",
+  "minMinutesPerDayNonNegotiable",
+  "minMinutesPerWeekNonNegotiable"
 ] as const satisfies readonly (keyof GoalGroup)[];
 
 /** Quantised minimum contiguous auto-block size (0 = unset). */
@@ -3722,6 +3827,218 @@ function placeBlockInGap(
     return { startMs: endMs - fitMs, endMs };
   }
   return { startMs: inner.startMs, endMs: inner.startMs + fitMs };
+}
+
+/**
+ * Pass 3c: place minimum‑obligation blocks atop calendar busy (does not shrink free gaps).
+ * Skips targets that still have schedulable free pockets on ordinary days unless the day is
+ * flagged “heavy/busy-span” (`multiDayHeavyBusyDayIndexes`).
+ */
+function applyNnBusyMinimumOverlays(opts: {
+  prepared: PreparedGoal[];
+  days: { startMs: number; endMs: number; gaps: Interval[] }[];
+  blocks: AllocatedBlock[];
+  blocksByDay: AllocatedBlock[][];
+  busy: readonly BusyEvent[];
+  sleepIntervals: readonly Interval[] | undefined;
+  weekStartMs: number;
+  weekEndMs: number;
+  weekAnchorDate: string;
+  tz: string;
+  allocationNowMs: number | undefined;
+  settings: UserSettings;
+  pinOnlyStacked: (p: PreparedGoal) => boolean;
+  goalWindowMode: NonNullable<UserSettings["allocator"]["goalWindowMode"]>;
+  heavyDays: ReadonlySet<number>;
+  fallbackHour: number;
+  goalAvailabilityWindows?: AllocateInput["goalAvailabilityWindows"];
+}): void {
+  const fh = opts.fallbackHour;
+  const ordered = [...opts.prepared].sort((a, b) =>
+    comparePreparedGoalsForMinimumFirstReservation(
+      {
+        goal: a.goal,
+        norm: a.norm,
+        effectiveMinutes: a.effectiveMinutes,
+        index: a.index,
+        weeklyFloorBeforeCatchUpBump: a.weeklyFloorBeforeCatchUpBump
+      },
+      {
+        goal: b.goal,
+        norm: b.norm,
+        effectiveMinutes: b.effectiveMinutes,
+        index: b.index,
+        weeklyFloorBeforeCatchUpBump: b.weeklyFloorBeforeCatchUpBump
+      },
+      opts.settings.schedulerFrameworkInclusion
+    )
+  );
+
+  for (const p of ordered) {
+    if (!nnOverlayAuthoredEligible(p.goal, p.norm)) continue;
+    if (opts.pinOnlyStacked(p)) continue;
+    if (effectiveWeeklyGoalWindowPlacement(p.goal, opts.goalWindowMode) !== "linear") continue;
+    if (p.effectiveMinutes < QUANTUM) continue;
+
+    const gid = p.goal.id;
+    const norm = p.norm;
+    const minBlk = minMinutesPerBlockFloor(p.goal);
+    const dayCap =
+      norm.maxMinutesPerDay === undefined ? Number.POSITIVE_INFINITY : norm.maxMinutesPerDay;
+
+    for (const dayIdx of goalAllowedDayIndexes(p.goal)) {
+      if (p.effectiveMinutes < QUANTUM) break;
+      const day = opts.days[dayIdx]!;
+      let placedDay = 0;
+      for (const b of opts.blocks) {
+        if (b.segment || b.goalId !== gid) continue;
+        const s = Math.max(b.startMs, day.startMs);
+        const e = Math.min(b.endMs, day.endMs);
+        if (e > s) placedDay += Math.floor((e - s) / MS_PER_MIN);
+      }
+      const loggedDay = loggedGoalBusyMinutesForDay(opts.busy, gid, day.startMs, day.endMs);
+
+      let dailyShort = 0;
+      if (norm.minMinutesPerDay !== undefined) {
+        dailyShort = Math.max(0, norm.minMinutesPerDay - placedDay - loggedDay);
+      }
+
+      let weeklyUnmet = 0;
+      if (norm.minMinutesPerWeek !== undefined) {
+        const achieved = mergedGoalAchievementMinutesWeek(
+          gid,
+          opts.busy,
+          opts.blocks,
+          opts.weekStartMs,
+          opts.weekEndMs
+        );
+        weeklyUnmet = Math.max(0, norm.minMinutesPerWeek - achieved);
+      }
+
+      let overlayNeed = 0;
+      if (dailyShort > 0) overlayNeed = Math.max(overlayNeed, dailyShort);
+      if (weeklyUnmet > 0) {
+        const bite = Math.min(
+          weeklyUnmet,
+          p.effectiveMinutes,
+          Math.max(minBlk || QUANTUM, QUANTUM)
+        );
+        overlayNeed = Math.max(overlayNeed, bite);
+      }
+      const freeMx = freeGapMinutesBestOnDay(day, opts.allocationNowMs);
+      if (
+        !opts.heavyDays.has(dayIdx) &&
+        norm.minMinutesPerDay !== undefined &&
+        dailyShort > 0 &&
+        freeMx >= dailyShort
+      ) {
+        continue;
+      }
+      if (!opts.heavyDays.has(dayIdx) && dailyShort <= 0 && weeklyUnmet > 0 && freeMx > 0)
+        continue;
+      if (!opts.heavyDays.has(dayIdx) && dailyShort <= 0 && weeklyUnmet <= 0) continue;
+
+      const dayHeadroom =
+        norm.maxMinutesPerDay === undefined
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, dayCap - (placedDay + loggedDay));
+
+      let wantMin = Math.min(overlayNeed, p.effectiveMinutes, dayHeadroom);
+      const blkFloor = Math.max(minBlk > 0 ? minBlk : 0, QUANTUM);
+      if (wantMin < blkFloor) wantMin = Math.min(blkFloor, p.effectiveMinutes, dayHeadroom);
+      wantMin = floorToQuantum(wantMin);
+      if (wantMin < QUANTUM) continue;
+
+      const busySlices = mergedBusyIntervalsNonDriveDay(opts.busy, day.startMs, day.endMs);
+      if (!opts.heavyDays.has(dayIdx) && busySlices.length === 0) continue;
+
+      let legalBase = overlayPlacementLegalWindows({
+        dayStartMs: day.startMs,
+        dayEndMs: day.endMs,
+        goal: p.goal,
+        tz: opts.tz,
+        availabilityWindows: opts.goalAvailabilityWindows?.[gid]
+      });
+      let cand = intersectIntervals(legalBase, busySlices);
+      cand = subtractSleepFromIntervals(cand, opts.sleepIntervals, day.startMs, day.endMs);
+      cand = subtractSegmentBlocksFromIntervals(cand, opts.blocks, day.startMs, day.endMs);
+
+      const selfOcc: Interval[] = [];
+      for (const b of opts.blocks) {
+        if (b.segment || b.goalId !== gid) continue;
+        const c = clipIntervalToWindow({ startMs: b.startMs, endMs: b.endMs }, day.startMs, day.endMs);
+        if (c) selfOcc.push(c);
+      }
+      cand = subtractIntervalsBounded(cand, selfOcc);
+
+      const pickGap = (needMin: number): Interval | null => {
+        let best: Interval | null = null;
+        for (const cv of cand) {
+          const lenMin = Math.floor((cv.endMs - cv.startMs) / MS_PER_MIN);
+          if (lenMin >= needMin && (!best || cv.startMs < best.startMs)) best = cv;
+        }
+        return best;
+      };
+
+      let slot = pickGap(wantMin);
+      if (!slot) {
+        const fb = morningFallbackInterval(
+          day.startMs,
+          day.endMs,
+          fh,
+          wantMin * MS_PER_MIN,
+          opts.tz
+        );
+        if (fb) {
+          let fbCand = intersectIntervals([fb], busySlices);
+          fbCand = subtractSleepFromIntervals(fbCand, opts.sleepIntervals, day.startMs, day.endMs);
+          fbCand = subtractSegmentBlocksFromIntervals(fbCand, opts.blocks, day.startMs, day.endMs);
+          fbCand = subtractIntervalsBounded(fbCand, selfOcc);
+          for (const cv of fbCand) {
+            const lenMin = Math.floor((cv.endMs - cv.startMs) / MS_PER_MIN);
+            if (lenMin >= wantMin) {
+              slot = cv;
+              break;
+            }
+          }
+        }
+      }
+      if (!slot) continue;
+
+      /** Overlays deliberately skip gym drive padding — busy overlay targets non‑drive collisions. */
+      const placement = placeBlockInGap(slot, wantMin * MS_PER_MIN, p.goal, opts.tz, 0);
+      const durMin = Math.floor((placement.endMs - placement.startMs) / MS_PER_MIN);
+      if (durMin < QUANTUM) continue;
+
+      const autoBlocksToday =
+        opts.blocksByDay[dayIdx]?.filter(
+          (b) => !b.segment && !b.pinnedFromOverride && b.goalId === gid
+        ).length ?? 0;
+      const capAuto = maxAutoBlocksPerCalendarDay(p.goal, norm);
+      if (Number.isFinite(capAuto) && autoBlocksToday >= capAuto) continue;
+
+      if (opts.allocationNowMs !== undefined && placement.endMs <= opts.allocationNowMs) continue;
+
+      const slotIndex = nextAutoGoalSlotIndex(opts.blocks, gid, opts.weekAnchorDate);
+      const dragKey = buildGoalDragKey(gid, opts.weekAnchorDate, slotIndex);
+      const newBlk: AllocatedBlock = {
+        goalId: gid,
+        title: p.goal.title,
+        startMs: placement.startMs,
+        endMs: placement.endMs,
+        energyMode: p.goal.energyMode,
+        ...(p.goal.wheelAreaId !== undefined ? { wheelAreaId: p.goal.wheelAreaId } : {}),
+        ...(p.goal.ppfPillar !== undefined ? { ppfPillar: p.goal.ppfPillar } : {}),
+        ...(p.goal.hp6Habit !== undefined ? { hp6Habit: p.goal.hp6Habit } : {}),
+        dragKey,
+        pinnedFromOverride: false,
+        overBusy: true
+      };
+      opts.blocks.push(newBlk);
+      opts.blocksByDay[dayIdx]!.push(newBlk);
+      p.effectiveMinutes = Math.max(0, p.effectiveMinutes - durMin);
+    }
+  }
 }
 
 function sortBlocksByEnergyCurve(
