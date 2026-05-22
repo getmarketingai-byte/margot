@@ -175,4 +175,62 @@ describe("non-negotiable minimums", () => {
       off.metrics.perGoal["overlay-goal"]!.unplacedMinutes
     );
   });
+
+  it("places a busy overlay on a heavy weekday even when weekly Pass 2 demand is already exhausted", () => {
+    const weekStartMs = Date.UTC(2026, 4, 18, 0, 0, 0); // Mon 18 May 2026 UTC
+    const satStart = weekStartMs + 5 * DAY_MS;
+
+    const busy: BusyEvent[] = [
+      {
+        id: "camp",
+        startMs: weekStartMs + 4 * DAY_MS + 15 * HOUR_MS,
+        endMs: weekStartMs + 6 * DAY_MS + 16 * HOUR_MS + 30 * 60 * 1000,
+        busy: true,
+        title: "Group Camp"
+      },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `work-${i}`,
+        startMs: weekStartMs + i * DAY_MS + 8 * HOUR_MS,
+        endMs: weekStartMs + i * DAY_MS + 17 * HOUR_MS,
+        busy: true,
+        title: "Technical work"
+      }))
+    ];
+
+    const focused = goal({
+      id: "focused",
+      title: "Focused",
+      minMinutesPerDay: 60,
+      minMinutesPerDayNonNegotiable: true,
+      minMinutesPerWeek: 420,
+      allocationSharePercent: 20,
+      targetMinutes: 600
+    });
+
+    const plan: WeeklyPlan = {
+      id: "p-heavy-sat",
+      weekStart: "2026-05-18",
+      timezone: "UTC",
+      goalGroups: [],
+      goals: [focused],
+      overrides: [],
+      weeklyIntent: { hp6Focus: [] }
+    };
+
+    const result = allocateWeek({
+      plan,
+      busy,
+      niceWeatherWindows: [],
+      settings: nnSettings(true),
+      weekStartMs,
+      weekEndMs: weekStartMs + 7 * DAY_MS,
+      weekAnchorDate: "2026-05-18"
+    });
+
+    const satBlocks = result.blocks.filter(
+      (b) => !b.segment && b.goalId === "focused" && b.startMs >= satStart && b.startMs < satStart + DAY_MS
+    );
+    expect(satBlocks.some((b) => b.overBusy === true)).toBe(true);
+    expect(scheduledMinutes(satBlocks, "focused")).toBeGreaterThanOrEqual(60);
+  });
 });

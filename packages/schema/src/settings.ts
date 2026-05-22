@@ -607,7 +607,7 @@ export const allocatorSettingsSchema = z.object({
    * When enabled, Pass 3 runs minimum‑first reservation in free gaps, then overlays
    * remaining minimum obligations on calendar busy when needed (travel days).
    */
-  nonNegotiableMinimumsEnabled: z.boolean().default(false),
+  nonNegotiableMinimumsEnabled: z.boolean().default(true),
   /**
    * Fallback local clock hour when goal placement bands yield no qualifying slot,
    * for Pass 3a minimum‑first placement and Pass 3c busy overlays (0‑23).

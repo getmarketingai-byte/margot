@@ -3878,7 +3878,13 @@ function applyNnBusyMinimumOverlays(opts: {
     if (!nnOverlayAuthoredEligible(p.goal, p.norm)) continue;
     if (opts.pinOnlyStacked(p)) continue;
     if (effectiveWeeklyGoalWindowPlacement(p.goal, opts.goalWindowMode) !== "linear") continue;
-    if (p.effectiveMinutes < QUANTUM) continue;
+    const allowedDayIndexes = goalAllowedDayIndexes(p.goal);
+    if (
+      p.effectiveMinutes < QUANTUM &&
+      !allowedDayIndexes.some((d) => opts.heavyDays.has(d))
+    ) {
+      continue;
+    }
 
     const gid = p.goal.id;
     const norm = p.norm;
@@ -3886,8 +3892,7 @@ function applyNnBusyMinimumOverlays(opts: {
     const dayCap =
       norm.maxMinutesPerDay === undefined ? Number.POSITIVE_INFINITY : norm.maxMinutesPerDay;
 
-    for (const dayIdx of goalAllowedDayIndexes(p.goal)) {
-      if (p.effectiveMinutes < QUANTUM) break;
+    for (const dayIdx of allowedDayIndexes) {
       const day = opts.days[dayIdx]!;
       let placedDay = 0;
       for (const b of opts.blocks) {
@@ -3937,13 +3942,18 @@ function applyNnBusyMinimumOverlays(opts: {
       if (!opts.heavyDays.has(dayIdx) && dailyShort <= 0 && weeklyUnmet > 0 && freeMx > 0)
         continue;
       if (!opts.heavyDays.has(dayIdx) && dailyShort <= 0 && weeklyUnmet <= 0) continue;
+      if (!opts.heavyDays.has(dayIdx) && p.effectiveMinutes < QUANTUM) continue;
 
       const dayHeadroom =
         norm.maxMinutesPerDay === undefined
           ? Number.POSITIVE_INFINITY
           : Math.max(0, dayCap - (placedDay + loggedDay));
 
-      let wantMin = Math.min(overlayNeed, p.effectiveMinutes, dayHeadroom);
+      /** Heavy-day overlays are symbolic atop calendar busy — not gated by Pass 2 remainder. */
+      let wantMin = Math.min(overlayNeed, dayHeadroom);
+      if (!opts.heavyDays.has(dayIdx)) {
+        wantMin = Math.min(wantMin, p.effectiveMinutes);
+      }
       const blkFloor = Math.max(minBlk > 0 ? minBlk : 0, QUANTUM);
       if (wantMin < blkFloor) wantMin = Math.min(blkFloor, p.effectiveMinutes, dayHeadroom);
       wantMin = floorToQuantum(wantMin);
@@ -4036,7 +4046,9 @@ function applyNnBusyMinimumOverlays(opts: {
       };
       opts.blocks.push(newBlk);
       opts.blocksByDay[dayIdx]!.push(newBlk);
-      p.effectiveMinutes = Math.max(0, p.effectiveMinutes - durMin);
+      if (!opts.heavyDays.has(dayIdx)) {
+        p.effectiveMinutes = Math.max(0, p.effectiveMinutes - durMin);
+      }
     }
   }
 }

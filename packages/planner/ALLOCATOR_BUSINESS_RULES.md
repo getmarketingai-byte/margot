@@ -67,7 +67,7 @@ Under **hybrid**, preview / ICS merge runs **`mergeOrphanGoalOverrideBlocks`** o
 
 ## Non-negotiable minimums (`settings.allocator.nonNegotiableMinimumsEnabled`)
 
-**Default off.** When off, allocator behaviour matches historical Pass 3 (no minimum-first cohort, no busy overlays).
+**Default on.** When off, allocator behaviour matches historical Pass 3 (no minimum-first cohort, no busy overlays).
 
 When **on** (and global goal window mode is not **`stacked`**):
 
