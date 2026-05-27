@@ -2942,6 +2942,10 @@ describe("allocateWeek energy-aware suggestion pass", () => {
       plan: tierPlan,
       busy: [],
       settings: buildSettings({
+        allocator: {
+          ...DEFAULT_USER_SETTINGS.allocator,
+          nonNegotiableMinimumsEnabled: false
+        },
         schedulerFrameworkInclusion: {
           ...DEFAULT_USER_SETTINGS.schedulerFrameworkInclusion,
           commitment: false

@@ -62,7 +62,16 @@ export interface GoalCalendarSlice {
   dragOverrideSaved?: boolean;
   overrideSource?: "drag" | "actual";
   pinnedFromOverride?: boolean;
+  /** True when this slice is a minimum-on-busy overlay (may overlap calendar busy when dragging). */
+  overBusy?: boolean;
 }
+
+export type GoalDragReservation = {
+  startMs: number;
+  endMs: number;
+  /** When true, drag may overlap this interval if the block is an NN busy overlay. */
+  calendarBusyLayer: boolean;
+};
 
 interface DraggableProposedGoalBlockProps {
   topPx: number;
@@ -79,7 +88,12 @@ interface DraggableProposedGoalBlockProps {
    * Sleep, routines, travel, and calendar busy — drags that would overlap any
    * of these are rejected (matches planner hard constraints).
    */
-  reservedForGoalDrag: readonly { startMs: number; endMs: number }[];
+  reservedForGoalDrag: readonly GoalDragReservation[];
+  /**
+   * When true, calendar busy intervals in `reservedForGoalDrag` are ignored for collision
+   * (NN minimum overlay blocks).
+   */
+  allowCalendarBusyOverlap?: boolean;
   /**
    * When set, called with new epoch times per `dragKey` after a successful save.
    */
@@ -106,7 +120,8 @@ export function DraggableProposedGoalBlock({
   onDragCommit,
   frameworkOverlayChips,
   onDragOverridesCleared,
-  layerZClass = "z-20"
+  layerZClass = "z-20",
+  allowCalendarBusyOverlap = false
 }: DraggableProposedGoalBlockProps) {
   const router = useRouter();
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -202,8 +217,9 @@ export function DraggableProposedGoalBlock({
       const ns = s.startMs + deltaMs;
       const ne = s.endMs + deltaMs;
       for (const r of reservedForGoalDrag) {
+        if (allowCalendarBusyOverlap && r.calendarBusyLayer) continue;
         if (intervalsOverlap(ns, ne, r.startMs, r.endMs)) {
-          console.warn("Goal drag rejected: overlaps sleep, routine, travel, or an existing event.");
+          console.warn("Goal drag rejected: overlaps sleep, routine, travel, day-sheet log, or an existing event.");
           return;
         }
       }
@@ -298,6 +314,7 @@ export function DraggableProposedGoalBlock({
   }, [contextMenu]);
 
   const isFromDaySheet = slices.some((s) => s.overrideSource === "actual");
+  const isBusyOverlay = slices.some((s) => s.overBusy);
 
   const bodyStyle: CSSProperties = {
     top: topPx,
@@ -333,7 +350,7 @@ export function DraggableProposedGoalBlock({
         isFromDaySheet
           ? "ring-1 ring-ink-900/25 ring-inset dark:ring-white/20"
           : ""
-      }`}
+      } ${isBusyOverlay ? "ring-1 ring-dashed ring-white/80 ring-inset" : ""}`}
       style={bodyStyle}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

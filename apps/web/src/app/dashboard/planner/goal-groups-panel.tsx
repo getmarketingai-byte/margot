@@ -278,14 +278,44 @@ function GroupConstraintEditors({
 
   return (
     <div className="grid gap-3 sm:grid-cols-2">
-      <ConstraintCard label="Weekly floor" onRemove={() => onPatch({ minMinutesPerWeek: undefined })}>
+      <ConstraintCard
+        label="Weekly floor"
+        onRemove={() =>
+          onPatch({
+            minMinutesPerWeek: undefined,
+            minMinutesPerWeekNonNegotiable: undefined
+          })
+        }
+      >
         <DurationField
           value={group.minMinutesPerWeek}
-          onChange={(minMinutesPerWeek) => onPatch({ minMinutesPerWeek })}
+          onChange={(minMinutesPerWeek) =>
+            onPatch({
+              minMinutesPerWeek,
+              ...(minMinutesPerWeek === undefined ? { minMinutesPerWeekNonNegotiable: undefined } : {})
+            })
+          }
           hint="Minimum aggregate minutes / week across members."
           sliderMinMinutes={0}
           sliderMaxMinutes={48 * 60}
         />
+        {group.minMinutesPerWeek !== undefined ? (
+          <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-ink-600 dark:text-ink-300">
+            <input
+              type="checkbox"
+              checked={group.minMinutesPerWeekNonNegotiable === true}
+              onChange={(e) =>
+                onPatch({
+                  minMinutesPerWeekNonNegotiable: e.target.checked ? true : undefined
+                })
+              }
+              className="mt-0.5"
+            />
+            <span title="Reserve this minimum in free time before other goals; on travel days, overlay on busy if needed.">
+              Non-negotiable (weekly floor)
+            </span>
+          </label>
+        ) : null}
       </ConstraintCard>
       <ConstraintCard label="Weekly ceiling" onRemove={() => onPatch({ maxMinutesPerWeek: undefined })}>
         <DurationField
@@ -296,13 +326,43 @@ function GroupConstraintEditors({
           sliderMaxMinutes={48 * 60}
         />
       </ConstraintCard>
-      <ConstraintCard label="Daily floor" onRemove={() => onPatch({ minMinutesPerDay: undefined })}>
+      <ConstraintCard
+        label="Daily floor"
+        onRemove={() =>
+          onPatch({
+            minMinutesPerDay: undefined,
+            minMinutesPerDayNonNegotiable: undefined
+          })
+        }
+      >
         <DurationField
           value={group.minMinutesPerDay}
-          onChange={(minMinutesPerDay) => onPatch({ minMinutesPerDay })}
+          onChange={(minMinutesPerDay) =>
+            onPatch({
+              minMinutesPerDay,
+              ...(minMinutesPerDay === undefined ? { minMinutesPerDayNonNegotiable: undefined } : {})
+            })
+          }
           sliderMinMinutes={0}
           sliderMaxMinutes={24 * 60}
         />
+        {group.minMinutesPerDay !== undefined ? (
+          <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-ink-600 dark:text-ink-300">
+            <input
+              type="checkbox"
+              checked={group.minMinutesPerDayNonNegotiable === true}
+              onChange={(e) =>
+                onPatch({
+                  minMinutesPerDayNonNegotiable: e.target.checked ? true : undefined
+                })
+              }
+              className="mt-0.5"
+            />
+            <span title="Reserve this minimum in free time before other goals; on travel days, overlay on busy if needed.">
+              Non-negotiable (daily floor)
+            </span>
+          </label>
+        ) : null}
       </ConstraintCard>
       <ConstraintCard label="Daily cap" onRemove={() => onPatch({ maxMinutesPerDay: undefined })}>
         <DurationField

@@ -75,6 +75,28 @@ async function updateCatchUpMode(formData: FormData): Promise<void> {
   afterConstraintsSave(userId);
 }
 
+async function updateNonNegotiableMinimums(formData: FormData): Promise<void> {
+  "use server";
+  const session = await authOrPreview();
+  if (!session?.user?.id) return;
+  const userId = session.user.id;
+  const settings = await loadSettings(userId);
+  const nonNegotiableMinimumsEnabled = formData.get("nonNegotiableMinimumsEnabled") === "on";
+  const hourRaw = Number(formData.get("nonNegotiableMinimumsMorningFallbackHour"));
+  const fb = Number.isFinite(hourRaw)
+    ? Math.min(23, Math.max(0, Math.round(hourRaw)))
+    : (settings.allocator.nonNegotiableMinimumsMorningFallbackHour ?? 7);
+  await saveSettings(userId, {
+    ...settings,
+    allocator: {
+      ...settings.allocator,
+      nonNegotiableMinimumsEnabled,
+      nonNegotiableMinimumsMorningFallbackHour: fb
+    }
+  });
+  afterConstraintsSave(userId);
+}
+
 async function updateRoutines(formData: FormData): Promise<void> {
   "use server";
   const session = await authOrPreview();
@@ -156,6 +178,12 @@ function starvationDisclosureSummary(settings: UserSettings): string {
   return settings.allocator.starvationMode === "strict"
     ? "Strict (goal order)"
     : "Proportional (trim all)";
+}
+
+function nonNegotiableMinimumsDisclosureSummary(settings: UserSettings): string {
+  const on = settings.allocator.nonNegotiableMinimumsEnabled === true;
+  const h = settings.allocator.nonNegotiableMinimumsMorningFallbackHour ?? 7;
+  return on ? `On · fallback ~${h}:00 local` : "Off";
 }
 
 export async function ConstraintsSection() {
@@ -317,6 +345,58 @@ export async function ConstraintsSection() {
                 Save
               </button>
             </div>
+          </ConstraintCard>
+        </form>
+      </details>
+
+      <details className="card">
+        <summary className="flex cursor-pointer list-none flex-col gap-0.5 py-0.5 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-baseline sm:gap-2">
+          <span className="text-sm font-semibold">Non-negotiable minimums</span>
+          <span className="text-xs font-normal text-ink-500 dark:text-ink-400">
+            {nonNegotiableMinimumsDisclosureSummary(settings)}
+          </span>
+        </summary>
+        <p className="mt-1 text-xs text-ink-400">
+          Reserve marked weekly/daily minimums in free time before other linear goals consume gaps; on dense
+          or multi-day-busy calendars, optionally show a thin block overlapping read-only calendar busy so
+          the floor is still visible. Does not stack-mode goals; weekly capacity totals are unchanged.
+          Sleep from your modeled week grid reduces free gaps like other unavailable time; overlays never sit
+          on sleep, and the morning fallback anchor is the later of your configured hour and wake from modeled
+          sleep that day when the planner has sleep timings (same inputs as Perfect Week).
+        </p>
+        <form action={updateNonNegotiableMinimums} className="mt-3 space-y-3">
+          <ConstraintCard label="Minimum-first placement + busy overlay">
+            <label className="flex cursor-pointer items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="nonNegotiableMinimumsEnabled"
+                value="on"
+                defaultChecked={settings.allocator.nonNegotiableMinimumsEnabled === true}
+                className="mt-1"
+              />
+              <span>
+                Enable for linear / hybrid-linear goals (
+                <a className="underline" href="/dashboard/plan">
+                  per-row non-negotiable minimums
+                </a>{" "}
+                under Min per week/day).
+              </span>
+            </label>
+            <label className="mt-3 flex flex-col gap-1 text-xs">
+              <span>Morning fallback hour (local) — not before wake from modeled sleep when sleep is in the allocation input</span>
+              <input
+                type="number"
+                name="nonNegotiableMinimumsMorningFallbackHour"
+                min={0}
+                max={23}
+                step={1}
+                defaultValue={settings.allocator.nonNegotiableMinimumsMorningFallbackHour ?? 7}
+                className="field max-w-[8rem]"
+              />
+            </label>
+            <button type="submit" className="btn-primary mt-3 w-fit text-xs">
+              Save
+            </button>
           </ConstraintCard>
         </form>
       </details>

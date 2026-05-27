@@ -602,7 +602,17 @@ export const allocatorSettingsSchema = z.object({
    * feasible ribbons (`stacked`), or per-goal **linear | stacked** via
    * `WeeklyGoal.goalWindowPlacement` (`hybrid`).
    */
-  goalWindowMode: z.enum(["linear", "stacked", "hybrid"]).default("linear")
+  goalWindowMode: z.enum(["linear", "stacked", "hybrid"]).default("linear"),
+  /**
+   * When enabled, Pass 3 runs minimum‑first reservation in free gaps, then overlays
+   * remaining minimum obligations on calendar busy when needed (travel days).
+   */
+  nonNegotiableMinimumsEnabled: z.boolean().default(true),
+  /**
+   * Fallback local clock hour when goal placement bands yield no qualifying slot,
+   * for Pass 3a minimum‑first placement and Pass 3c busy overlays (0‑23).
+   */
+  nonNegotiableMinimumsMorningFallbackHour: hour.default(7)
 });
 export type AllocatorSettings = z.infer<typeof allocatorSettingsSchema>;
 
