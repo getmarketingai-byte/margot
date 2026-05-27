@@ -329,12 +329,29 @@ export function mergedBusyIntervalsNonDriveDay(
   return mergeIntervals(raw);
 }
 
+/** Latest `endMs` of sleep overlapping `[dayStartMs, dayEndMs)` — used to anchor NN busy fallbacks after wake. */
+export function latestSleepEndMsInDay(
+  sleepIntervals: readonly Interval[] | undefined,
+  dayStartMs: number,
+  dayEndMs: number
+): number | undefined {
+  if (!sleepIntervals?.length) return undefined;
+  let best = -Infinity;
+  for (const s of sleepIntervals) {
+    const c = clipInterval(s, dayStartMs, dayEndMs);
+    if (c && c.endMs > best) best = c.endMs;
+  }
+  return Number.isFinite(best) && best > dayStartMs ? best : undefined;
+}
+
 export function morningFallbackInterval(
   dayStartMs: number,
   dayEndMs: number,
   fallbackHour: number,
   durationMs: number,
-  tz: string
+  tz: string,
+  /** When set (e.g. end of modeled sleep that day), fallback never starts before this instant. */
+  earliestStartMs?: number
 ): Interval | null {
   const dk = dateKeyInTz(dayStartMs, tz);
   const segs = dk.split("-").map(Number);
@@ -343,12 +360,14 @@ export function morningFallbackInterval(
   const da = segs[2]!;
   if (!Number.isFinite(ys) || !Number.isFinite(mo) || !Number.isFinite(da)) return null;
   const dayMid = localMidnightMs(ys, mo, da, tz);
-  let startMs = dayMid + fallbackHour * 3600 * 1000;
+  const hourStart = dayMid + fallbackHour * 3600 * 1000;
+  const floor = earliestStartMs ?? -Infinity;
+  let startMs = Math.max(hourStart, floor, dayStartMs);
   let endMs = startMs + durationMs;
   if (endMs > dayEndMs) {
     endMs = dayEndMs;
     startMs = endMs - durationMs;
-    if (startMs < dayStartMs) startMs = dayStartMs;
+    startMs = Math.max(startMs, dayStartMs, floor);
   }
   if (endMs <= startMs) return null;
   return {

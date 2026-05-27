@@ -360,6 +360,9 @@ export async function ConstraintsSection() {
           Reserve marked weekly/daily minimums in free time before other linear goals consume gaps; on dense
           or multi-day-busy calendars, optionally show a thin block overlapping read-only calendar busy so
           the floor is still visible. Does not stack-mode goals; weekly capacity totals are unchanged.
+          Sleep from your modeled week grid reduces free gaps like other unavailable time; overlays never sit
+          on sleep, and the morning fallback anchor is the later of your configured hour and wake from modeled
+          sleep that day when the planner has sleep timings (same inputs as Perfect Week).
         </p>
         <form action={updateNonNegotiableMinimums} className="mt-3 space-y-3">
           <ConstraintCard label="Minimum-first placement + busy overlay">
@@ -380,7 +383,7 @@ export async function ConstraintsSection() {
               </span>
             </label>
             <label className="mt-3 flex flex-col gap-1 text-xs">
-              <span>Morning fallback hour (local) when bands do not intersect busy</span>
+              <span>Morning fallback hour (local) — not before wake from modeled sleep when sleep is in the allocation input</span>
               <input
                 type="number"
                 name="nonNegotiableMinimumsMorningFallbackHour"

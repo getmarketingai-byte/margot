@@ -8,6 +8,7 @@ import {
   SETTINGS_SCHEMA_VERSION,
   weeklyGoalSchema
 } from "@calendar-automations/schema";
+import { morningFallbackInterval, latestSleepEndMsInDay } from "../src/non-negotiable-minimums";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -232,5 +233,28 @@ describe("non-negotiable minimums", () => {
     );
     expect(satBlocks.some((b) => b.overBusy === true)).toBe(true);
     expect(scheduledMinutes(satBlocks, "focused")).toBeGreaterThanOrEqual(60);
+  });
+});
+
+describe("non-negotiable minimums — sleep-aware fallback", () => {
+  it("morningFallbackInterval does not start before modeled sleep ends when earliestStartMs is set", () => {
+    const dayStart = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const dayEnd = dayStart + DAY_MS;
+    const dur = 30 * 60 * 1000;
+    const at7 = morningFallbackInterval(dayStart, dayEnd, 7, dur, "UTC");
+    const wakeEnd = dayStart + 9 * HOUR_MS;
+    const atWake = morningFallbackInterval(dayStart, dayEnd, 7, dur, "UTC", wakeEnd);
+    expect(at7!.startMs).toBe(dayStart + 7 * HOUR_MS);
+    expect(atWake!.startMs).toBeGreaterThanOrEqual(wakeEnd);
+  });
+
+  it("latestSleepEndMsInDay returns the latest sleep end inside the day window", () => {
+    const dayStart = Date.UTC(2026, 3, 27, 0, 0, 0);
+    const dayEnd = dayStart + DAY_MS;
+    const sleep = [
+      { startMs: dayStart + 1 * HOUR_MS, endMs: dayStart + 3 * HOUR_MS },
+      { startMs: dayStart + 22 * HOUR_MS, endMs: dayEnd - 1 * HOUR_MS }
+    ];
+    expect(latestSleepEndMsInDay(sleep, dayStart, dayEnd)).toBe(dayEnd - 1 * HOUR_MS);
   });
 });

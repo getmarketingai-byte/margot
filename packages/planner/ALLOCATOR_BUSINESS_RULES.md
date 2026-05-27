@@ -67,7 +67,7 @@ Under **hybrid**, preview / ICS merge runs **`mergeOrphanGoalOverrideBlocks`** o
 
 ## Non-negotiable minimums (`settings.allocator.nonNegotiableMinimumsEnabled`)
 
-**Default on.** When off, allocator behaviour matches historical Pass 3 (no minimum-first cohort, no busy overlays).
+**Default off.** When off, allocator behaviour matches historical Pass 3 (no minimum-first cohort, no busy overlays).
 
 When **on** (and global goal window mode is not **`stacked`**):
 
@@ -89,7 +89,15 @@ When **on** (and global goal window mode is not **`stacked`**):
 - The even-spread packing pass skips **`overBusy`** blocks [`spreadEvenGoalBuffersInSnapshotGaps`](src/weekly.ts): overlays do not shift padding inside genuine free gaps.
 - **`weekCapacityMinutes`** stays the pre–Pass 3 full-week gap total — overlays never consume **`day.gaps`**.
 
-Placement windows, sleep / non-negotiable segment exclusions, **`nowMs`** clipping, **`nonNegotiableMinimumsMorningFallbackHour`** (busy overlay / band fallback anchor), and **`goalAvailabilityWindows`** apply the same way as greedy Pass 3.
+### Modelled sleep (system layer)
+
+- **Pass 3a–3b:** Callers normally pass **calendar busy + `systemBlocks` (sleep, travel legs, routines)** into `allocateWeek({ busy })`, so free gaps already exclude modeled sleep — same geometry as greedy placement.
+- **Pins:** `sleepIntervals` (modeled sleep merged with `[Sleep][Actual]` calendar rows) blocks relaxed **actual** pins from landing on sleep ([`sleepIntervalsForAllocation`](../../apps/web/src/lib/week-blocks.ts)).
+- **Pass 3c overlays:** Candidate busy slices exclude drive titles, then **`subtractSleepFromIntervals`** removes sleep-shaped time so overlays do not depict minimums across real sleep.
+
+**Morning fallback anchor:** When overlays need [`morningFallbackInterval`](src/non-negotiable-minimums.ts) (no natural busy slice inside placement bands), the interval is clamped to **no earlier than the end of modeled sleep that day** when `sleepIntervals` is provided — so the fallback hour (settings) is a floor, not an instruction to start before wake.
+
+Placement windows, non-negotiable consistency segment exclusions, **`nowMs`** clipping, **`nonNegotiableMinimumsMorningFallbackHour`**, and **`goalAvailabilityWindows`** otherwise match greedy Pass 3.
 
 ## Stacked goal-window mode (`settings.allocator.goalWindowMode === "stacked"`)
 
