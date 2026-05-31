@@ -7,7 +7,7 @@ import { loadSettings, saveSettings } from "@/lib/settings-store";
 import {
   coerceSettingsAfterLegacyWheelPpfHppEdit,
   type Hp6HabitKey,
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 
 import { frameworkRuleFormPillarKeys as PILLARS } from "./framework-rule-form-shared";
 const HP6_KEYS: Readonly<Hp6HabitKey[]> = [

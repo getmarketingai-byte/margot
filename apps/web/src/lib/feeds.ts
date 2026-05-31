@@ -3,11 +3,11 @@
  * custom feed rules, and ICS title normalization.
  */
 
-import type { GeneratedEvent } from "@calendar-automations/schema";
+import type { GeneratedEvent } from "@margot/schema";
 import {
   parseIcsFeedRules,
   type IcsFeedRules
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { db, schema } from "./db/index";
 

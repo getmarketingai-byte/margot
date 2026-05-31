@@ -6,8 +6,8 @@
  * re-allocation) still need to show on the Perfect Week calendar.
  */
 
-import type { AllocatedBlock } from "@calendar-automations/planner";
-import type { WeeklyPlan } from "@calendar-automations/schema";
+import type { AllocatedBlock } from "@margot/planner";
+import type { WeeklyPlan } from "@margot/schema";
 import { parseGoalOverrideKey } from "@/lib/goal-override-key";
 
 function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {

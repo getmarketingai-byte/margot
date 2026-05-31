@@ -3,9 +3,9 @@
  * and week grid so logged time consumes free gaps like calendar events.
  */
 
-import type { DailyReview } from "@calendar-automations/schema";
-import type { BusyEvent } from "@calendar-automations/planner";
-import { clip, mergeIntervals, type Interval } from "@calendar-automations/planner";
+import type { DailyReview } from "@margot/schema";
+import type { BusyEvent } from "@margot/planner";
+import { clip, mergeIntervals, type Interval } from "@margot/planner";
 import { localMidnightMs } from "@/lib/week";
 
 export interface DaySheetGoalBusyInput {

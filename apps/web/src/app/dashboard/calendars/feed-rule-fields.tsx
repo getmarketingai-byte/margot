@@ -1,4 +1,4 @@
-import type { IcsFeedRulesInclude } from "@calendar-automations/schema";
+import type { IcsFeedRulesInclude } from "@margot/schema";
 
 function LabeledCheckbox(props: {
   name: string;

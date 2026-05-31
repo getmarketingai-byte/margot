@@ -10,8 +10,8 @@ import { createHash } from "crypto";
 import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
-import type { BusyEvent, Interval } from "@calendar-automations/planner";
-import { normaliseCalendarSource, type CalendarSource } from "@calendar-automations/schema";
+import type { BusyEvent, Interval } from "@margot/planner";
+import { normaliseCalendarSource, type CalendarSource } from "@margot/schema";
 import {
   invalidateUserAllocationCache,
   scheduleInvalidateUserAllocationCache

@@ -15,12 +15,12 @@ import type {
   GymSettings,
   TrashedGoalEntry,
   WeeklyGoal
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import {
   isInvertedTimemapGoal,
   normalisePlacementIdealClockBoundary,
   normalisePlacementIdealClockFilter
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import Link from "next/link";
 import {
   STARTER_GOALS,
@@ -40,7 +40,7 @@ import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRef
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { GOAL_FOCUS_EVENT, type GoalFocusDetail } from "@/lib/goal-focus";
 import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
-import { planOwnedPhysicalActivitySkeleton } from "@calendar-automations/planner";
+import { planOwnedPhysicalActivitySkeleton } from "@margot/planner";
 import { addGoal, emptyTrash, removeGoal, reorderGoals, restoreGoalFromTrash, updateGoal } from "./actions";
 import {
   ConstraintCard,

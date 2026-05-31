@@ -3,9 +3,9 @@ const nextConfig = {
   reactStrictMode: true,
   typedRoutes: false,
   transpilePackages: [
-    "@calendar-automations/schema",
-    "@calendar-automations/planner",
-    "@calendar-automations/marketing"
+    "@margot/schema",
+    "@margot/planner",
+    "@margot/marketing"
   ]
 };
 

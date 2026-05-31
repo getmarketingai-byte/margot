@@ -1,4 +1,4 @@
-import type { GeneratedEvent } from "@calendar-automations/schema";
+import type { GeneratedEvent } from "@margot/schema";
 
 /**
  * Calendar clients treat duplicate `UID` values in one feed as one logical

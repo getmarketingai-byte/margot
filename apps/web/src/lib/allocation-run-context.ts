@@ -7,9 +7,9 @@
 import "server-only";
 
 import { unstable_rethrow } from "next/navigation";
-import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
-import { filterSchedulingGoals, normaliseGoalTime } from "@calendar-automations/schema";
-import type { BusyEvent } from "@calendar-automations/planner";
+import type { DailyReview, UserSettings, WeeklyPlan } from "@margot/schema";
+import { filterSchedulingGoals, normaliseGoalTime } from "@margot/schema";
+import type { BusyEvent } from "@margot/planner";
 import {
   allocateWeek,
   baselineWeeklyMinuteTargets,
@@ -17,7 +17,7 @@ import {
   computeDayCalendarDrainScores,
   goalOverrideSourcesFromPlan,
   schedulingGoalsWithWeeklyRoutines
-} from "@calendar-automations/planner";
+} from "@margot/planner";
 import { fetchGoogleBusy } from "@/lib/google-busy-cache";
 import { isoCalendarDay, localMondayMidnightMs } from "@/lib/week";
 import { buildSystemBlocks, computeSystemBlocksWithSleepRoutineCache, overridesFromPlan } from "@/lib/system-blocks-server";
@@ -25,7 +25,7 @@ import { sleepIntervalsForAllocation, type SystemBlock } from "@/lib/week-blocks
 import { createLegResolver } from "@/lib/routing";
 import { outsideNiceWeatherIntervalsInRange } from "@/lib/nice-weather-intervals";
 import { buildWeatherTimemapEvents } from "@/lib/weather-timemap";
-import type { GeneratedEvent } from "@calendar-automations/schema";
+import type { GeneratedEvent } from "@margot/schema";
 import { saveSettings } from "@/lib/settings-store";
 import {
   isoDatesForWeek,

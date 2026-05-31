@@ -4,7 +4,7 @@
  *
  * Exposes three read-only tools that return ONLY public product facts. There
  * is no per-user data, no calendar access, and no token handling here. The
- * data comes from @calendar-automations/marketing so /llms.txt, JSON-LD, and
+ * data comes from @margot/marketing so /llms.txt, JSON-LD, and
  * this server cannot disagree.
  *
  * Tools:
@@ -28,13 +28,13 @@ import {
   SUBSCRIBE_APPLE_STEPS,
   SUBSCRIBE_GOOGLE_STEPS,
   urlsFor
-} from "@calendar-automations/marketing";
+} from "@margot/marketing";
 
-const SITE_URL = (process.env.CALENDAR_AUTOMATIONS_SITE_URL ?? "https://calendar-automations.app").replace(/\/$/, "");
+const SITE_URL = (process.env.CALENDAR_AUTOMATIONS_SITE_URL ?? "https://margot.getmarketingai.com.au").replace(/\/$/, "");
 const URLS = urlsFor(SITE_URL);
 
 const server = new McpServer({
-  name: "calendar-automations",
+  name: "margot",
   version: "0.1.0"
 });
 

@@ -17,7 +17,7 @@ import {
   weeklyGoalSchema,
   weeklyIntentSchema,
   weeklyPlanSchema
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { isoCalendarDay, localMidnightMs } from "@/lib/week";

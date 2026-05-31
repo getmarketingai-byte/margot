@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SleepSettings } from "@calendar-automations/schema";
+import type { SleepSettings } from "@margot/schema";
 import { formatSleepBlockTitle, placeSleepBlock } from "../src/sleep";
 import type { BusyEvent } from "../src/types";
 

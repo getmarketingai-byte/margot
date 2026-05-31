@@ -7,7 +7,7 @@ import type {
   FrameworkRegistryEntry,
   FrameworkRegistryId,
   WeeklyGoal
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 
 /** When a key is missing, defaults to framework row's `overlay.enabled`. */
 export type FrameworkOverlayLayerState = Partial<Record<FrameworkRegistryId, boolean>>;

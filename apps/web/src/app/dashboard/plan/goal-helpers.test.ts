@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GoalGroup, WeeklyGoal } from "@calendar-automations/schema";
+import type { GoalGroup, WeeklyGoal } from "@margot/schema";
 import {
   aggregateGroupConstraintSummariesForGoal,
   formatMinutes,

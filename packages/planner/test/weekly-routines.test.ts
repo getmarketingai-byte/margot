@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_USER_SETTINGS, weeklyGoalSchema } from "@calendar-automations/schema";
+import { DEFAULT_USER_SETTINGS, weeklyGoalSchema } from "@margot/schema";
 import {
   goalsInPlanOrderForRibbonLanes,
   physicalActivityWeeklyGoalFromGymSettings,

@@ -1,4 +1,4 @@
-import type { UserSettings } from "@calendar-automations/schema";
+import type { UserSettings } from "@margot/schema";
 import { updateWheel } from "./framework-rules-actions";
 
 export function WheelOfLifeForm({

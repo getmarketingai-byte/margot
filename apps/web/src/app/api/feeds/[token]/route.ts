@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { renderIcs } from "@calendar-automations/planner";
+import { renderIcs } from "@margot/planner";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { dedupeGeneratedEventsByUid } from "@/lib/dedupe-generated-events-by-uid";
@@ -98,7 +98,7 @@ export async function GET(
   const icsEvents = normalizeEventTitlesForIcs(finalEvents);
   const ics = renderIcs(icsEvents, {
     calendarName: `Calendar Automations · ${calendarDisplayName}`,
-    domain: "calendar-automations",
+    domain: "margot",
     refreshIntervalMinutes: 30
   });
   return new NextResponse(ics, {

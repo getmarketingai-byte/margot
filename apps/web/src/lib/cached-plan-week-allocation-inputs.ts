@@ -8,7 +8,7 @@ import "server-only";
 
 import { createHash } from "crypto";
 import { unstable_cache } from "next/cache";
-import type { DailyReview, UserSettings, WeeklyPlan } from "@calendar-automations/schema";
+import type { DailyReview, UserSettings, WeeklyPlan } from "@margot/schema";
 
 import type { BillingState } from "@/lib/subscription";
 import type { PlanWeekAllocationInputs } from "./allocation-run-context";

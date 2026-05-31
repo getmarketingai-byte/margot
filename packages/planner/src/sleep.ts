@@ -31,7 +31,7 @@
  * that would move sleep off the ideal target.
  */
 
-import type { SleepSettings } from "@calendar-automations/schema";
+import type { SleepSettings } from "@margot/schema";
 import type { BusyEvent, Interval } from "./types";
 import { sleepConflictBusyLabel } from "./busy-label";
 import { collectBusyIntervals, freeGaps } from "./intervals";

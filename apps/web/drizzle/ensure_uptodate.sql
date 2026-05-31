@@ -522,7 +522,7 @@ BEGIN
 END$$;
 
 COMMENT ON COLUMN "user_settings"."data" IS
-  'UserSettings JSON; parsed and upgraded by migrateSettings() in @calendar-automations/schema (SETTINGS_SCHEMA_VERSION).';
+  'UserSettings JSON; parsed and upgraded by migrateSettings() in @margot/schema (SETTINGS_SCHEMA_VERSION).';
 
 COMMENT ON COLUMN "weekly_plan"."data" IS
   'WeeklyPlan JSON (goals, overrides, weeklyIntent); shape versioned in packages/schema.';

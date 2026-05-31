@@ -11,14 +11,14 @@ import {
   displayBusyEventLabel,
   type AllocatedBlock,
   type BusyEvent
-} from "@calendar-automations/planner";
-import type { WeeklyGoal, FrameworkRegistryEntry } from "@calendar-automations/schema";
+} from "@margot/planner";
+import type { WeeklyGoal, FrameworkRegistryEntry } from "@margot/schema";
 import {
   effectiveWeeklyGoalWindowPlacement,
   hybridHasMixedLinearTimemapBlocking,
   hybridLinearPlacementBlocksTimemaps,
   type AllocatorGoalWindowMode
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import { overlayTagsForGoal } from "@/lib/framework-calendar-overlay-tags";
 import { systemBlockShownOnCalendarAndIcs, type SystemBlock } from "@/lib/week-blocks";

@@ -1,4 +1,4 @@
-import type { GeneratedEvent, GeocodeCacheEntry, WeatherSettings } from "@calendar-automations/schema";
+import type { GeneratedEvent, GeocodeCacheEntry, WeatherSettings } from "@margot/schema";
 import { parseLatLngFromAddress } from "./geocode-address";
 import { createWeatherForecastCacheSession } from "./weather-forecast-cache";
 

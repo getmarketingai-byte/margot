@@ -1,4 +1,4 @@
-import type { PpfPillarKey, UserSettings } from "@calendar-automations/schema";
+import type { PpfPillarKey, UserSettings } from "@margot/schema";
 import { frameworkRuleFormPillarKeys } from "./framework-rule-form-shared";
 import { updatePpf } from "./framework-rules-actions";
 

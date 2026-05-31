@@ -1,6 +1,6 @@
 "use client";
 
-import type { VisionSettings, WeeklyIntent } from "@calendar-automations/schema";
+import type { VisionSettings, WeeklyIntent } from "@margot/schema";
 import { WeeklyIntentCard } from "../plan/weekly-intent-card";
 import { VisionCard } from "./planning-hub-client";
 

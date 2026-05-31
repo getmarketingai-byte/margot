@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { allocateWeek } from "../src/weekly";
 import type { AllocatedBlock } from "../src/weekly";
 import type { BusyEvent } from "../src/types";
-import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
+import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@margot/schema";
 import {
   DEFAULT_USER_SETTINGS,
   SETTINGS_SCHEMA_VERSION,
   weeklyGoalSchema
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { morningFallbackInterval, latestSleepEndMsInDay } from "../src/non-negotiable-minimums";
 
 const HOUR_MS = 60 * 60 * 1000;

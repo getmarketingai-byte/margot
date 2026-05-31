@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { allocateWeek } from "../src/weekly";
 import { QUANTUM } from "../src/weekly-grid";
-import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
-import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION, weeklyGoalSchema } from "@calendar-automations/schema";
+import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@margot/schema";
+import { DEFAULT_USER_SETTINGS, SETTINGS_SCHEMA_VERSION, weeklyGoalSchema } from "@margot/schema";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;

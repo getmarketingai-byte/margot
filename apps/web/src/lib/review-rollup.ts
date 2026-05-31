@@ -12,7 +12,7 @@ import {
   type DailyReview,
   type EnergyState,
   type WeeklyGoal
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 
 export type PaceStatus = "ahead" | "on-track" | "behind" | "no-data";
 

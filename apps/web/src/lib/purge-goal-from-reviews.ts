@@ -1,6 +1,6 @@
 import "server-only";
 
-import { dailyReviewSchema, weeklyReviewSchema, type DailyReview } from "@calendar-automations/schema";
+import { dailyReviewSchema, weeklyReviewSchema, type DailyReview } from "@margot/schema";
 import {
   loadAllDailyReviewsForUser,
   loadAllWeeklyReviewsForUser,

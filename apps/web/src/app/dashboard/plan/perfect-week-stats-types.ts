@@ -1,5 +1,5 @@
 import type { PaceStatus } from "@/lib/review-rollup";
-import type { WeekMetrics } from "@calendar-automations/planner";
+import type { WeekMetrics } from "@margot/planner";
 
 /** Server-serialisable stats bundle for one ISO week allocation slice */
 export interface PerfectWeekSliceStats {

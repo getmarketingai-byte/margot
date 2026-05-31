@@ -9,7 +9,7 @@ import "server-only";
 import { createHash } from "crypto";
 import { after } from "next/server";
 import { eq } from "drizzle-orm";
-import type { WeatherSettings } from "@calendar-automations/schema";
+import type { WeatherSettings } from "@margot/schema";
 import {
   invalidateUserAllocationCache,
   scheduleInvalidateUserAllocationCache

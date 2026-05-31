@@ -16,8 +16,8 @@ import {
   type WeeklyPlan,
   weeklyIntentSchema,
   weeklyPlanSchema
-} from "@calendar-automations/schema";
-import { allocateWeek, baselineWeeklyMinuteTargets, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+} from "@margot/schema";
+import { allocateWeek, baselineWeeklyMinuteTargets, buildStableUid, goalOverrideSourcesFromPlan } from "@margot/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";

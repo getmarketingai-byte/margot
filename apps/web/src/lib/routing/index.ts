@@ -22,7 +22,7 @@ import type {
   TravelCache,
   TravelLegState,
   TravelSettings
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { createOpenRouteServiceProvider, type RoutingProviderClient } from "./openrouteservice";
 
 const MINUTE_MS = 60 * 1000;

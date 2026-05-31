@@ -20,7 +20,7 @@ import {
   type WeeklyPlan,
   weeklyIntentSchema,
   weeklyPlanSchema
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { desc, eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";

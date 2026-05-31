@@ -10,8 +10,8 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { unstable_rethrow } from "next/navigation";
-import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
-import { allocateWeek, baselineWeeklyMinuteTargets, buildStableUid, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+import { filterSchedulingGoals, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@margot/schema";
+import { allocateWeek, baselineWeeklyMinuteTargets, buildStableUid, goalOverrideSourcesFromPlan } from "@margot/planner";
 import { authOrPreview } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { loadSettings } from "@/lib/settings-store";

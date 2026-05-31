@@ -10,7 +10,7 @@ import {
   blockMarkSchema,
   goalMarkSchema,
   logSlotSchema
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { syncActualGoalOverridesFromDayLogs } from "@/app/dashboard/plan/actions";
 import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";

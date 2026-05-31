@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import type { Hp6HabitKey, WeeklyIntent } from "@calendar-automations/schema";
+import type { Hp6HabitKey, WeeklyIntent } from "@margot/schema";
 
 interface IntentField {
   key: keyof WeeklyIntent;

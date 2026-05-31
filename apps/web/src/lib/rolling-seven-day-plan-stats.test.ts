@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BusyEvent } from "@calendar-automations/planner";
+import type { BusyEvent } from "@margot/planner";
 import {
   approximateRollingSevenDayOccupancy,
   daySheetLoggedMinutesByGoalInWindow,

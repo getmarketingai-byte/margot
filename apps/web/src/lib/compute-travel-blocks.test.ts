@@ -1,5 +1,5 @@
-import type { BusyEvent } from "@calendar-automations/planner";
-import { gymSettingsSchema, travelSettingsSchema } from "@calendar-automations/schema";
+import type { BusyEvent } from "@margot/planner";
+import { gymSettingsSchema, travelSettingsSchema } from "@margot/schema";
 import { describe, expect, it } from "vitest";
 import { computeTravelBlocks } from "./week-blocks";
 import type { LegResolver } from "./routing";

@@ -1,10 +1,10 @@
 {
-  "name": "@calendar-automations/mcp-server",
+  "name": "@margot/mcp-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "calendar-automations-mcp": "./dist/index.js"
+    "margot-mcp": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "files": [
@@ -17,7 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@calendar-automations/marketing": "workspace:*",
+    "@margot/marketing": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "3.25.76"
   },

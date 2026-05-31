@@ -14,7 +14,7 @@ import {
   migrateSettings,
   userSettingsSchema,
   type UserSettings
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { db, schema } from "./db/index";
 
 export async function loadSettings(userId: string): Promise<UserSettings> {

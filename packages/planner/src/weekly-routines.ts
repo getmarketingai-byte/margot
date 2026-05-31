@@ -3,7 +3,7 @@ import {
   type GymSettings,
   type UserSettings,
   type WeeklyGoal
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 
 /** Stable id for the settings-driven physical activity weekly block (legacy fallback). */
 export const ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID = "routine:physical-activity" as const;

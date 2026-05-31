@@ -9,8 +9,8 @@ import "server-only";
 
 import { createHash } from "crypto";
 import { and, eq } from "drizzle-orm";
-import type { BusyEvent } from "@calendar-automations/planner";
-import type { GymSettings, SleepSettings, TimemapSettings, TravelSettings } from "@calendar-automations/schema";
+import type { BusyEvent } from "@margot/planner";
+import type { GymSettings, SleepSettings, TimemapSettings, TravelSettings } from "@margot/schema";
 import { db, schema } from "@/lib/db";
 import type { SystemBlock, SystemBlocksOverrides } from "./week-blocks";
 

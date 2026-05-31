@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { EnergyMode, WeeklyGoal } from "@calendar-automations/schema";
+import type { EnergyMode, WeeklyGoal } from "@margot/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 
 type PatchHandler = (goalId: string, patch: Partial<Omit<WeeklyGoal, "id">>) => void;

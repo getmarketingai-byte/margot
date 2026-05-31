@@ -1,7 +1,7 @@
 "use client";
 
-import type { PlacementIdealClockBoundary } from "@calendar-automations/schema";
-import { normalisePlacementIdealClockBoundary } from "@calendar-automations/schema";
+import type { PlacementIdealClockBoundary } from "@margot/schema";
+import { normalisePlacementIdealClockBoundary } from "@margot/schema";
 
 export type IdealClockTime = { hour: number; minute: number };
 

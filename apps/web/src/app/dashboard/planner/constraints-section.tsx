@@ -3,7 +3,7 @@ import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { loadSettings, saveSettings } from "@/lib/settings-store";
-import type { UserSettings } from "@calendar-automations/schema";
+import type { UserSettings } from "@margot/schema";
 
 function afterConstraintsSave(userId: string): void {
   invalidateUserAllocationCache(userId);

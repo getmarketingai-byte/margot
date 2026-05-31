@@ -2,13 +2,13 @@
  * Shared placement-window helpers for Pass 3 and stacked “feasible envelope” mode.
  */
 
-import type { WeeklyGoal } from "@calendar-automations/schema";
-import type { DayOfWeek } from "@calendar-automations/schema";
+import type { WeeklyGoal } from "@margot/schema";
+import type { DayOfWeek } from "@margot/schema";
 import {
   effectivePlacementIdealAfterBoundary,
   effectivePlacementIdealBeforeBoundary,
   normaliseGoalTime
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type { Interval } from "./types";
 import { mergeIntervals } from "./intervals";
 import { QUANTUM } from "./weekly-grid";

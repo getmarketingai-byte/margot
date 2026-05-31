@@ -16,14 +16,14 @@ import type {
   SpecialGoalType,
   WeeklyGoal,
   WorkLayer
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import {
   effectivePlacementIdealAfterBoundary,
   effectivePlacementIdealBeforeBoundary,
   filterSchedulingGoals,
   normaliseGoalTime
-} from "@calendar-automations/schema";
-import { computePass2AllocMinutesFromShareOfWeek } from "@calendar-automations/planner/weekly";
+} from "@margot/schema";
+import { computePass2AllocMinutesFromShareOfWeek } from "@margot/planner/weekly";
 
 function formatPlacementIdealClockBoundsSuffix(
   goal: Pick<

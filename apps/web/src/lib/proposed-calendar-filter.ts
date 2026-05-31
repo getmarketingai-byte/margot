@@ -1,11 +1,11 @@
-import type { AllocatedBlock } from "@calendar-automations/planner";
+import type { AllocatedBlock } from "@margot/planner";
 import {
   calendarBusyModeForSource,
   isInvertedTimemapGoal,
   normaliseCalendarSource,
   type CalendarSource,
   type WeeklyPlan
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 
 /**
  * Allocator blocks for schedulable commitments only.

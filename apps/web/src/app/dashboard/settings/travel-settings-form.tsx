@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { RoutingProvider } from "@calendar-automations/schema";
+import type { RoutingProvider } from "@margot/schema";
 import { HomeAddressField } from "./home-address-field";
 
 interface TravelSettingsFormProps {

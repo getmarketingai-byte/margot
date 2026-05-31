@@ -8,7 +8,7 @@ import {
   parseIcsFeedRules,
   icsFeedRulesHasSelection,
   type IcsFeedRulesInclude
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 

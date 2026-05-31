@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { BusyEvent } from "@calendar-automations/planner";
-import type { SleepSettings, TimemapSettings } from "@calendar-automations/schema";
+import type { BusyEvent } from "@margot/planner";
+import type { SleepSettings, TimemapSettings } from "@margot/schema";
 import {
   computeSleepBlocks,
   isLoggedActualSleepTitle,

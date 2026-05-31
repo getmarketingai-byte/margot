@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { allocateWeek, buildGoalDragKey } from "../src/weekly";
 import { computeStackedFeasibleWindowsForWeek } from "../src/goal-feasible-windows";
-import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
+import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@margot/schema";
 import {
   DEFAULT_USER_SETTINGS,
   SETTINGS_SCHEMA_VERSION,
   weeklyGoalSchema
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type { BusyEvent } from "../src/types";
 import { collectBusyIntervals, freeGaps, mergeIntervals } from "../src/intervals";
 import { hourInTz } from "../src/time";

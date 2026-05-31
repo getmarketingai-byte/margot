@@ -1,6 +1,6 @@
 "use client";
 
-import type { DayOfWeek } from "@calendar-automations/schema";
+import type { DayOfWeek } from "@margot/schema";
 
 export const WEEKDAY_TOGGLE_OPTIONS: Array<{ value: DayOfWeek; label: string }> = [
   { value: "monday", label: "Mon" },

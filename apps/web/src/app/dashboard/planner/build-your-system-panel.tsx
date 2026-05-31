@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
-import type { PersonalSystem, PersonalSystemAdvancedRule } from "@calendar-automations/schema";
+import type { PersonalSystem, PersonalSystemAdvancedRule } from "@margot/schema";
 import { updatePersonalSystem } from "../plan/actions";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

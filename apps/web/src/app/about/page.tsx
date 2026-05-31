@@ -86,7 +86,7 @@ export default function AboutPage() {
         <p>
           The scheduling engine — interval algebra, busy-merge, gap-finding, the time-mapped band
           allocator, sleep and travel placement, the weekly goal allocator — is a pure-TypeScript
-          package called <code>@calendar-automations/planner</code>. It has no Next.js dependency
+          package called <code>@margot/planner</code>. It has no Next.js dependency
           and is covered by a fixture-based test suite ported from the original Apps Script logs,
           so behavior changes are visible diffs rather than mystery regressions.
         </p>

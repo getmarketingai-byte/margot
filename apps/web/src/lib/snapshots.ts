@@ -4,7 +4,7 @@
  */
 
 import { desc, eq } from "drizzle-orm";
-import type { CalendarSnapshot, GeneratedEvent } from "@calendar-automations/schema";
+import type { CalendarSnapshot, GeneratedEvent } from "@margot/schema";
 import { db, schema } from "./db/index";
 
 export async function saveSnapshot(

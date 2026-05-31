@@ -1,5 +1,5 @@
 {
-  "name": "@calendar-automations/planner",
+  "name": "@margot/planner",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@calendar-automations/schema": "workspace:*",
+    "@margot/schema": "workspace:*",
     "zod": "3.25.76"
   },
   "devDependencies": {

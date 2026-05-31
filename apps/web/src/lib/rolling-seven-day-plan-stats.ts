@@ -1,5 +1,5 @@
-import type { AllocatedBlock, BusyEvent } from "@calendar-automations/planner";
-import { clip, collectBusyIntervals, mergeIntervals } from "@calendar-automations/planner/intervals";
+import type { AllocatedBlock, BusyEvent } from "@margot/planner";
+import { clip, collectBusyIntervals, mergeIntervals } from "@margot/planner/intervals";
 import type { SystemBlock } from "@/lib/week-blocks";
 
 const DAYSHEET_GOAL_SOURCE_RE = /^daysheet-goal:([^:]+):/;

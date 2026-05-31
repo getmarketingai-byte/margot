@@ -30,8 +30,8 @@ import type {
   TravelSettings,
   WeeklyPlan,
   UserSettings
-} from "@calendar-automations/schema";
-import type { BusyEvent } from "@calendar-automations/planner";
+} from "@margot/schema";
+import type { BusyEvent } from "@margot/planner";
 import { saveSettings } from "./settings-store";
 import {
   computeRoutineBlocks,

@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import type { GoalGroup, WeeklyGoal } from "@calendar-automations/schema";
+import type { GoalGroup, WeeklyGoal } from "@margot/schema";
 import {
   effectivePlacementIdealAfterBoundary,
   effectivePlacementIdealBeforeBoundary,
   normalisePlacementIdealClockBoundary,
   stubWeeklyGoalFromGoalGroup
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {

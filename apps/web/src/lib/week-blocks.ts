@@ -29,15 +29,15 @@ import {
   mergeIntervals,
   PLANNER_TRAVEL_BUSY_CALENDAR,
   placeSleepBlock
-} from "@calendar-automations/planner";
-import type { AllocatedBlock, BusyEvent, Interval } from "@calendar-automations/planner";
+} from "@margot/planner";
+import type { AllocatedBlock, BusyEvent, Interval } from "@margot/planner";
 import type {
   GymSettings,
   SleepSettings,
   TimemapSettings,
   TravelSettings,
   WeeklyGoal
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { localMidnightMs, partsInTimezone } from "./week";
 import { legKey, type LegResolver, type ResolveRequest } from "./routing";
 

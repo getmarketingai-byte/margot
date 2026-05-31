@@ -1,4 +1,4 @@
-import type { UserSettings } from "@calendar-automations/schema";
+import type { UserSettings } from "@margot/schema";
 import { localMondayMidnightMs } from "@/lib/week";
 import type { BillingState } from "@/lib/subscription";
 import { DAY_MS, WEEK_MS, effectiveScheduleHorizon } from "@/lib/effective-schedule-horizon";

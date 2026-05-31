@@ -1,7 +1,7 @@
 import "server-only";
 
 import { eq } from "drizzle-orm";
-import { weeklyPlanSchema, type WeeklyPlan } from "@calendar-automations/schema";
+import { weeklyPlanSchema, type WeeklyPlan } from "@margot/schema";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";
 import { db, schema } from "@/lib/db";

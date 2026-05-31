@@ -6,8 +6,8 @@ import type {
   GoalGroup,
   GymSettings,
   WeeklyGoal
-} from "@calendar-automations/schema";
-import { hybridAnyLinearGoalBlocksTimemaps } from "@calendar-automations/schema";
+} from "@margot/schema";
+import { hybridAnyLinearGoalBlocksTimemaps } from "@margot/schema";
 import { useEffect, useMemo } from "react";
 import { PlanCalendarViewProvider, usePlanCalendarView } from "./plan-calendar-view-context";
 import type { GoalGroupRailBundle, PerfectWeekSliceStats, RollingSevenDayApprox } from "./perfect-week-stats-types";

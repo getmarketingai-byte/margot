@@ -1,4 +1,4 @@
-import type { Hp6HabitKey } from "@calendar-automations/schema";
+import type { Hp6HabitKey } from "@margot/schema";
 import { updateHpp } from "./framework-rules-actions";
 
 const HP6_ROWS: Readonly<{ key: Hp6HabitKey; label: string }[]> = [

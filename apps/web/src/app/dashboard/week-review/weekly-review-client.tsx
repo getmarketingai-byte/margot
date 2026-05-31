@@ -7,7 +7,7 @@ import type {
   EnergyState,
   WeeklyGoal,
   WeeklyReview
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type { GoalRollup, PaceStatus } from "@/lib/review-rollup";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { formatMinutes } from "../plan/goal-helpers";

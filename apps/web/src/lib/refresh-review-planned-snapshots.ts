@@ -10,7 +10,7 @@ import type {
   AllocatedBlockSnapshot,
   UserSettings,
   WeeklyPlan
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { runThisWeekAllocationForPlan } from "@/lib/perfect-week-this-week-allocation";
 import { loadDailyReview, saveDailyReview } from "@/lib/review-store";
 import { localMidnightMs } from "@/lib/week";

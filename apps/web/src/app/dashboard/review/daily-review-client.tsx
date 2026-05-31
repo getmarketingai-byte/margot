@@ -19,7 +19,7 @@ import type {
   LogSlot,
   MorningPrompt,
   WeeklyGoal
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { formatMinutes } from "../plan/goal-helpers";
 import {

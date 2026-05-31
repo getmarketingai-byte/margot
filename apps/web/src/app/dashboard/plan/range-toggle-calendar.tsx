@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { AllocatedBlock, BusyEvent, WeekMetrics } from "@calendar-automations/planner";
+import type { AllocatedBlock, BusyEvent, WeekMetrics } from "@margot/planner";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
   type AllocatorGoalWindowMode,
@@ -10,7 +10,7 @@ import {
   type FrameworkSystem,
   type GoalGroup,
   type WeeklyGoal
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type { FrameworkOverlayLayerState } from "@/lib/framework-calendar-overlay-tags";
 import type { SystemBlock } from "@/lib/week-blocks";
 import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";

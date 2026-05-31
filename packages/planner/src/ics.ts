@@ -7,7 +7,7 @@
  * but identity persists for the same logical block.
  */
 
-import type { GeneratedEvent } from "@calendar-automations/schema";
+import type { GeneratedEvent } from "@margot/schema";
 
 interface IcsOptions {
   productId?: string;
@@ -18,7 +18,7 @@ interface IcsOptions {
   refreshIntervalMinutes?: number;
 }
 
-const DEFAULT_PRODID = "-//calendar-automations//planner//EN";
+const DEFAULT_PRODID = "-//margot//planner//EN";
 
 export function renderIcs(events: readonly GeneratedEvent[], opts: IcsOptions): string {
   const lines: string[] = [];
@@ -41,7 +41,7 @@ export function renderIcs(events: readonly GeneratedEvent[], opts: IcsOptions): 
 }
 
 function pushEvent(lines: string[], ev: GeneratedEvent, opts: IcsOptions): void {
-  const dom = sanitiseUidToken(opts.domain ?? "calendar-automations");
+  const dom = sanitiseUidToken(opts.domain ?? "margot");
   lines.push("BEGIN:VEVENT");
   lines.push(`UID:${sanitiseUidToken(ev.uid)}@${dom}`);
   lines.push(`DTSTAMP:${formatUtcStamp(Date.now())}`);

@@ -1,4 +1,4 @@
-import type { GeneratedEvent } from "@calendar-automations/schema";
+import type { GeneratedEvent } from "@margot/schema";
 import { describe, expect, it } from "vitest";
 import { dedupeGeneratedEventsByUid } from "./dedupe-generated-events-by-uid";
 

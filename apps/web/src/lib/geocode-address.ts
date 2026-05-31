@@ -3,10 +3,10 @@
  * Used by travel routing and by settings / weather so one home string drives both.
  */
 
-import type { GeocodeCacheEntry } from "@calendar-automations/schema";
+import type { GeocodeCacheEntry } from "@margot/schema";
 
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
-const USER_AGENT = "calendar-automations/1.0 (https://github.com/marklewis)";
+const USER_AGENT = "margot/1.0 (https://github.com/getmarketingai-byte)";
 const GEOCODE_STALE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 const LATLNG_RE = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;

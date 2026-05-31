@@ -1,6 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { routingProviderSchema, type GeocodeCacheEntry } from "@calendar-automations/schema";
+import { routingProviderSchema, type GeocodeCacheEntry } from "@margot/schema";
 import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { loadBillingState } from "@/lib/billing-state-server";

@@ -3,14 +3,14 @@
  * (e.g. SkedPal) can subscribe without using allocator goal blocks.
  */
 
-import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
+import type { GeneratedEvent, WeeklyPlan } from "@margot/schema";
 import {
   calendarBusyModeForSource,
   normaliseCalendarSource,
   type CalendarSource
-} from "@calendar-automations/schema";
-import type { Interval } from "@calendar-automations/planner";
-import { clip } from "@calendar-automations/planner";
+} from "@margot/schema";
+import type { Interval } from "@margot/planner";
+import { clip } from "@margot/planner";
 
 export function invertedCalendarTimemapEvents(options: {
   userId: string;

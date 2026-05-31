@@ -12,8 +12,8 @@ import {
   visionSettingsSchema,
   weeklyIntentSchema,
   weeklyPlanSchema
-} from "@calendar-automations/schema";
-import { allocateWeek, goalOverrideSourcesFromPlan } from "@calendar-automations/planner";
+} from "@margot/schema";
+import { allocateWeek, goalOverrideSourcesFromPlan } from "@margot/planner";
 import { authOrPreview } from "@/lib/auth";
 import {
   getCachedPlanWeekAllocationInputs,

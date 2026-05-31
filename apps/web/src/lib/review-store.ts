@@ -20,7 +20,7 @@ import {
   logSlotSchema,
   morningPromptSchema,
   weeklyReviewSchema
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { db, schema } from "./db/index";
 import { partsInTimezone } from "./week";
 

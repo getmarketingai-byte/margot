@@ -7,12 +7,12 @@
 
 import { google, type calendar_v3 } from "googleapis";
 import { and, eq, type InferSelectModel } from "drizzle-orm";
-import { freeGaps, mergeIntervals, type BusyEvent, type Interval } from "@calendar-automations/planner";
+import { freeGaps, mergeIntervals, type BusyEvent, type Interval } from "@margot/planner";
 import {
   calendarBusyModeForSource,
   normaliseCalendarSource,
   type CalendarSource
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { db, schema } from "./db/index";
 
 type AccountRow = InferSelectModel<typeof schema.accounts>;

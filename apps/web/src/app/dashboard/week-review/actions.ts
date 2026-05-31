@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   type BurchardWeeklyQuestions,
   type WeeklyReview
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { authOrPreview } from "@/lib/auth";
 import { invalidateUserAllocationCache } from "@/lib/cached-plan-week-allocation-inputs";
 import { revalidatePlanningRoutes } from "@/lib/dashboard-revalidate";

@@ -11,8 +11,8 @@ import {
   type WeeklyPlan,
   weeklyIntentSchema,
   weeklyPlanSchema
-} from "@calendar-automations/schema";
-import { allocateWeek, goalOverrideSourcesFromPlan, type AllocateResult } from "@calendar-automations/planner";
+} from "@margot/schema";
+import { allocateWeek, goalOverrideSourcesFromPlan, type AllocateResult } from "@margot/planner";
 import { db, schema } from "@/lib/db";
 import { localMondayIso } from "@/lib/week";
 import { getCachedPlanWeekAllocationInputs } from "@/lib/cached-plan-week-allocation-inputs";

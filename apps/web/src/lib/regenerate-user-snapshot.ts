@@ -9,9 +9,9 @@ import {
   goalOverrideSourcesFromPlan,
   schedulingGoalsWithWeeklyRoutines,
   type AllocatedBlock
-} from "@calendar-automations/planner";
-import type { GeneratedEvent, WeeklyPlan } from "@calendar-automations/schema";
-import { effectiveWeeklyGoalWindowPlacement } from "@calendar-automations/schema";
+} from "@margot/planner";
+import type { GeneratedEvent, WeeklyPlan } from "@margot/schema";
+import { effectiveWeeklyGoalWindowPlacement } from "@margot/schema";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/index";
 import { getCachedPlanWeekAllocationInputs } from "@/lib/cached-plan-week-allocation-inputs";

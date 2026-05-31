@@ -15,13 +15,13 @@ import {
 } from "../src/weekly";
 import type { PreparedGoal } from "../src/weekly";
 import type { AllocatedBlock } from "../src/weekly";
-import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@calendar-automations/schema";
+import type { WeeklyGoal, WeeklyPlan, UserSettings } from "@margot/schema";
 import {
   DEFAULT_USER_SETTINGS,
   SETTINGS_SCHEMA_VERSION,
   weeklyGoalSchema,
   normaliseGoalTime
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type { BusyEvent } from "../src/types";
 import { ROUTINE_PHYSICAL_ACTIVITY_GOAL_ID } from "../src/weekly-routines";
 

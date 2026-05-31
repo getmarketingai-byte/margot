@@ -1,4 +1,4 @@
-import type { WeeklyGoal } from "@calendar-automations/schema";
+import type { WeeklyGoal } from "@margot/schema";
 import type { SystemBlock } from "@/lib/week-blocks";
 
 /**

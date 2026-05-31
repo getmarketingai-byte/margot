@@ -8,7 +8,7 @@
  * - Pass 12 prep `buildAllocateWeekPass12Prep` / `baselineWeeklyMinuteTargets`,
  *   distribution (`distributeMinutes`, catch‑up overlays), geometry, Pass 3 greedy
  *   placement, and `computeMetrics` are implemented in this file; further splitting
- *   can peel metrics or placement without API changes (`@calendar-automations/planner`
+ *   can peel metrics or placement without API changes (`@margot/planner`
  *   re-exports stay on `weekly.ts`).
  *
  * Inputs: a WeeklyPlan (goals + targets), busy events for the week, plus
@@ -65,7 +65,7 @@ import type {
   UserSettings,
   WheelArea,
   WheelSettings
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type {
   AttentionMode,
   CommitmentLevel,
@@ -77,7 +77,7 @@ import type {
   WeeklyGoal,
   WeeklyPlan,
   WorkLayer
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import {
   effectiveEnergyBatteryProfile,
   effectivePlacementIdealAfterBoundary,
@@ -90,7 +90,7 @@ import {
   isInvertedTimemapGoal,
   normaliseGoalTime,
   stubWeeklyGoalFromGoalGroup
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import type { BusyEvent, Interval } from "./types";
 import {
   computeStackedFeasibleWindowsForWeek,

@@ -1,5 +1,5 @@
-import type { GeneratedEvent } from "@calendar-automations/schema";
-import type { Interval } from "@calendar-automations/planner";
+import type { GeneratedEvent } from "@margot/schema";
+import type { Interval } from "@margot/planner";
 
 /**
  * Timemap "[Outside]" events from `buildWeatherTimemapEvents`, clipped to an

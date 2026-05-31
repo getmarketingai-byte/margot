@@ -15,7 +15,7 @@
  *     Band N (the last band, e.g. "Play") keeps an exclusive tail.
  */
 
-import type { TimemapBand } from "@calendar-automations/schema";
+import type { TimemapBand } from "@margot/schema";
 import type { Interval } from "./types";
 import { mergeIntervals } from "./intervals";
 

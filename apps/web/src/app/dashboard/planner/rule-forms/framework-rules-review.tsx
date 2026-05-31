@@ -1,5 +1,5 @@
-import type { Hp6HabitKey, SchedulerFrameworkInclusionKey, UserSettings } from "@calendar-automations/schema";
-import { FRAMEWORK_REGISTRY_DEFAULT_LABELS, schedulerFrameworkInclusionKeys } from "@calendar-automations/schema";
+import type { Hp6HabitKey, SchedulerFrameworkInclusionKey, UserSettings } from "@margot/schema";
+import { FRAMEWORK_REGISTRY_DEFAULT_LABELS, schedulerFrameworkInclusionKeys } from "@margot/schema";
 
 const SCHEDULER_KEY_TO_REGISTRY_ID: Record<SchedulerFrameworkInclusionKey, keyof typeof FRAMEWORK_REGISTRY_DEFAULT_LABELS> =
   {

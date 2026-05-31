@@ -1,5 +1,5 @@
 /**
- * Drizzle schema for the calendar-automations app.
+ * Drizzle schema for the margot app.
  *
  * Includes Auth.js tables (`users`, `accounts`, `sessions`, `verificationTokens`)
  * plus app domain tables: per-user settings, weekly plans/goals, generated

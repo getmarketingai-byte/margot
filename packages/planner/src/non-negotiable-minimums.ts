@@ -3,7 +3,7 @@
  * busy-day overlays (calendar read-only overlaps).
  */
 
-import type { NormalisedGoalTime, SchedulerFrameworkInclusion, WeeklyGoal } from "@calendar-automations/schema";
+import type { NormalisedGoalTime, SchedulerFrameworkInclusion, WeeklyGoal } from "@margot/schema";
 import { mergeIntervals } from "./intervals";
 import { clipIntervalsToGoalLocalHourWindow, placementWindowsForDay } from "./goal-feasible-windows";
 import { isTravelLikeConflictTitle } from "./sleep";

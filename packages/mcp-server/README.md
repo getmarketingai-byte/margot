@@ -1,4 +1,4 @@
-# @calendar-automations/mcp-server
+# @margot/mcp-server
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io/) server
 that exposes public Calendar Automations product facts to AI agents. Stdio
@@ -18,18 +18,18 @@ transport. No user data, no calendar access, no tokens.
 From the workspace root:
 
 ```bash
-pnpm --filter @calendar-automations/mcp-server build
-pnpm --filter @calendar-automations/mcp-server start
+pnpm --filter @margot/mcp-server build
+pnpm --filter @margot/mcp-server start
 ```
 
 For development with live reload:
 
 ```bash
-pnpm --filter @calendar-automations/mcp-server dev
+pnpm --filter @margot/mcp-server dev
 ```
 
-The server reads `CALENDAR_AUTOMATIONS_SITE_URL` to build canonical URLs in
-responses (defaults to `https://calendar-automations.app`).
+The server reads `MARGOT_SITE_URL` to build canonical URLs in
+responses (defaults to `https://margot.getmarketingai.com.au`).
 
 ## Wiring an MCP client
 
@@ -39,11 +39,11 @@ in their config. Example:
 ```json
 {
   "mcpServers": {
-    "calendar-automations": {
+    "margot": {
       "command": "node",
       "args": ["/absolute/path/to/packages/mcp-server/dist/index.js"],
       "env": {
-        "CALENDAR_AUTOMATIONS_SITE_URL": "https://calendar-automations.app"
+        "MARGOT_SITE_URL": "https://margot.getmarketingai.com.au"
       }
     }
   }
@@ -52,6 +52,6 @@ in their config. Example:
 
 ## Source of truth
 
-All payloads are derived from `@calendar-automations/marketing`, which is also
+All payloads are derived from `@margot/marketing`, which is also
 the source for the web app's `/llms.txt`, `/llms-full.txt`, JSON-LD, FAQ, and
 landing copy. Changes there propagate to every surface.

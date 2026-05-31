@@ -1,7 +1,7 @@
 import { Inngest } from "inngest";
 
 export const inngest = new Inngest({
-  id: "calendar-automations",
+  id: "margot",
   eventKey: process.env.INNGEST_EVENT_KEY ?? "dev"
 });
 

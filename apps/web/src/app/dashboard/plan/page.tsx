@@ -1,13 +1,13 @@
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { filterSchedulingGoals, effectiveWeeklyGoalWindowPlacement, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@calendar-automations/schema";
+import { filterSchedulingGoals, effectiveWeeklyGoalWindowPlacement, type WeeklyPlan, weeklyIntentSchema, weeklyPlanSchema } from "@margot/schema";
 import {
   allocateWeek,
   buildStableUid,
   goalOverrideSourcesFromPlan,
   goalsInPlanOrderForRibbonLanes,
   schedulingGoalsWithWeeklyRoutines
-} from "@calendar-automations/planner";
+} from "@margot/planner";
 import { authOrPreview } from "@/lib/auth";
 import {
   getCachedPlanWeekAllocationInputs

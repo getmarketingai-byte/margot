@@ -2,8 +2,8 @@
  * Applies user-defined ICS include rules against snapshot-generated events (OR semantics).
  */
 
-import type { GeneratedEvent } from "@calendar-automations/schema";
-import type { IcsFeedRules } from "@calendar-automations/schema";
+import type { GeneratedEvent } from "@margot/schema";
+import type { IcsFeedRules } from "@margot/schema";
 
 export function tagSet(event: GeneratedEvent): ReadonlySet<string> {
   return new Set(event.tags ?? []);

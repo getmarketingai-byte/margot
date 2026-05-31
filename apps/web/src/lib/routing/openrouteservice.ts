@@ -19,7 +19,7 @@
  * The resolver enforces a per-render call budget on top of these (default 20).
  */
 
-import type { GeocodeCacheEntry } from "@calendar-automations/schema";
+import type { GeocodeCacheEntry } from "@margot/schema";
 import { geocodeAddressToCoords } from "../geocode-address";
 
 const ORS_DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car";

@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { FrameworkRegistryId, FrameworkSystem } from "@calendar-automations/schema";
+import type { FrameworkRegistryId, FrameworkSystem } from "@margot/schema";
 import {
   FRAMEWORK_REGISTRY_DEFAULT_LABELS,
   FRAMEWORK_REGISTRY_DESCRIPTIONS
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { useDebouncedIdleRouterRefresh } from "@/hooks/useDebouncedIdleRouterRefresh";
 import { measureServerAck, reportPerceivedInteraction } from "@/lib/ui-perf";
 import { persistSchedulerFrameworkInclusion } from "./framework-system-actions";

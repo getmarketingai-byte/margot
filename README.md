@@ -1,32 +1,40 @@
-# Calendar Automations
+# Margot — AI Marketing Cockpit
 
-Mobile-first SaaS for energy-aware weekly planning that publishes private iCal
-feeds you subscribe to from any calendar app. Migration target for the legacy
-single-tenant Apps Script project (`Code.gs` / `TimeMapBlocks.gs` / `Sleep.gs` /
-`Travel.gs` / `Config.gs`).
+AI-powered marketing assistant for Australian SMB entrepreneurs. Built on a
+mobile-first SaaS foundation with energy-aware weekly planning that publishes
+private iCal feeds.
+
+Forked from `mlewis89/AppsScript_CalendarAutomations` and extended with:
+- AI marketing agents (Google ADK + Gemini)
+- A2A agent interoperability protocol
+- Multi-tenant Postgres with RLS
+- pgvector embeddings
+- PWA (Workbox 7)
+- Australian-market marketing engine
 
 ## Stack
 
 - **Web**: Next.js 15 (App Router) + Tailwind, hosted on Vercel.
-- **Auth**: Auth.js v5 with Google OAuth (read-only Calendar scopes).
-- **Database**: Postgres via Neon + Drizzle ORM.
+- **Auth**: Auth.js v5 with Google OAuth.
+- **Database**: Postgres via Neon (ap-southeast-2) + pgvector + Drizzle ORM.
 - **Background jobs**: Inngest, fanned out by Vercel Cron.
 - **Billing**: Stripe Checkout + Customer Portal.
-- **Planner**: pure-TS package (`packages/planner`) ported from the GAS pipeline.
+- **AI Agents**: Google ADK + Gemini, A2A protocol.
+- **Planner**: pure-TS package (`packages/planner`).
 - **Settings schema**: Zod-validated, versioned (`packages/schema`).
+- **Marketing engine**: AU-market content calendar, outreach templates (`packages/marketing-engine`).
 
 ## Layout
 
 ```
 apps/
-  web/              Next.js app (UI, API routes, jobs)
+  web/                     Next.js app (UI, API routes, jobs)
 packages/
-  schema/           Zod UserSettings + WeeklyPlan + GeneratedEvent
-  planner/          Interval algebra, timemap bands, sleep, weekly allocator, ICS
+  schema/                  Zod UserSettings + WeeklyPlan + GeneratedEvent
+  planner/                 Interval algebra, timemap, sleep, weekly allocator, ICS
+  marketing-engine/        AU marketing content calendar, outreach templates, A2A agents
+  mcp-server/              MCP server for calendar/planning tools
 ```
-
-The legacy Apps Script files remain at the repo root for reference; they are not
-loaded by the web app and can be archived once parity is confirmed in production.
 
 ## Setup
 
@@ -35,9 +43,7 @@ pnpm install
 cp apps/web/.env.example apps/web/.env.local
 # fill in DATABASE_URL, AUTH_SECRET, GOOGLE_CLIENT_ID/SECRET, INNGEST keys,
 # STRIPE keys, TOKEN_ENCRYPTION_KEY (openssl rand -base64 32), CRON_SECRET
-# generate SQL migration files in apps/web/drizzle/
 pnpm db:generate
-# apply SQL migrations from apps/web/drizzle/
 pnpm db:migrate
 pnpm dev
 ```
@@ -48,40 +54,7 @@ pnpm dev
 pnpm test
 ```
 
-Covers interval algebra, timemap band placement (sequential and cumulative
-deep-work), the weekly allocator with framework tags, ICS rendering, and
-settings schema migration.
-
-## Frameworks supported
-
-- **Bustamante-style energy ordering** — `hyperfocus` / `hyperaware` / `neutral`
-  goal tags + ordering mode (`strict` / `balanced` / `ignore`).
-- **Tony Robbins Wheel of Life** — eight default areas with 1-10 satisfaction
-  scores and weekly minute floors.
-- **Natalie Dawson PPF** — Personal / Professional / Financial pillars with
-  optional `y1` / `y3` / `y5` horizons, percent-of-week and touches-per-week
-  targets.
-- **Brendon Burchard HP6 / HPP** — six habit tags + monthly minimum-touch goals
-  + weekly review day + monthly strategy day-of-month.
-- **Consistency segments** — recurring non-negotiable blocks reserved before
-  goal allocation.
-
 ## Deploying
 
-Push to a Vercel project; configure the env vars from `.env.example`. The Cron
-schedule lives in `apps/web/vercel.json`. Stripe webhook endpoint:
-`/api/stripe/webhook`. Inngest endpoint: `/api/inngest`.
-
-### Preview auto-login
-
-Vercel Preview deployments can skip Google OAuth and auto-login as a fixed
-account. Set these env vars on the **Preview** environment only (Project
-Settings → Environment Variables → Preview):
-
-- `PREVIEW_AUTH_ENABLED=true`
-- `PREVIEW_AUTH_USER_EMAIL=<email of an existing user row>`
-
-The bypass only activates when `VERCEL_ENV === "preview"` AND the opt-in flag is
-true AND the email matches a user in the DB. Vercel never sets `VERCEL_ENV` to
-`"preview"` on production deploys, so production stays on real Auth.js sign-in
-even if these variables are accidentally promoted.
+Push to the `margot` Vercel project. Inngest endpoint: `/api/inngest`.
+Stripe webhook: `/api/stripe/webhook`.

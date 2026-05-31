@@ -34,7 +34,7 @@ import type {
   WeeklyGoal,
   WorkLayer,
   SchedulerFrameworkInclusion
-} from "@calendar-automations/schema";
+} from "@margot/schema";
 import { goalColorFromKey } from "@/lib/goal-colors";
 import { patchGoal } from "../plan/actions";
 import { BatteryCurveGoalsPanel } from "./battery-curve-goals-panel";
