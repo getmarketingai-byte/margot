@@ -1,139 +1,81 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import {
-  ARTICLES,
-  FAQ,
-  FEATURES,
-  FEED_BEHAVIOR,
-  OAUTH_SCOPES,
-  PRODUCT,
-  SITE_URL
-} from "@/lib/marketing";
-import {
-  faqPageLd,
-  organizationLd,
-  webApplicationLd,
-  websiteLd
-} from "@/lib/json-ld";
-import { JsonLd } from "@/components/json-ld";
-import { authOrPreview } from "@/lib/auth";
-import type { Metadata } from "next";
 
-export const metadata: Metadata = {
-  metadataBase: new URL(SITE_URL),
-  title: `${PRODUCT.name} — ${PRODUCT.tagline}`,
-  description: PRODUCT.shortDescription,
-  alternates: { canonical: "/" },
-  openGraph: {
-    title: PRODUCT.name,
-    description: PRODUCT.shortDescription,
-    url: SITE_URL,
-    siteName: PRODUCT.name,
-    type: "website"
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: PRODUCT.name,
-    description: PRODUCT.shortDescription
-  }
-};
-
-const TOP_FAQ = FAQ.slice(0, 4);
-
-export default async function LandingPage() {
-  const session = await authOrPreview();
-  if (session?.user?.id) redirect("/dashboard");
-
+export default function LandingPage() {
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-col gap-12 px-5 pb-16 pt-10 sm:max-w-3xl">
-      <JsonLd
-        data={[
-          organizationLd(),
-          websiteLd(),
-          webApplicationLd(),
-          faqPageLd(TOP_FAQ)
-        ]}
-      />
-
-      <header className="flex flex-col gap-4">
-        <span className="text-xs uppercase tracking-widest text-ink-400">{PRODUCT.name}</span>
-        <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">{PRODUCT.tagline}</h1>
-        <p className="text-ink-600 dark:text-ink-200 sm:text-lg">{PRODUCT.shortDescription}</p>
-        <div className="flex flex-wrap gap-3">
-          <Link href="/api/auth/signin?callbackUrl=/dashboard" className="btn-primary">
-            Sign up / sign in with Google
-          </Link>
-          <Link href="/faq" className="btn-secondary">
-            FAQ
-          </Link>
-        </div>
-      </header>
-
-      <section
-        aria-label="What it does in one minute"
-        className="card flex flex-col gap-3"
-      >
-        <h2 className="text-base font-semibold">What it does, in plain terms</h2>
-        <ul className="flex flex-col gap-2 text-sm text-ink-600 dark:text-ink-200">
-          <li>
-            Reads up to 60 days of your existing Google Calendar over read-only OAuth and finds the
-            free gaps.
-          </li>
-          <li>
-            Allocates your weekly goals into those gaps with energy-aware ordering, Wheel of Life
-            balance, and PPF mix targets.
-          </li>
-          <li>
-            Publishes the planned blocks as a private iCal feed at{" "}
-            <code>{FEED_BEHAVIOR.pathPattern}</code> that you subscribe to from any calendar app.
-          </li>
-          <li>
-            Never writes events to your calendar in v1. The OAuth scopes are{" "}
-            <code>calendar.readonly</code> and <code>calendar.calendarlist.readonly</code>.
-          </li>
-        </ul>
-      </section>
-
-      <section aria-label="Capabilities" className="grid gap-4 sm:grid-cols-2">
-        {FEATURES.map((f) => (
-          <article key={f.title} className="card">
-            <h2 className="text-base font-semibold">{f.title}</h2>
-            <p className="mt-2 text-sm text-ink-600 dark:text-ink-200">{f.body}</p>
-          </article>
-        ))}
-      </section>
-
-      <section aria-label="Frequently asked" className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold">Frequently asked</h2>
-        <div className="flex flex-col gap-3">
-          {TOP_FAQ.map((entry) => (
-            <details key={entry.question} className="card">
-              <summary className="cursor-pointer text-sm font-semibold">{entry.question}</summary>
-              <p className="mt-2 text-sm text-ink-600 dark:text-ink-200">{entry.answer}</p>
-            </details>
-          ))}
-        </div>
-        <Link href="/faq" className="text-sm font-medium text-accent">
-          See all questions →
+    <main className="min-h-screen flex flex-col">
+      {/* Nav */}
+      <nav className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+        <span className="text-xl font-bold text-indigo-600 dark:text-indigo-400">
+          Margot
+        </span>
+        <Link
+          href="/sign-in"
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 transition-colors"
+        >
+          Sign in
         </Link>
+      </nav>
+
+      {/* Hero */}
+      <section className="flex-1 flex flex-col items-center justify-center px-6 py-24 text-center">
+        <h1 className="text-5xl font-bold tracking-tight text-gray-900 dark:text-white max-w-2xl">
+          Your AI marketing cockpit
+        </h1>
+        <p className="mt-6 text-lg text-gray-600 dark:text-gray-400 max-w-xl">
+          Margot helps entrepreneurs plan content, track market signals, and
+          manage client relationships — all in one place.
+        </p>
+        <div className="mt-10 flex gap-4">
+          <Link
+            href="/sign-in"
+            className="rounded-lg bg-indigo-600 px-6 py-3 text-base font-semibold text-white hover:bg-indigo-700 transition-colors"
+          >
+            Get started free
+          </Link>
+        </div>
       </section>
 
-      <section aria-label="Pillar articles" className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold">Read more</h2>
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {ARTICLES.map((a) => (
-            <li key={a.slug}>
-              <Link href={`/learn/${a.slug}`} className="card flex h-full flex-col gap-2">
-                <span className="text-sm font-semibold">{a.title}</span>
-                <span className="text-xs text-ink-600 dark:text-ink-200">{a.description}</span>
-              </Link>
-            </li>
+      {/* Features */}
+      <section className="px-6 py-16 bg-gray-50 dark:bg-gray-900">
+        <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
+          {[
+            {
+              title: "Content pipeline",
+              description:
+                "Draft, schedule, and publish posts across channels with AI assistance.",
+              icon: "✍️",
+            },
+            {
+              title: "Market signals",
+              description:
+                "Capture and search industry signals to stay ahead of trends.",
+              icon: "📡",
+            },
+            {
+              title: "CRM",
+              description:
+                "Track leads, prospects, and clients with AI-suggested next actions.",
+              icon: "🤝",
+            },
+          ].map((f) => (
+            <div
+              key={f.title}
+              className="rounded-xl border border-gray-200 dark:border-gray-700 p-6"
+            >
+              <div className="text-3xl mb-3">{f.icon}</div>
+              <h3 className="font-semibold text-gray-900 dark:text-white">
+                {f.title}
+              </h3>
+              <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                {f.description}
+              </p>
+            </div>
           ))}
-        </ul>
+        </div>
       </section>
 
-      <footer className="text-xs text-ink-400">
-        Read-only OAuth scopes: {OAUTH_SCOPES.join(", ")}.
+      <footer className="px-6 py-6 text-center text-sm text-gray-500 dark:text-gray-500">
+        © {new Date().getFullYear()} Margot. Built for Australian entrepreneurs.
       </footer>
     </main>
   );
