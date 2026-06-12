@@ -1,9 +1,8 @@
-import { auth } from "@/lib/auth";
+import { authOrPreview, signOut } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { signOut } from "@/lib/auth";
 
 export default async function DashboardPage() {
-  const session = await auth();
+  const session = await authOrPreview();
 
   if (!session?.user) {
     redirect("/sign-in");

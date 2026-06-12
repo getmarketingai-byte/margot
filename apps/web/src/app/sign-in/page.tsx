@@ -1,13 +1,12 @@
-import { signIn } from "@/lib/auth";
+import { authOrPreview, signIn } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
 
 export default async function SignInPage({
   searchParams,
 }: {
   searchParams: Promise<{ callbackUrl?: string }>;
 }) {
-  const session = await auth();
+  const session = await authOrPreview();
   const { callbackUrl } = await searchParams;
 
   if (session?.user) {
