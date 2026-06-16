@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import NextAuth from "next-auth";
+import { authConfig } from "@/auth.config";
+
+// Edge-safe NextAuth instance — uses providers-only config with no Node.js imports.
+// The full DrizzleAdapter-backed auth lives in lib/auth.ts for server use only.
+const { auth } = NextAuth(authConfig);
 
 const PROTECTED_PATHS = ["/dashboard"];
 
