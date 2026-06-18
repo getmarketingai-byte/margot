@@ -1,44 +1,53 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { contacts } from "@margot/schema";
+import { auth } from "@/auth";
+import { db, contacts, type NewContact } from "@margot/schema";
 import { eq, desc } from "drizzle-orm";
-import { getAuthUser, unauthorized } from "@/lib/api";
 
 export async function GET() {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const rows = await db
     .select()
     .from(contacts)
-    .where(eq(contacts.userId, user.id))
-    .orderBy(desc(contacts.createdAt))
-    .limit(100);
+    .where(eq(contacts.userId, session.user.id))
+    .orderBy(desc(contacts.createdAt));
 
   return NextResponse.json(rows);
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-  const body = await req.json().catch(() => null);
-  if (!body?.name) {
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { name, email, company, tags, notes, lastContactedAt } = body;
+
+  if (!name || typeof name !== "string") {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
   }
 
-  const [row] = await db
-    .insert(contacts)
-    .values({
-      userId: user.id,
-      name: body.name as string,
-      email: (body.email as string) ?? null,
-      company: (body.company as string) ?? null,
-      role: (body.role as string) ?? null,
-      notes: (body.notes as string) ?? null,
-      status: (body.status as string) ?? "lead",
-    })
-    .returning();
+  const insert: NewContact = {
+    userId: session.user.id,
+    name,
+    email: typeof email === "string" ? email : undefined,
+    company: typeof company === "string" ? company : undefined,
+    tags: Array.isArray(tags) ? (tags as string[]) : [],
+    notes: typeof notes === "string" ? notes : undefined,
+    lastContactedAt: lastContactedAt ? new Date(lastContactedAt as string) : undefined,
+  };
+
+  const [row] = await db.insert(contacts).values(insert).returning();
 
   return NextResponse.json(row, { status: 201 });
 }

@@ -1,51 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { posts } from "@margot/schema";
-import { eq, desc, gte, and } from "drizzle-orm";
-import { getAuthUser, unauthorized } from "@/lib/api";
+import { auth } from "@/auth";
+import { db, posts, type NewPost, type PostPlatform, type PostStatus } from "@margot/schema";
+import { eq, desc } from "drizzle-orm";
 
-export async function GET(req: NextRequest) {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
-
-  const { searchParams } = req.nextUrl;
-  const status = searchParams.get("status");
-  const channel = searchParams.get("channel");
-
-  const conditions = [eq(posts.userId, user.id)];
-  if (status) conditions.push(eq(posts.status, status));
-  if (channel) conditions.push(eq(posts.channel, channel));
+export async function GET() {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const rows = await db
     .select()
     .from(posts)
-    .where(and(...conditions))
-    .orderBy(desc(posts.createdAt))
-    .limit(50);
+    .where(eq(posts.userId, session.user.id))
+    .orderBy(desc(posts.createdAt));
 
   return NextResponse.json(rows);
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
-
-  const body = await req.json().catch(() => null);
-  if (!body?.title) {
-    return NextResponse.json({ error: "title is required" }, { status: 400 });
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [row] = await db
-    .insert(posts)
-    .values({
-      userId: user.id,
-      title: body.title as string,
-      body: (body.body as string) ?? null,
-      status: (body.status as string) ?? "draft",
-      channel: (body.channel as string) ?? null,
-      scheduledAt: body.scheduledAt ? new Date(body.scheduledAt as string) : null,
-    })
-    .returning();
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { content, platform, status, scheduledAt, metadata } = body;
+
+  if (!content || typeof content !== "string") {
+    return NextResponse.json({ error: "content is required" }, { status: 400 });
+  }
+  if (!platform || typeof platform !== "string") {
+    return NextResponse.json({ error: "platform is required" }, { status: 400 });
+  }
+
+  const insert: NewPost = {
+    userId: session.user.id,
+    content,
+    platform: platform as PostPlatform,
+    status: ((status as string | undefined) ?? "draft") as PostStatus,
+    scheduledAt: scheduledAt ? new Date(scheduledAt as string) : undefined,
+    metadata: metadata as Record<string, unknown> | undefined,
+  };
+
+  const [row] = await db.insert(posts).values(insert).returning();
 
   return NextResponse.json(row, { status: 201 });
 }

@@ -1,22 +1,31 @@
 {
   "name": "margot",
-  "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@10.11.1",
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
   "scripts": {
-    "build": "pnpm -r --filter \"./packages/*\" build && pnpm -r --filter \"./apps/*\" build",
-    "dev": "pnpm --filter web dev",
-    "test": "pnpm -r --filter \"./packages/*\" test && pnpm --filter web test",
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
-    "db:generate": "pnpm --filter web db:generate",
-    "db:migrate": "pnpm --filter web db:migrate",
-    "db:studio": "pnpm --filter web db:studio"
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "type-check": "turbo run type-check",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "turbo run db:migrate",
+    "db:push": "turbo run db:push",
+    "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
-    "typescript": "5.9.3"
+    "@types/node": "^20.14.0",
+    "prettier": "^3.3.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.5.0"
   },
-  "engines": {
-    "node": ">=20.11.0"
-  }
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
 }

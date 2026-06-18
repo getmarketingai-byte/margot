@@ -1,40 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { users } from "@margot/schema";
+import { auth } from "@/auth";
+import { db, userProfiles, type NewUserProfile } from "@margot/schema";
 import { eq } from "drizzle-orm";
-import { getAuthUser, unauthorized } from "@/lib/api";
 
 export async function GET() {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
-
-  const [row] = await db
-    .select({ id: users.id, name: users.name, email: users.email, image: users.image, createdAt: users.createdAt })
-    .from(users)
-    .where(eq(users.id, user.id));
-
-  return NextResponse.json(row ?? null);
-}
-
-export async function PATCH(req: NextRequest) {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
-
-  const body = await req.json().catch(() => ({}));
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updates: Record<string, any> = {};
-  if ("name" in body) updates.name = body.name;
-  if ("image" in body) updates.image = body.image;
-
-  if (Object.keys(updates).length === 0) {
-    return NextResponse.json({ error: "No updatable fields provided" }, { status: 400 });
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const [row] = await db
-    .update(users)
-    .set(updates)
-    .where(eq(users.id, user.id))
-    .returning({ id: users.id, name: users.name, email: users.email, image: users.image });
+    .select()
+    .from(userProfiles)
+    .where(eq(userProfiles.userId, session.user.id))
+    .limit(1);
+
+  if (!row) {
+    return NextResponse.json(null);
+  }
 
   return NextResponse.json(row);
+}
+
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { headline, bio, industry, targetAudience, website, linkedinUrl, twitterHandle } = body;
+
+  // Check if profile exists
+  const [existing] = await db
+    .select()
+    .from(userProfiles)
+    .where(eq(userProfiles.userId, session.user.id))
+    .limit(1);
+
+  const updates = {
+    headline: typeof headline === "string" ? headline : undefined,
+    bio: typeof bio === "string" ? bio : undefined,
+    industry: typeof industry === "string" ? industry : undefined,
+    targetAudience: typeof targetAudience === "string" ? targetAudience : undefined,
+    website: typeof website === "string" ? website : undefined,
+    linkedinUrl: typeof linkedinUrl === "string" ? linkedinUrl : undefined,
+    twitterHandle: typeof twitterHandle === "string" ? twitterHandle : undefined,
+    updatedAt: new Date(),
+  };
+
+  if (existing) {
+    const [updated] = await db
+      .update(userProfiles)
+      .set(updates)
+      .where(eq(userProfiles.userId, session.user.id))
+      .returning();
+
+    return NextResponse.json(updated);
+  } else {
+    const insert: NewUserProfile = {
+      userId: session.user.id,
+      ...updates,
+    };
+
+    const [created] = await db.insert(userProfiles).values(insert).returning();
+    return NextResponse.json(created, { status: 201 });
+  }
 }

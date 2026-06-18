@@ -1,41 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { concepts } from "@margot/schema";
+import { auth } from "@/auth";
+import { db, concepts, type NewConcept } from "@margot/schema";
 import { eq, desc } from "drizzle-orm";
-import { getAuthUser, unauthorized } from "@/lib/api";
 
 export async function GET() {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const rows = await db
     .select()
     .from(concepts)
-    .where(eq(concepts.userId, user.id))
-    .orderBy(desc(concepts.createdAt))
-    .limit(50);
+    .where(eq(concepts.userId, session.user.id))
+    .orderBy(desc(concepts.createdAt));
 
   return NextResponse.json(rows);
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-  const body = await req.json().catch(() => null);
-  if (!body?.title) {
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { title, body: bodyText, tags, parentId } = body;
+
+  if (!title || typeof title !== "string") {
     return NextResponse.json({ error: "title is required" }, { status: 400 });
   }
 
-  const [row] = await db
-    .insert(concepts)
-    .values({
-      userId: user.id,
-      title: body.title as string,
-      body: (body.body as string) ?? null,
-      tags: Array.isArray(body.tags) ? (body.tags as string[]) : null,
-    })
-    .returning();
+  const insert: NewConcept = {
+    userId: session.user.id,
+    title,
+    body: typeof bodyText === "string" ? bodyText : "",
+    tags: Array.isArray(tags) ? (tags as string[]) : [],
+    parentId: typeof parentId === "string" ? parentId : undefined,
+  };
+
+  const [row] = await db.insert(concepts).values(insert).returning();
 
   return NextResponse.json(row, { status: 201 });
 }

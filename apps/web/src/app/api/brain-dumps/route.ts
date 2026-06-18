@@ -1,47 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { posts } from "@margot/schema";
-import { and, eq, desc } from "drizzle-orm";
-import { getAuthUser, unauthorized } from "@/lib/api";
-
-// Brain dumps are stored as posts with channel='brain-dump'
-const BRAIN_DUMP_CHANNEL = "brain-dump";
+import { auth } from "@/auth";
+import { db, brainDumps, type NewBrainDump } from "@margot/schema";
+import { eq, desc } from "drizzle-orm";
 
 export async function GET() {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const rows = await db
     .select()
-    .from(posts)
-    .where(and(eq(posts.userId, user.id), eq(posts.channel, BRAIN_DUMP_CHANNEL)))
-    .orderBy(desc(posts.createdAt))
-    .limit(50);
+    .from(brainDumps)
+    .where(eq(brainDumps.userId, session.user.id))
+    .orderBy(desc(brainDumps.createdAt));
 
   return NextResponse.json(rows);
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser();
-  if (!user) return unauthorized();
-
-  const body = await req.json().catch(() => null);
-  if (!body?.body && !body?.title) {
-    return NextResponse.json({ error: "title or body is required" }, { status: 400 });
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const title = (body.title as string) ?? (body.body as string).slice(0, 80);
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
 
-  const [row] = await db
-    .insert(posts)
-    .values({
-      userId: user.id,
-      title,
-      body: (body.body as string) ?? null,
-      status: "draft",
-      channel: BRAIN_DUMP_CHANNEL,
-    })
-    .returning();
+  const { content, tags } = body;
+
+  if (!content || typeof content !== "string") {
+    return NextResponse.json({ error: "content is required" }, { status: 400 });
+  }
+
+  const insert: NewBrainDump = {
+    userId: session.user.id,
+    content,
+    tags: Array.isArray(tags) ? (tags as string[]) : [],
+  };
+
+  const [row] = await db.insert(brainDumps).values(insert).returning();
 
   return NextResponse.json(row, { status: 201 });
 }

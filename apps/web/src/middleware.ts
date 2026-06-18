@@ -1,47 +1,45 @@
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PROTECTED_PATHS = ["/dashboard"];
-
-// Auth.js v5 database-session cookie names (prod and dev)
-const SESSION_COOKIES = ["authjs.session-token", "__Secure-authjs.session-token"];
-
 /**
- * Edge-safe middleware — checks for a session cookie without touching the DB.
- * Actual session validity is enforced server-side in each protected page/layout.
- *
- * Using NextAuth(authConfig) here would always return unauthenticated because
- * authConfig has no DrizzleAdapter, so it expects JWTs, but auth.ts issues
- * database session tokens (random strings). A cookie-existence check avoids
- * that mismatch while staying Edge Runtime compatible.
+ * Auth.js v5 middleware.
+ * Protects /dashboard/* and /api/* (except auth endpoints).
+ * Unauthenticated requests are redirected to the landing page.
  */
-export function middleware(request: NextRequest): NextResponse {
-  const { nextUrl, cookies } = request;
+export default auth((req: NextRequest & { auth: Awaited<ReturnType<typeof auth>> }) => {
+  const { pathname } = req.nextUrl;
 
-  // Preview-only auto-login: page guards synthesise the session, let all through.
-  const previewAuthActive =
-    process.env.VERCEL_ENV === "preview" &&
-    process.env.PREVIEW_AUTH_ENABLED === "true" &&
-    (process.env.PREVIEW_AUTH_USER_EMAIL ?? "").trim().length > 0;
+  const isAuthenticated = !!req.auth?.user;
 
-  if (previewAuthActive) return NextResponse.next();
-
-  const isProtected = PROTECTED_PATHS.some((p) =>
-    nextUrl.pathname.startsWith(p)
-  );
-
-  if (isProtected) {
-    const hasSession = SESSION_COOKIES.some((name) => cookies.has(name));
-    if (!hasSession) {
-      const signInUrl = new URL("/sign-in", nextUrl.origin);
-      signInUrl.searchParams.set("callbackUrl", nextUrl.pathname);
+  // Protect all dashboard routes
+  if (pathname.startsWith("/dashboard")) {
+    if (!isAuthenticated) {
+      const signInUrl = new URL("/", req.url);
+      signInUrl.searchParams.set("callbackUrl", pathname);
       return NextResponse.redirect(signInUrl);
     }
   }
 
+  // Protect all API routes except auth routes
+  if (pathname.startsWith("/api/") && !pathname.startsWith("/api/auth")) {
+    if (!isAuthenticated) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
   return NextResponse.next();
-}
+});
 
 export const config = {
-  matcher: ["/dashboard/:path*"],
+  matcher: [
+    /*
+     * Match all request paths except:
+     * - _next/static (static files)
+     * - _next/image (image optimization)
+     * - favicon.ico, manifest.json, service-worker.js (PWA)
+     * - Public assets
+     */
+    "/((?!_next/static|_next/image|favicon.ico|manifest.json|service-worker.js|icons/).*)",
+  ],
 };
