@@ -40,11 +40,11 @@ export async function POST(req: NextRequest) {
   const insert: NewContact = {
     userId: session.user.id,
     name,
-    email: typeof email === "string" ? email : undefined,
-    company: typeof company === "string" ? company : undefined,
+    email: typeof email === "string" ? email : null,
+    company: typeof company === "string" ? company : null,
     tags: Array.isArray(tags) ? (tags as string[]) : [],
-    notes: typeof notes === "string" ? notes : undefined,
-    lastContactedAt: lastContactedAt ? new Date(lastContactedAt as string) : undefined,
+    notes: typeof notes === "string" ? notes : null,
+    lastContactedAt: lastContactedAt ? new Date(lastContactedAt as string) : null,
   };
 
   const [row] = await db.insert(contacts).values(insert).returning();

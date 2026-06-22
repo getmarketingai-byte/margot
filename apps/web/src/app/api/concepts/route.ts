@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     title,
     body: typeof bodyText === "string" ? bodyText : "",
     tags: Array.isArray(tags) ? (tags as string[]) : [],
-    parentId: typeof parentId === "string" ? parentId : undefined,
+    parentId: typeof parentId === "string" ? parentId : null,
   };
 
   const [row] = await db.insert(concepts).values(insert).returning();

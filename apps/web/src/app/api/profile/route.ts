@@ -45,13 +45,13 @@ export async function PATCH(req: NextRequest) {
     .limit(1);
 
   const updates = {
-    headline: typeof headline === "string" ? headline : undefined,
-    bio: typeof bio === "string" ? bio : undefined,
-    industry: typeof industry === "string" ? industry : undefined,
-    targetAudience: typeof targetAudience === "string" ? targetAudience : undefined,
-    website: typeof website === "string" ? website : undefined,
-    linkedinUrl: typeof linkedinUrl === "string" ? linkedinUrl : undefined,
-    twitterHandle: typeof twitterHandle === "string" ? twitterHandle : undefined,
+    headline: typeof headline === "string" ? headline : null,
+    bio: typeof bio === "string" ? bio : null,
+    industry: typeof industry === "string" ? industry : null,
+    targetAudience: typeof targetAudience === "string" ? targetAudience : null,
+    website: typeof website === "string" ? website : null,
+    linkedinUrl: typeof linkedinUrl === "string" ? linkedinUrl : null,
+    twitterHandle: typeof twitterHandle === "string" ? twitterHandle : null,
     updatedAt: new Date(),
   };
 

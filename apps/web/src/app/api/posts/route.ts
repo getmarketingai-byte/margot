@@ -45,8 +45,8 @@ export async function POST(req: NextRequest) {
     content,
     platform: platform as PostPlatform,
     status: ((status as string | undefined) ?? "draft") as PostStatus,
-    scheduledAt: scheduledAt ? new Date(scheduledAt as string) : undefined,
-    metadata: metadata as Record<string, unknown> | undefined,
+    scheduledAt: scheduledAt ? new Date(scheduledAt as string) : null,
+    metadata: (metadata as Record<string, unknown> | undefined) ?? null,
   };
 
   const [row] = await db.insert(posts).values(insert).returning();

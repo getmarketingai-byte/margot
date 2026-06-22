@@ -15,4 +15,14 @@ export * from "./brain_dumps";
 export * from "./user_profiles";
 
 // A2A protocol types (NOT tables – TypeScript only)
-export * from "./a2a";
+// Re-export with A2A prefix to avoid collision with agent_runs DB types
+export type {
+  JsonPrimitive,
+  JsonValue,
+  JsonObject,
+  AgentToolParameter,
+  AgentTool,
+  AgentRunStatus as A2AAgentRunStatus,
+  AgentRun as A2AAgentRun,
+} from "./a2a";
+export type * from "./a2a";

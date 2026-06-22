@@ -13,7 +13,7 @@ const TABS: Array<{ label: string; value: PostStatus | "all" }> = [
 ];
 
 interface PostsFilterTabsProps {
-  current?: PostStatus;
+  current?: PostStatus | undefined;
 }
 
 export function PostsFilterTabs({ current }: PostsFilterTabsProps) {

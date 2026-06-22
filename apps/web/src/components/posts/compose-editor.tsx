@@ -50,7 +50,7 @@ export function ComposeEditor({ initialPost }: ComposeEditorProps) {
       setSaveState("saving");
       try {
         if (postId) {
-          await updatePost(postId, { content, platform, status });
+          await updatePost(postId, { content, platform, ...(status !== undefined ? { status } : {}) });
         } else {
           const created = await createPost({ content, platform, status: status ?? "draft" });
           if (created) setPostId(created.id);

@@ -54,13 +54,13 @@ export async function POST(req: NextRequest) {
     userId: session.user.id,
     source,
     headline,
-    url: typeof url === "string" ? url : undefined,
-    summary: typeof summary === "string" ? summary : undefined,
+    url: typeof url === "string" ? url : null,
+    summary: typeof summary === "string" ? summary : null,
   };
 
   const [row] = await db.insert(signals).values(insert).returning();
 
   // Don't return embedding in response
-  const { embedding: _embedding, ...rest } = row;
+  const { embedding: _embedding, ...rest } = row!;
   return NextResponse.json(rest, { status: 201 });
 }

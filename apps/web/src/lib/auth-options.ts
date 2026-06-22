@@ -61,11 +61,12 @@ export const authOptions: NextAuthConfig = {
       if (!account) return true;
 
       // Encrypt tokens in-place before the adapter writes them to DB
-      if (account.access_token) {
-        account.access_token = encrypt(account.access_token);
+      const mutableAccount = account as Record<string, unknown>;
+      if (typeof account.access_token === "string") {
+        mutableAccount["access_token"] = encrypt(account.access_token);
       }
-      if (account.refresh_token) {
-        account.refresh_token = encrypt(account.refresh_token);
+      if (typeof account.refresh_token === "string") {
+        mutableAccount["refresh_token"] = encrypt(account.refresh_token);
       }
 
       return true;
