@@ -1,6 +1,10 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
+// Switch middleware from Edge Runtime to Node.js Runtime so that
+// DrizzleAdapter (database sessions) and Node.js crypto (encrypt.ts) are available.
+export const runtime = "nodejs";
+
 /**
  * Auth.js v5 middleware.
  * Protects /dashboard/* and /api/* (except auth endpoints).

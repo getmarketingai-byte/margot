@@ -9,12 +9,14 @@ import { eq } from "drizzle-orm";
  */
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const { id } = await params;
 
   let body: Record<string, unknown>;
   try {
@@ -42,7 +44,7 @@ export async function PATCH(
   const [row] = await db
     .update(faultReports)
     .set(updates)
-    .where(eq(faultReports.id, params.id))
+    .where(eq(faultReports.id, id))
     .returning();
 
   if (!row) {
@@ -58,13 +60,15 @@ export async function PATCH(
  */
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  await db.delete(faultReports).where(eq(faultReports.id, params.id));
+  const { id } = await params;
+
+  await db.delete(faultReports).where(eq(faultReports.id, id));
   return new NextResponse(null, { status: 204 });
 }
