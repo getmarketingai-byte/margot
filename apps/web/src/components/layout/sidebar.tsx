@@ -15,6 +15,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ const navItems: NavItem[] = [
   { href: "/dashboard/crm", label: "CRM", icon: Users },
   { href: "/dashboard/concepts", label: "Concepts", icon: Brain },
   { href: "/dashboard/agents", label: "Agents", icon: Zap },
+  { href: "/dashboard/faults", label: "Fault Reports", icon: AlertTriangle },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 

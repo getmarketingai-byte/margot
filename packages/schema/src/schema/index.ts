@@ -35,3 +35,6 @@ export type {
   AgentFailedEvent,
   AgentEvent,
 } from "./a2a";
+
+// Fault reporting
+export * from "./fault_reports";
