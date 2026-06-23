@@ -78,7 +78,7 @@ export interface AgentCapability {
 
 // ── Run lifecycle ─────────────────────────────────────────────────────────────
 
-export type AgentRunStatus =
+export type A2AAgentRunStatus =
   | "pending"
   | "running"
   | "awaiting_tool"
@@ -86,12 +86,12 @@ export type AgentRunStatus =
   | "failed"
   | "cancelled";
 
-export interface AgentRun {
+export interface A2AAgentRun {
   id: string;
   agentId: string;
   agentName: string;
   userId: string;
-  status: AgentRunStatus;
+  status: A2AAgentRunStatus;
   messages: AgentMessage[];
   input: JsonObject;
   output?: JsonValue;
@@ -121,7 +121,7 @@ export interface AgentTaskRequest {
 
 export interface AgentTaskResponse {
   runId: string;
-  status: AgentRunStatus;
+  status: A2AAgentRunStatus;
   output?: JsonValue;
   error?: string;
 }
@@ -130,17 +130,17 @@ export interface AgentTaskResponse {
 
 export interface AgentStartedEvent {
   name: "agent/run.started";
-  data: Pick<AgentRun, "id" | "agentId" | "agentName" | "userId" | "input">;
+  data: Pick<A2AAgentRun,"id" | "agentId" | "agentName" | "userId" | "input">;
 }
 
 export interface AgentCompletedEvent {
   name: "agent/run.completed";
-  data: Pick<AgentRun, "id" | "agentId" | "userId" | "output" | "durationMs">;
+  data: Pick<A2AAgentRun,"id" | "agentId" | "userId" | "output" | "durationMs">;
 }
 
 export interface AgentFailedEvent {
   name: "agent/run.failed";
-  data: Pick<AgentRun, "id" | "agentId" | "userId" | "error">;
+  data: Pick<A2AAgentRun,"id" | "agentId" | "userId" | "error">;
 }
 
 export type AgentEvent =

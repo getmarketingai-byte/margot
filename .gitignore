@@ -141,3 +141,4 @@ vite.config.ts.timestamp-*
 #pnpm directory
 .pnpm-store
 .vercel
+.turbo

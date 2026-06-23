@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
   const [row] = await db.insert(signals).values(insert).returning();
 
   // Don't return embedding in response
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { embedding: _embedding, ...rest } = row!;
   return NextResponse.json(rest, { status: 201 });
 }

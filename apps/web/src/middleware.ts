@@ -5,13 +5,21 @@ import { NextResponse } from "next/server";
  * Auth.js v5 middleware.
  * Protects /dashboard/* and /api/* (except auth endpoints).
  * Unauthenticated requests are redirected to the landing page.
+ * Onboarding redirect (no profile) is handled in the dashboard layout
+ * after session is confirmed, using the /api/profile endpoint.
  */
 export default auth((req) => {
   const { pathname } = req.nextUrl;
-
   const isAuthenticated = !!req.auth?.user;
 
-  // Protect all dashboard routes
+  // Protect all API routes (except /api/auth)
+  if (pathname.startsWith("/api/") && !pathname.startsWith("/api/auth")) {
+    if (!isAuthenticated) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  // Protect /dashboard routes
   if (pathname.startsWith("/dashboard")) {
     if (!isAuthenticated) {
       const signInUrl = new URL("/", req.url);
@@ -20,18 +28,9 @@ export default auth((req) => {
     }
   }
 
-  // Protect onboarding route
-  if (pathname.startsWith("/onboarding")) {
-    if (!isAuthenticated) {
-      return NextResponse.redirect(new URL("/", req.url));
-    }
-  }
-
-  // Protect all API routes except auth routes
-  if (pathname.startsWith("/api/") && !pathname.startsWith("/api/auth")) {
-    if (!isAuthenticated) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  // Protect /onboarding — must be authenticated
+  if (pathname.startsWith("/onboarding") && !isAuthenticated) {
+    return NextResponse.redirect(new URL("/", req.url));
   }
 
   return NextResponse.next();
@@ -39,13 +38,6 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization)
-     * - favicon.ico, manifest.json, service-worker.js (PWA)
-     * - Public assets
-     */
     "/((?!_next/static|_next/image|favicon.ico|manifest.json|service-worker.js|icons/).*)",
   ],
 };
