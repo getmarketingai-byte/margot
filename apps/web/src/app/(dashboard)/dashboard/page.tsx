@@ -95,6 +95,11 @@ export default async function DashboardPage() {
   const hasProfile = userProfile.length > 0;
   const latestDraft = latestDraftPost[0];
 
+  // New users must complete onboarding before accessing the dashboard
+  if (!hasProfile) {
+    redirect("/onboarding");
+  }
+
   return (
     <div className="space-y-6">
       {/* Greeting */}
