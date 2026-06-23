@@ -24,6 +24,8 @@ export const concepts = pgTable("concepts", {
    * Optional parent concept for hierarchical structures (e.g. pillar → cluster).
    */
   parentId: text("parent_id"),
+  /** Status of the concept: idea | active | archived */
+  status: text("status").notNull().default("idea"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
 });
