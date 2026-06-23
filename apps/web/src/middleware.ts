@@ -1,13 +1,12 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
 
 /**
  * Auth.js v5 middleware.
  * Protects /dashboard/* and /api/* (except auth endpoints).
  * Unauthenticated requests are redirected to the landing page.
  */
-export default auth((req: NextRequest & { auth: Awaited<ReturnType<typeof auth>> }) => {
+export default auth((req) => {
   const { pathname } = req.nextUrl;
 
   const isAuthenticated = !!req.auth?.user;
@@ -18,6 +17,13 @@ export default auth((req: NextRequest & { auth: Awaited<ReturnType<typeof auth>>
       const signInUrl = new URL("/", req.url);
       signInUrl.searchParams.set("callbackUrl", pathname);
       return NextResponse.redirect(signInUrl);
+    }
+  }
+
+  // Protect onboarding route
+  if (pathname.startsWith("/onboarding")) {
+    if (!isAuthenticated) {
+      return NextResponse.redirect(new URL("/", req.url));
     }
   }
 

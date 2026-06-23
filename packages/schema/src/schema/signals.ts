@@ -11,8 +11,8 @@ import { users } from "./auth";
  * pgvector column type for 1536-dimensional embeddings (OpenAI text-embedding-3-small).
  * Requires the pgvector extension: CREATE EXTENSION IF NOT EXISTS vector;
  */
-const vector = customType<{ data: number[]; driverData: string }>({
-  dataType(config?: { dimensions?: number }) {
+const vector = customType<{ data: number[]; driverData: string; config: { dimensions?: number } }>({
+  dataType(config) {
     const dims = config?.dimensions ?? 1536;
     return `vector(${dims})`;
   },

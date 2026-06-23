@@ -24,5 +24,14 @@ export type {
   AgentTool,
   AgentRunStatus as A2AAgentRunStatus,
   AgentRun as A2AAgentRun,
+  AgentMessageRole,
+  AgentMessageContent,
+  AgentMessage,
+  AgentCapability,
+  AgentTaskRequest,
+  AgentTaskResponse,
+  AgentStartedEvent,
+  AgentCompletedEvent,
+  AgentFailedEvent,
+  AgentEvent,
 } from "./a2a";
-export type * from "./a2a";
