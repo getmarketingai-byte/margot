@@ -10,7 +10,7 @@ import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import type { NextAuthConfig } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import { db } from "@margot/schema";
-import { accounts, users } from "@margot/schema/schema";
+import { accounts, sessions, users } from "@margot/schema/schema";
 import { encrypt, decrypt, encryptOptional } from "@/lib/encrypt";
 import { eq } from "drizzle-orm";
 
@@ -22,6 +22,7 @@ export const authOptions: NextAuthConfig = {
   adapter: DrizzleAdapter(db, {
     usersTable: users,
     accountsTable: accounts,
+    sessionsTable: sessions,
   }),
 
   providers: [
