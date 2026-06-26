@@ -1,10 +1,11 @@
 "use server";
 
 import { auth } from "@/auth";
-import { db, signals, posts } from "@margot/schema";
+import { db, signals, posts, userProfiles } from "@margot/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { generateLinkedInPost } from "@margot/marketing-engine";
 
 async function requireUser(): Promise<string> {
   const session = await auth();
@@ -63,10 +64,29 @@ export async function signalToPost(signalId: string) {
     .limit(1);
   if (!signal) throw new Error("Signal not found");
 
-  const parts = [`📡 Signal: ${signal.headline}`];
-  if (signal.summary) parts.push(`\n${signal.summary}`);
-  if (signal.url) parts.push(`\nSource: ${signal.url}`);
-  const content = parts.join("");
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  let content: string;
+  if (apiKey) {
+    const [profileRow] = await db
+      .select()
+      .from(userProfiles)
+      .where(eq(userProfiles.userId, userId))
+      .limit(1);
+
+    const generated = await generateLinkedInPost(
+      profileRow ?? null,
+      apiKey,
+      { id: signal.id, headline: signal.headline, summary: signal.summary, source: signal.source }
+    );
+    content = generated.content;
+  } else {
+    // Fallback when AI not configured: stub with signal data
+    const parts = [`📡 Signal: ${signal.headline}`];
+    if (signal.summary) parts.push(`\n${signal.summary}`);
+    if (signal.url) parts.push(`\nSource: ${signal.url}`);
+    content = parts.join("");
+  }
 
   const [post] = await db
     .insert(posts)

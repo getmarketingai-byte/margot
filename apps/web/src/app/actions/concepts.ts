@@ -1,10 +1,11 @@
 "use server";
 
 import { auth } from "@/auth";
-import { db, concepts, brainDumps, posts } from "@margot/schema";
+import { db, concepts, brainDumps, posts, userProfiles } from "@margot/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { generateLinkedInPost } from "@margot/marketing-engine";
 
 async function requireUser(): Promise<string> {
   const session = await auth();
@@ -97,9 +98,29 @@ export async function conceptToPost(conceptId: string) {
     .limit(1);
   if (!concept) throw new Error("Concept not found");
 
-  const content = concept.body
-    ? `${concept.title}\n\n${concept.body}`
-    : concept.title;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  let content: string;
+  if (apiKey) {
+    const [profileRow] = await db
+      .select()
+      .from(userProfiles)
+      .where(eq(userProfiles.userId, userId))
+      .limit(1);
+
+    const generated = await generateLinkedInPost(
+      profileRow ?? null,
+      apiKey,
+      undefined,
+      { id: concept.id, title: concept.title, body: concept.body, tags: concept.tags }
+    );
+    content = generated.content;
+  } else {
+    // Fallback when AI not configured: stub with concept data
+    content = concept.body
+      ? `${concept.title}\n\n${concept.body}`
+      : concept.title;
+  }
 
   const [post] = await db
     .insert(posts)

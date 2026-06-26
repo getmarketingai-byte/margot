@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { db, userProfiles } from "@margot/schema";
-import { eq } from "drizzle-orm";
-import { generateLinkedInPost } from "@margot/marketing-engine";
+import { db, userProfiles, signals, concepts } from "@margot/schema";
+import { eq, and, desc } from "drizzle-orm";
+import { generateLinkedInPost, type SignalContext, type ConceptContext } from "@margot/marketing-engine";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -23,7 +23,7 @@ function checkRateLimit(userId: string): boolean {
   return true;
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -47,12 +47,56 @@ export async function POST() {
     );
   }
 
+  const userId = session.user.id;
+
+  // Parse optional context params from query string
+  const url = new URL(req.url);
+  const signalId = url.searchParams.get("signalId");
+  const conceptId = url.searchParams.get("conceptId");
+
   const [profile] = await db
     .select()
     .from(userProfiles)
-    .where(eq(userProfiles.userId, session.user.id))
+    .where(eq(userProfiles.userId, userId))
     .limit(1);
 
-  const generated = await generateLinkedInPost(profile ?? null, apiKey);
+  let signalCtx: SignalContext | undefined;
+  let conceptCtx: ConceptContext | undefined;
+
+  if (signalId) {
+    const [row] = await db
+      .select()
+      .from(signals)
+      .where(and(eq(signals.id, signalId), eq(signals.userId, userId)))
+      .limit(1);
+    if (row) {
+      signalCtx = { id: row.id, headline: row.headline, summary: row.summary, source: row.source };
+    }
+  } else if (conceptId) {
+    const [row] = await db
+      .select()
+      .from(concepts)
+      .where(and(eq(concepts.id, conceptId), eq(concepts.userId, userId)))
+      .limit(1);
+    if (row) {
+      conceptCtx = { id: row.id, title: row.title, body: row.body, tags: row.tags };
+    }
+  } else {
+    // Auto-context: pick from 3 most recent signals (preferred) or concepts
+    const [recentSignals, recentConcepts] = await Promise.all([
+      db.select().from(signals).where(eq(signals.userId, userId)).orderBy(desc(signals.capturedAt)).limit(3),
+      db.select().from(concepts).where(eq(concepts.userId, userId)).orderBy(desc(concepts.updatedAt)).limit(3),
+    ]);
+
+    if (recentSignals.length > 0) {
+      const pick = recentSignals[Math.floor(Math.random() * recentSignals.length)];
+      signalCtx = { id: pick.id, headline: pick.headline, summary: pick.summary, source: pick.source };
+    } else if (recentConcepts.length > 0) {
+      const pick = recentConcepts[Math.floor(Math.random() * recentConcepts.length)];
+      conceptCtx = { id: pick.id, title: pick.title, body: pick.body, tags: pick.tags };
+    }
+  }
+
+  const generated = await generateLinkedInPost(profile ?? null, apiKey, signalCtx, conceptCtx);
   return NextResponse.json(generated);
 }

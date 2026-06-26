@@ -2,16 +2,23 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, RefreshCw, ArrowRight, Loader2 } from "lucide-react";
+import { Sparkles, RefreshCw, ArrowRight, Loader2, Rss, Brain } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createPost } from "@/app/actions/posts";
 
+interface ContextUsed {
+  type: "signal" | "concept";
+  id: string;
+  label: string;
+}
+
 interface GeneratedPost {
   content: string;
   pillar: string;
   reasoning: string;
+  contextUsed?: ContextUsed;
 }
 
 interface NextBestMoveProps {
@@ -155,6 +162,20 @@ export function NextBestMoveAI({
                 {generated.content}
               </p>
             </div>
+            {generated.contextUsed && (
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                {generated.contextUsed.type === "signal" ? (
+                  <Rss className="h-3 w-3 shrink-0" />
+                ) : (
+                  <Brain className="h-3 w-3 shrink-0" />
+                )}
+                <span className="italic line-clamp-1">
+                  {generated.contextUsed.type === "signal"
+                    ? `Inspired by: ${generated.contextUsed.label}`
+                    : `Based on your concept: ${generated.contextUsed.label}`}
+                </span>
+              </div>
+            )}
             <p className="text-[11px] text-muted-foreground italic">
               {generated.reasoning}
             </p>
