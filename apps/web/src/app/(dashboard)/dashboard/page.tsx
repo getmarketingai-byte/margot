@@ -8,11 +8,9 @@ import {
   FileText,
   Brain,
   ArrowRight,
-  Sparkles,
 } from "lucide-react";
 import {
   Card,
-  CardContent,
   CardDescription,
   CardFooter,
   CardHeader,
@@ -21,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { db, posts, contacts, signals, userProfiles } from "@margot/schema";
 import { eq, and, gte, desc } from "drizzle-orm";
+import { NextBestMoveAI } from "@/components/dashboard/next-best-move";
 
 function getGreeting(name: string | null | undefined): string {
   const hour = new Date().getHours();
@@ -162,51 +161,13 @@ export default async function DashboardPage() {
         </Card>
       </div>
 
-      {/* Next Best Move */}
-      <Card className="border-primary/20 bg-primary/5">
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Sparkles className="h-4 w-4" />
-            </div>
-            <CardTitle className="text-base">Next Best Move</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {!hasProfile ? (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Complete your profile to unlock personalised AI recommendations.
-              </p>
-              <Button asChild size="sm">
-                <Link href="/dashboard/settings">Complete your profile →</Link>
-              </Button>
-            </div>
-          ) : latestDraft ? (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                You have a draft post ready to publish on{" "}
-                <span className="font-medium capitalize">{latestDraft.platform}</span>.
-              </p>
-              <p className="text-sm text-foreground line-clamp-2">
-                &ldquo;{latestDraft.content}&rdquo;
-              </p>
-              <Button asChild size="sm">
-                <Link href={`/dashboard/posts/${latestDraft.id}`}>Review and publish →</Link>
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                No drafts yet. Start creating content to grow your audience.
-              </p>
-              <Button asChild size="sm">
-                <Link href="/dashboard/posts/new">Compose a post →</Link>
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Next Best Move — AI-powered */}
+      <NextBestMoveAI
+        hasDraft={!!latestDraft}
+        draftId={latestDraft?.id}
+        draftContent={latestDraft?.content}
+        draftPlatform={latestDraft?.platform}
+      />
 
       {/* Quick actions */}
       <div>

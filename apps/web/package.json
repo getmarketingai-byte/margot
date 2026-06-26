@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.4.0",
+    "@margot/marketing-engine": "workspace:*",
     "@margot/schema": "workspace:*",
     "@neondatabase/serverless": "^0.9.0",
     "@radix-ui/react-avatar": "^1.1.0",
