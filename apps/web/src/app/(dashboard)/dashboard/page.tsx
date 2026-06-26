@@ -92,13 +92,15 @@ export default async function DashboardPage() {
     (c) => "tags" in c
   ).length;
   void warmLeadsCount; // derived from totalContacts query — count all for now
-  const hasProfile = userProfile.length > 0;
-  const latestDraft = latestDraftPost[0];
+  const profile = userProfile[0];
+  const hasProfile = !!profile;
 
-  // New users must complete onboarding before accessing the dashboard
-  if (!hasProfile) {
+  // Redirect new users to onboarding if they haven't completed setup
+  if (!profile || !profile.onboardingCompleted) {
     redirect("/onboarding");
   }
+
+  const latestDraft = latestDraftPost[0];
 
   return (
     <div className="space-y-6">
@@ -190,7 +192,7 @@ export default async function DashboardPage() {
                 &ldquo;{latestDraft.content}&rdquo;
               </p>
               <Button asChild size="sm">
-                <Link href="/dashboard/compose">Review and publish →</Link>
+                <Link href={`/dashboard/posts/${latestDraft.id}`}>Review and publish →</Link>
               </Button>
             </div>
           ) : (
@@ -199,7 +201,7 @@ export default async function DashboardPage() {
                 No drafts yet. Start creating content to grow your audience.
               </p>
               <Button asChild size="sm">
-                <Link href="/dashboard/compose">Compose a post →</Link>
+                <Link href="/dashboard/posts/new">Compose a post →</Link>
               </Button>
             </div>
           )}
